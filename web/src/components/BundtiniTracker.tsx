@@ -171,6 +171,7 @@ export function BundtiniTracker() {
           px: 1.5,
           py: 0.75,
           minWidth: 180,
+          width: '100%',
           position: 'relative',
           transition: 'background-color 0.3s ease',
           animation: isCelebrating ? `${pulseGlow} 0.8s ease-in-out infinite` : 'none',
@@ -209,8 +210,8 @@ export function BundtiniTracker() {
             animation: isCelebrating ? `${bounce} 0.5s ease-in-out infinite` : 'none',
           }}
         />
-        <Box sx={{ flex: 1 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25, gap: 0.5 }}>
             <Typography
               variant="caption"
               sx={{
@@ -219,11 +220,21 @@ export function BundtiniTracker() {
                 fontSize: isCelebrating ? '0.85rem' : '0.75rem',
                 transition: 'all 0.3s ease',
                 textShadow: isCelebrating ? '0 0 10px rgba(255,215,0,0.8)' : 'none',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
               }}
             >
               {displayValue.toLocaleString()}
             </Typography>
-            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)' }}>
+            <Typography 
+              variant="caption" 
+              sx={{ 
+                color: 'rgba(255,255,255,0.7)',
+                fontSize: '0.75rem',
+                whiteSpace: 'nowrap',
+              }}
+            >
               / {(progress.goal / 1000).toFixed(0)}k
             </Typography>
           </Box>
@@ -253,6 +264,9 @@ export function BundtiniTracker() {
             color: isCelebrating ? '#333' : 'white',
             fontWeight: 600,
             animation: isCelebrating ? `${bounce} 0.5s ease-in-out infinite 0.2s` : 'none',
+            '& .MuiChip-label': {
+              px: 1,
+            },
           }}
         />
       </Box>

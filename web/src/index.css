@@ -17,9 +17,23 @@
   box-sizing: border-box;
 }
 
+html {
+  overflow-x: hidden;
+  width: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
   background-color: #f5f7fa;
+  overflow-x: hidden;
+  width: 100%;
+  position: relative;
+}
+
+#root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }

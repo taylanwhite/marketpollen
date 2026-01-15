@@ -85,10 +85,8 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
           }
         }
         
-        // If no saved location, use first available (but don't save it yet)
-        if (!currentLocationId && locationPerms.length > 0) {
-          currentLocationId = locationPerms[0].locationId;
-        }
+        // Don't auto-select first location - require user to explicitly choose
+        // This ensures first-time users see the location picker
         
         setPermissions({
           isGlobalAdmin: userData.isGlobalAdmin === true,

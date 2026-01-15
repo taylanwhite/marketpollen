@@ -12,4 +12,12 @@ export default defineConfig({
   optimizeDeps: {
     include: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
   },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+    },
+  },
 })

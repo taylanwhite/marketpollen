@@ -1,9 +1,6 @@
-import OpenAI from 'openai';
-
-const openai = new OpenAI({
-  apiKey: import.meta.env.VITE_OPENAI_API_KEY,
-  dangerouslyAllowBrowser: true // For client-side use (consider moving to backend for production)
-});
+// OpenAI API calls are made through Vercel serverless function
+// The API key is stored server-side and never exposed to the client
+import { getAuth } from 'firebase/auth';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -11,9 +8,9 @@ export interface ChatMessage {
 }
 
 /**
- * Chat completion helper using OpenAI gpt-5-nano (cheap and fast)
+ * Chat completion helper - calls Vercel serverless function
  */
-export async function chatCompletion(
+async function chatCompletion(
   messages: ChatMessage[],
   options?: {
     temperature?: number;
@@ -21,14 +18,36 @@ export async function chatCompletion(
     jsonMode?: boolean;
   }
 ): Promise<string> {
+  // Get current user's ID token for authentication
+  const currentUser = getAuth().currentUser;
+  if (!currentUser) {
+    throw new Error('User must be authenticated to use AI features');
+  }
+
+  const idToken = await currentUser.getIdToken();
+  
   try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-5-nano', // Cheap and efficient
-      messages: messages,
-      response_format: options?.jsonMode ? { type: 'json_object' } : undefined
+    const response = await fetch('/api/chat-completion', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`, // Pass auth token for verification
+      },
+      body: JSON.stringify({
+        messages,
+        temperature: options?.temperature,
+        maxTokens: options?.maxTokens,
+        jsonMode: options?.jsonMode,
+      }),
     });
 
-    return response.choices[0]?.message?.content || '';
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'AI completion failed');
+    }
+
+    const data = await response.json();
+    return data.content || '';
   } catch (error: any) {
     console.error('OpenAI API Error:', error);
     throw new Error(`AI completion failed: ${error.message}`);

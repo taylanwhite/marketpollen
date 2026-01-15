@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Box,
@@ -15,12 +15,21 @@ import {
 import { PersonAdd as SignupIcon } from '@mui/icons-material';
 
 export function Signup() {
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { signup } = useAuth();
   const navigate = useNavigate();
+
+  // Pre-fill email from URL query parameter (from invitation email)
+  useEffect(() => {
+    const emailParam = searchParams.get('email');
+    if (emailParam) {
+      setEmail(emailParam);
+    }
+  }, [searchParams]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -29,7 +38,7 @@ export function Signup() {
 
     try {
       await signup(email, password);
-      navigate('/dashboard');
+      navigate('/select-location');
     } catch (err: any) {
       setError(err.message || 'Failed to create account');
     } finally {

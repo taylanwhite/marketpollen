@@ -114,7 +114,46 @@ export function MainLayout({ children }: MainLayoutProps) {
           🎂 Bundt Marketer
         </Typography>
       </Toolbar>
+      <Box sx={{ px: 2, pb: 2 }}>
+        <BundtiniTracker />
+      </Box>
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)' }} />
+      
+      {hasMultipleLocations && (
+        <>
+          <List>
+            <ListItem disablePadding>
+              <ListItemButton
+                onClick={() => {
+                  navigate('/select-location');
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  mx: 1,
+                  borderRadius: 2,
+                  mb: 0.5,
+                  '&:hover': {
+                    bgcolor: 'rgba(102, 126, 234, 0.2)',
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ color: 'rgba(255,255,255,0.7)', minWidth: 40 }}>
+                  <SwapIcon />
+                </ListItemIcon>
+                <ListItemText 
+                  primary="Change Location" 
+                  sx={{ 
+                    '& .MuiListItemText-primary': { 
+                      color: 'rgba(255,255,255,0.8)',
+                    } 
+                  }} 
+                />
+              </ListItemButton>
+            </ListItem>
+          </List>
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)', my: 1 }} />
+        </>
+      )}
       
       <List sx={{ flex: 1, pt: 2 }}>
         {mainNavItems.map((item) => (
@@ -236,31 +275,33 @@ export function MainLayout({ children }: MainLayoutProps) {
           ml: { sm: `${drawerWidth}px` },
         }}
       >
-        <Toolbar>
+        <Toolbar sx={{ px: { xs: 1, sm: 2 }, minHeight: { xs: 56, sm: 64 } }}>
           <IconButton
             color="inherit"
             aria-label="open drawer"
             edge="start"
             onClick={handleDrawerToggle}
-            sx={{ mr: 2, display: { sm: 'none' } }}
+            sx={{ mr: { xs: 1, sm: 2 }, display: { sm: 'none' } }}
+            size="small"
           >
             <MenuIcon />
           </IconButton>
           
-          <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 }, minWidth: 0, overflow: 'hidden' }}>
             {currentLocation && (
               <Chip
-                icon={<LocationIcon sx={{ color: 'white !important' }} />}
+                icon={<LocationIcon sx={{ color: 'white !important', fontSize: { xs: 16, sm: 20 } }} />}
                 label={currentLocation.name}
                 sx={{
                   bgcolor: 'rgba(255,255,255,0.2)',
                   color: 'white',
                   fontWeight: 500,
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  height: { xs: 28, sm: 32 },
                   '& .MuiChip-icon': { color: 'white' },
                 }}
               />
             )}
-            <BundtiniTracker />
           </Box>
 
           {hasMultipleLocations && (
@@ -271,6 +312,13 @@ export function MainLayout({ children }: MainLayoutProps) {
               sx={{ 
                 bgcolor: 'rgba(255,255,255,0.1)',
                 '&:hover': { bgcolor: 'rgba(255,255,255,0.2)' },
+                fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                px: { xs: 1, sm: 2 },
+                minWidth: { xs: 'auto', sm: 140 },
+                display: { xs: 'none', sm: 'flex' },
+                '& .MuiButton-startIcon': {
+                  marginRight: { xs: 0.5, sm: 1 },
+                },
               }}
             >
               Change Location
@@ -323,10 +371,11 @@ export function MainLayout({ children }: MainLayoutProps) {
         component="main"
         sx={{
           flexGrow: 1,
-          p: 3,
+          p: { xs: 1.5, sm: 3 },
           width: { sm: `calc(100% - ${drawerWidth}px)` },
           bgcolor: 'background.default',
           minHeight: '100vh',
+          overflowX: 'hidden',
         }}
       >
         <Toolbar /> {/* Spacer for AppBar */}
