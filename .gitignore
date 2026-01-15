@@ -1,0 +1,10 @@
+# Firebase
+firebase-debug.log
+.firebase/
+
+# OS files
+.DS_Store
+
+# Environment
+.env
+.env.local
