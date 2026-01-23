@@ -80,20 +80,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const invites = invitesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     
     // Aggregate permissions from all invitations
-    const locationPermissions: any[] = [];
+    const storePermissions: any[] = [];
     let isGlobalAdmin = false;
     
     for (const invite of invites) {
       const inviteData = invite as any;
       if (inviteData.isGlobalAdmin) {
         isGlobalAdmin = true;
-      } else if (inviteData.locationPermissions) {
-        // New format: invite has locationPermissions array
-        locationPermissions.push(...inviteData.locationPermissions);
-      } else if (inviteData.locationId) {
-        // Legacy format: single location with canEdit
-        locationPermissions.push({
-          locationId: inviteData.locationId,
+      } else if (inviteData.storePermissions) {
+        // New format: invite has storePermissions array
+        storePermissions.push(...inviteData.storePermissions);
+      } else if (inviteData.storeId) {
+        // Legacy format: single store with canEdit
+        storePermissions.push({
+          storeId: inviteData.storeId,
           canEdit: inviteData.canEdit || false
         });
       }
@@ -110,7 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email: user.email!,
       createdAt: new Date(),
       isGlobalAdmin,
-      locationPermissions
+      storePermissions
     };
     
     await setDoc(doc(db, 'users', user.uid), userData);

@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { usePermissions } from '../contexts/PermissionContext';
+import { Business } from '../types';
+import { AddressPicker } from '../components/AddressPicker';
 import {
   Box,
   Typography,
@@ -14,19 +17,21 @@ import {
   CircularProgress,
   Grid,
   Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  IconButton,
+  Alert,
 } from '@mui/material';
 import {
   Search as SearchIcon,
   Business as BusinessIcon,
   People as PeopleIcon,
   CalendarMonth as CalendarIcon,
+  Edit as EditIcon,
 } from '@mui/icons-material';
-
-interface Business {
-  id: string;
-  name: string;
-  createdAt: Date;
-}
 
 interface BusinessWithStats extends Business {
   contactCount: number;
@@ -35,14 +40,26 @@ interface BusinessWithStats extends Business {
 
 export function Businesses() {
   const navigate = useNavigate();
+  const { permissions, canEdit } = usePermissions();
   const [businesses, setBusinesses] = useState<BusinessWithStats[]>([]);
   const [filteredBusinesses, setFilteredBusinesses] = useState<BusinessWithStats[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [editingBusiness, setEditingBusiness] = useState<BusinessWithStats | null>(null);
+  const [editFormData, setEditFormData] = useState({
+    name: '',
+    address: '',
+    city: '',
+    state: '',
+    zipCode: ''
+  });
+  const [editLoading, setEditLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
 
   useEffect(() => {
     loadBusinesses();
-  }, []);
+  }, [permissions.currentStoreId]);
 
   useEffect(() => {
     if (searchTerm) {
@@ -58,22 +75,54 @@ export function Businesses() {
 
   const loadBusinesses = async () => {
     try {
-      const businessSnapshot = await getDocs(collection(db, 'businesses'));
+      // Everyone (including global admins) must have a store selected
+      if (!permissions.currentStoreId) {
+        setBusinesses([]);
+        setLoading(false);
+        return;
+      }
+
+      // Load businesses for current store (filtered for everyone)
+      const businessQuery = query(
+        collection(db, 'businesses'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+
+      const businessSnapshot = await getDocs(businessQuery);
       const businessList: Business[] = [];
-      businessSnapshot.forEach((doc) => {
-        const data = doc.data();
-        businessList.push({
-          id: doc.id,
-          name: data.name,
-          createdAt: data.createdAt?.toDate() || new Date()
-        });
+      businessSnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        // Double-check storeId to ensure we only show businesses for this store
+        if (data.storeId === permissions.currentStoreId) {
+          businessList.push({
+            id: docSnap.id,
+            name: data.name,
+            storeId: data.storeId,
+            address: data.address || null,
+            city: data.city || null,
+            state: data.state || null,
+            zipCode: data.zipCode || null,
+            createdAt: data.createdAt?.toDate() || new Date(),
+            createdBy: data.createdBy
+          });
+        }
       });
 
-      const contactsSnapshot = await getDocs(collection(db, 'contacts'));
+      // Load contacts for current store (filtered for everyone)
+      const contactsQuery = query(
+        collection(db, 'contacts'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+
+      const contactsSnapshot = await getDocs(contactsQuery);
       const contactsByBusiness = new Map<string, any[]>();
       
       contactsSnapshot.forEach((doc) => {
         const data = doc.data();
+        // Double-check storeId to ensure we only show contacts for this store
+        if (data.storeId !== permissions.currentStoreId) {
+          return; // Skip this contact
+        }
         const businessId = data.businessId;
         if (!contactsByBusiness.has(businessId)) {
           contactsByBusiness.set(businessId, []);
@@ -110,6 +159,71 @@ export function Businesses() {
     }
   };
 
+  const openEditModal = (business: BusinessWithStats) => {
+    setEditingBusiness(business);
+    setEditFormData({
+      name: business.name || '',
+      address: business.address || '',
+      city: business.city || '',
+      state: business.state || '',
+      zipCode: business.zipCode || ''
+    });
+    setError('');
+    setSuccess('');
+  };
+
+  const closeEditModal = () => {
+    setEditingBusiness(null);
+    setEditFormData({
+      name: '',
+      address: '',
+      city: '',
+      state: '',
+      zipCode: ''
+    });
+    setError('');
+    setSuccess('');
+  };
+
+  const handleEditSubmit = async () => {
+    if (!editingBusiness) return;
+    
+    setError('');
+    setSuccess('');
+    setEditLoading(true);
+
+    if (!editFormData.name.trim()) {
+      setError('Business name is required');
+      setEditLoading(false);
+      return;
+    }
+
+    // Check permissions
+    if (!canEdit(editingBusiness.storeId)) {
+      setError('You do not have permission to edit this business');
+      setEditLoading(false);
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'businesses', editingBusiness.id), {
+        name: editFormData.name.trim(),
+        address: editFormData.address.trim() || null,
+        city: editFormData.city.trim() || null,
+        state: editFormData.state.trim().toUpperCase() || null,
+        zipCode: editFormData.zipCode.trim() || null
+      });
+
+      setSuccess('Business updated successfully!');
+      closeEditModal();
+      await loadBusinesses();
+    } catch (err: any) {
+      setError(err.message || 'Failed to update business');
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh' }}>
@@ -142,6 +256,9 @@ export function Businesses() {
         />
       </Paper>
 
+      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
+      {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
+
       {/* Businesses Grid */}
       {filteredBusinesses.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
@@ -154,45 +271,146 @@ export function Businesses() {
           {filteredBusinesses.map((business) => (
             <Grid size={{ xs: 12, sm: 6, md: 4 }} key={business.id}>
               <Card>
-                <CardActionArea onClick={() => navigate(`/dashboard?business=${business.id}`)}>
-                  <CardContent>
-                    <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-                      {business.name}
-                    </Typography>
-                    
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <PeopleIcon fontSize="small" color="action" />
-                        <Typography variant="body2" color="text.secondary">
-                          {business.contactCount} contact{business.contactCount !== 1 ? 's' : ''}
-                        </Typography>
-                      </Box>
+                <Box sx={{ position: 'relative' }}>
+                  {canEdit(business.storeId) && (
+                    <IconButton
+                      size="small"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openEditModal(business);
+                      }}
+                      sx={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        zIndex: 1,
+                        backgroundColor: 'background.paper',
+                        '&:hover': {
+                          backgroundColor: 'action.hover',
+                        },
+                      }}
+                    >
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                  <CardActionArea onClick={() => navigate(`/dashboard?business=${business.id}`)}>
+                    <CardContent>
+                      <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, pr: canEdit(business.storeId) ? 4 : 0 }}>
+                        {business.name}
+                      </Typography>
                       
-                      {business.lastReachout && (
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <CalendarIcon fontSize="small" color="action" />
+                          <PeopleIcon fontSize="small" color="action" />
                           <Typography variant="body2" color="text.secondary">
-                            Last: {business.lastReachout.toLocaleDateString()}
+                            {business.contactCount} contact{business.contactCount !== 1 ? 's' : ''}
                           </Typography>
                         </Box>
-                      )}
-                    </Box>
+                        
+                        {business.lastReachout && (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <CalendarIcon fontSize="small" color="action" />
+                            <Typography variant="body2" color="text.secondary">
+                              Last: {business.lastReachout.toLocaleDateString()}
+                            </Typography>
+                          </Box>
+                        )}
+                      </Box>
 
-                    <Box sx={{ mt: 2 }}>
-                      <Chip 
-                        label="View Contacts →" 
-                        size="small" 
-                        color="primary" 
-                        variant="outlined"
-                      />
-                    </Box>
-                  </CardContent>
-                </CardActionArea>
+                      <Box sx={{ mt: 2 }}>
+                        <Chip 
+                          label="View Contacts →" 
+                          size="small" 
+                          color="primary" 
+                          variant="outlined"
+                        />
+                      </Box>
+                    </CardContent>
+                  </CardActionArea>
+                </Box>
               </Card>
             </Grid>
           ))}
         </Grid>
       )}
+
+      {/* Edit Business Dialog */}
+      <Dialog open={!!editingBusiness} onClose={closeEditModal} maxWidth="sm" fullWidth>
+        <DialogTitle>Edit Business</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+            <TextField
+              label="Business Name"
+              value={editFormData.name}
+              onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+              placeholder="e.g., ABC Company"
+              required
+              fullWidth
+            />
+            
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+                Address
+              </Typography>
+              <AddressPicker
+                value={{
+                  address: editFormData.address,
+                  city: editFormData.city,
+                  state: editFormData.state,
+                  zipCode: editFormData.zipCode,
+                }}
+                onChange={(address) => {
+                  setEditFormData({
+                    ...editFormData,
+                    address: address.address,
+                    city: address.city,
+                    state: address.state,
+                    zipCode: address.zipCode,
+                  });
+                }}
+                label="Street Address"
+                fullWidth
+              />
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '2fr 1fr 1fr' }, gap: 2 }}>
+                <TextField
+                  label="City"
+                  value={editFormData.city}
+                  onChange={(e) => setEditFormData({ ...editFormData, city: e.target.value })}
+                  fullWidth
+                />
+                <TextField
+                  label="State"
+                  value={editFormData.state}
+                  onChange={(e) => setEditFormData({ ...editFormData, state: e.target.value.toUpperCase() })}
+                  placeholder="CA"
+                  inputProps={{ maxLength: 2 }}
+                  fullWidth
+                />
+                <TextField
+                  label="Zip Code"
+                  value={editFormData.zipCode}
+                  onChange={(e) => setEditFormData({ ...editFormData, zipCode: e.target.value })}
+                  placeholder="12345"
+                  inputProps={{ maxLength: 5 }}
+                  fullWidth
+                />
+              </Box>
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={closeEditModal} disabled={editLoading}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleEditSubmit}
+            variant="contained"
+            disabled={editLoading || !editFormData.name.trim()}
+          >
+            {editLoading ? <CircularProgress size={20} /> : 'Save Changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
@@ -79,7 +79,7 @@ export function Donations() {
 
   useEffect(() => {
     loadDonations();
-  }, [permissions.currentLocationId]);
+  }, [permissions.currentStoreId]);
 
   useEffect(() => {
     let filtered = donations;
@@ -114,20 +114,46 @@ export function Donations() {
 
   const loadDonations = async () => {
     try {
-      // Load businesses
-      const businessSnapshot = await getDocs(collection(db, 'businesses'));
+      // Everyone (including global admins) must have a store selected
+      if (!permissions.currentStoreId) {
+        setDonations([]);
+        setBusinesses(new Map());
+        return;
+      }
+
+      // Load businesses for current store (filtered for everyone)
+      const businessQuery = query(
+        collection(db, 'businesses'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+      
+      const businessSnapshot = await getDocs(businessQuery);
       const businessMap = new Map<string, string>();
       businessSnapshot.forEach((doc) => {
-        businessMap.set(doc.id, doc.data().name);
+        const data = doc.data();
+        // Double-check storeId to ensure we only show businesses for this store
+        if (data.storeId === permissions.currentStoreId) {
+          businessMap.set(doc.id, data.name);
+        }
       });
       setBusinesses(businessMap);
 
-      // Load contacts
-      const querySnapshot = await getDocs(collection(db, 'contacts'));
+      // Load contacts for current store (filtered for everyone)
+      const contactsQuery = query(
+        collection(db, 'contacts'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+
+      const querySnapshot = await getDocs(contactsQuery);
       const contacts: Contact[] = [];
 
       querySnapshot.forEach((doc) => {
         const data = doc.data();
+        // Double-check storeId to ensure we only show contacts for this store
+        if (data.storeId !== permissions.currentStoreId) {
+          return; // Skip this contact
+        }
+        
         const reachouts = (data.reachouts || []).map((r: any) => ({
           ...r,
           date: r.date?.toDate() || new Date(),
@@ -141,9 +167,9 @@ export function Donations() {
         } as Contact);
       });
 
-      // Get donations for current location and quarter
+      // Get donations for current store and quarter
       const donationsWithData = getReachoutsWithDonations(contacts, {
-        locationId: permissions.currentLocationId || undefined,
+        storeId: permissions.currentStoreId || undefined,
         quarterDate: new Date(),
       });
 
@@ -155,8 +181,8 @@ export function Donations() {
       setDonations(donationRows);
 
       // Calculate progress
-      if (permissions.currentLocationId) {
-        const progressData = getQuarterProgress(contacts, permissions.currentLocationId, new Date());
+      if (permissions.currentStoreId) {
+        const progressData = getQuarterProgress(contacts, permissions.currentStoreId, new Date());
         setProgress(progressData);
       }
     } catch (error) {

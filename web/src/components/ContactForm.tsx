@@ -2,37 +2,40 @@ import { useState, useEffect } from 'react';
 import { collection, addDoc, getDocs, setDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../contexts/PermissionContext';
 import { useVoiceInput } from '../hooks/useVoiceInput';
-import { extractContactInfo } from '../utils/openai';
-import { Contact, Reachout } from '../types';
+import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
+import { Contact, Reachout, DonationData, MOUTH_VALUES, Business, CalendarEvent } from '../types';
+import { createEmptyDonation, calculateMouths } from '../utils/donationCalculations';
+import { Box, Switch, FormControlLabel, Typography, Divider, Collapse, TextField, Grid, Checkbox, Chip } from '@mui/material';
+import { AddressPicker, AddressData } from './AddressPicker';
+import { Cake as CakeIcon } from '@mui/icons-material';
 
 interface ContactFormProps {
   onSuccess?: () => void;
 }
 
-interface Business {
-  id: string;
-  name: string;
-}
-
 export function ContactForm({ onSuccess }: ContactFormProps) {
   const { currentUser } = useAuth();
+  const { permissions } = usePermissions();
   const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
   
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState('');
   const [newBusinessName, setNewBusinessName] = useState('');
   const [showNewBusiness, setShowNewBusiness] = useState(false);
+  const [newBusinessAddress, setNewBusinessAddress] = useState<AddressData>({
+    address: '',
+    city: '',
+    state: '',
+    zipCode: '',
+  });
   
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
     email: '',
     phone: '',
-    address: '',
-    city: '',
-    state: '',
-    zipCode: '',
     personalDetails: '',
     reachoutNote: '',
     reachoutType: 'call' as 'call' | 'email' | 'meeting' | 'other',
@@ -40,24 +43,43 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
   });
 
   const [rawNotes, setRawNotes] = useState(''); // Editable raw meeting notes
+  const [includeDonation, setIncludeDonation] = useState(false);
+  const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation());
   
   const [loading, setLoading] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
-  // Load businesses on mount
+  // Load businesses on mount and when store changes
   useEffect(() => {
     loadBusinesses();
-  }, []);
+  }, [permissions.currentStoreId]);
 
   const loadBusinesses = async () => {
     try {
-      // Get all businesses (no ordering to avoid index requirements)
-      const querySnapshot = await getDocs(collection(db, 'businesses'));
+      if (!permissions.currentStoreId) {
+        setBusinesses([]);
+        return;
+      }
+
+      // Get businesses for the current store
+      const { query, where } = await import('firebase/firestore');
+      const businessesQuery = query(
+        collection(db, 'businesses'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+      const querySnapshot = await getDocs(businessesQuery);
       const businessList: Business[] = [];
       querySnapshot.forEach((doc) => {
-        businessList.push({ id: doc.id, name: doc.data().name });
+        const data = doc.data();
+        businessList.push({ 
+          id: doc.id, 
+          name: data.name,
+          storeId: data.storeId || permissions.currentStoreId || '',
+          createdAt: data.createdAt?.toDate() || new Date(),
+          createdBy: data.createdBy || '',
+        });
       });
       // Sort businesses alphabetically
       businessList.sort((a, b) => a.name.localeCompare(b.name));
@@ -87,20 +109,33 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
     try {
       const extracted = await extractContactInfo(rawNotes);
       
+      // Update form fields (does NOT create a contact - just fills the form)
       setFormData(prev => ({
         ...prev,
         firstName: extracted.firstName || prev.firstName,
         lastName: extracted.lastName || prev.lastName,
         email: extracted.email || prev.email,
         phone: extracted.phone || prev.phone,
-        address: extracted.address || prev.address,
-        city: extracted.city || prev.city,
-        state: extracted.state || prev.state,
-        zipCode: extracted.zipCode || prev.zipCode,
         personalDetails: extracted.personalDetails || prev.personalDetails,
         reachoutNote: extracted.reachoutNote || prev.reachoutNote,
         suggestedFollowUpDays: extracted.suggestedFollowUpDays || prev.suggestedFollowUpDays
       }));
+
+      // Auto-fill donation data if detected
+      if (extracted.donation) {
+        setIncludeDonation(true);
+        setDonationData(prev => ({
+          freeBundletCard: extracted.donation?.freeBundletCard || prev.freeBundletCard || 0,
+          dozenBundtinis: extracted.donation?.dozenBundtinis || prev.dozenBundtinis || 0,
+          cake8inch: extracted.donation?.cake8inch || prev.cake8inch || 0,
+          cake10inch: extracted.donation?.cake10inch || prev.cake10inch || 0,
+          sampleTray: extracted.donation?.sampleTray || prev.sampleTray || 0,
+          bundtletTower: extracted.donation?.bundtletTower || prev.bundtletTower || 0,
+          cakesDonatedNotes: extracted.donation?.cakesDonatedNotes || prev.cakesDonatedNotes || '',
+          orderedFromUs: extracted.donation?.orderedFromUs !== undefined ? extracted.donation.orderedFromUs : prev.orderedFromUs || false,
+          followedUp: extracted.donation?.followedUp !== undefined ? extracted.donation.followedUp : prev.followedUp || false,
+        }));
+      }
       
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
@@ -131,11 +166,21 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
       return;
     }
 
+    if (!permissions.currentStoreId) {
+      setError('Please select a store first');
+      return;
+    }
+
     try {
       const businessId = newBusinessName.trim().toUpperCase().replace(/\s+/g, '-');
       await setDoc(doc(db, 'businesses', businessId), {
         id: businessId,
         name: newBusinessName.trim(),
+        storeId: permissions.currentStoreId,
+        address: newBusinessAddress.address || null,
+        city: newBusinessAddress.city || null,
+        state: newBusinessAddress.state || null,
+        zipCode: newBusinessAddress.zipCode || null,
         createdAt: new Date(),
         createdBy: currentUser?.uid
       });
@@ -143,6 +188,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
       await loadBusinesses();
       setSelectedBusinessId(businessId);
       setNewBusinessName('');
+      setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
       setShowNewBusiness(false);
     } catch (err: any) {
       setError(err.message || 'Failed to create business');
@@ -164,14 +210,15 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
       return;
     }
 
+    if (!permissions.currentStoreId) {
+      setError('Please select a store first');
+      return;
+    }
+
     setLoading(true);
 
     try {
       const now = new Date();
-      
-      // Calculate suggested follow-up date
-      const suggestedFollowUpDate = new Date(now);
-      suggestedFollowUpDate.setDate(suggestedFollowUpDate.getDate() + formData.suggestedFollowUpDays);
       
       // Create initial reachout if note provided
       const initialReachout: Reachout = {
@@ -180,22 +227,60 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         note: formData.reachoutNote || 'Initial contact created',
         rawNotes: rawNotes || null,
         createdBy: currentUser.uid,
-        type: formData.reachoutType
+        type: formData.reachoutType,
+        storeId: permissions.currentStoreId,
+        donation: includeDonation ? donationData : undefined,
       };
+
+      // Generate AI follow-up suggestion
+      let suggestedFollowUpDate: Date | null = null;
+      let suggestedFollowUpMethod: 'email' | 'call' | 'meeting' | 'text' | 'other' | null = null;
+      let suggestedFollowUpNote: string | null = null;
+      let suggestedFollowUpPriority: 'low' | 'medium' | 'high' | null = null;
+
+      try {
+        const aiSuggestion = await generateFollowUpSuggestion({
+          firstName: formData.firstName || undefined,
+          lastName: formData.lastName || undefined,
+          reachouts: [{
+            date: initialReachout.date,
+            note: initialReachout.note || '',
+            type: initialReachout.type || 'other',
+            donation: initialReachout.donation
+          }],
+          personalDetails: formData.personalDetails || undefined,
+          status: 'new',
+          email: formData.email || undefined,
+          phone: formData.phone || undefined,
+        });
+
+        suggestedFollowUpDate = new Date(aiSuggestion.suggestedDate);
+        suggestedFollowUpMethod = aiSuggestion.suggestedMethod || null;
+        suggestedFollowUpNote = aiSuggestion.message || null;
+        suggestedFollowUpPriority = aiSuggestion.priority || null;
+      } catch (aiError) {
+        console.error('AI follow-up generation failed, using fallback:', aiError);
+        // Fallback to simple calculation
+        suggestedFollowUpDate = new Date(now);
+        suggestedFollowUpDate.setDate(suggestedFollowUpDate.getDate() + formData.suggestedFollowUpDays);
+        suggestedFollowUpMethod = formData.email ? 'email' : formData.phone ? 'call' : 'email';
+        suggestedFollowUpNote = null;
+        suggestedFollowUpPriority = 'medium';
+      }
 
       const contactData: Omit<Contact, 'id'> = {
         businessId: selectedBusinessId,
+        storeId: permissions.currentStoreId,
         contactId: generateContactId(),
         firstName: formData.firstName || null,
         lastName: formData.lastName || null,
         email: formData.email || null,
         phone: formData.phone || null,
-        address: formData.address || null,
-        city: formData.city || null,
-        state: formData.state || null,
-        zipCode: formData.zipCode || null,
         personalDetails: formData.personalDetails || null,
-        suggestedFollowUpDate,
+        suggestedFollowUpDate: suggestedFollowUpDate || null,
+        suggestedFollowUpMethod: suggestedFollowUpMethod || null,
+        suggestedFollowUpNote: suggestedFollowUpNote || null,
+        suggestedFollowUpPriority: suggestedFollowUpPriority || null,
         reachouts: [initialReachout],
         createdAt: now,
         createdBy: currentUser.uid,
@@ -203,7 +288,62 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         status: 'new'
       };
 
-      await addDoc(collection(db, 'contacts'), contactData);
+      const contactRef = await addDoc(collection(db, 'contacts'), contactData);
+      const contactId = contactRef.id;
+
+      // Create calendar event for the initial reachout
+      if (formData.reachoutNote || rawNotes) {
+        try {
+          // Normalize date to midnight local time for today's reachout
+          const normalizedNow = new Date(now);
+          normalizedNow.setHours(0, 0, 0, 0);
+          
+          await addDoc(collection(db, 'calendarEvents'), {
+            storeId: permissions.currentStoreId,
+            title: `Reachout: ${formData.firstName || formData.lastName || 'New Contact'}`,
+            description: formData.reachoutNote || rawNotes || null,
+            date: normalizedNow,
+            type: 'reachout',
+            contactId: contactId,
+            businessId: selectedBusinessId,
+            priority: 'medium',
+            status: 'completed', // Past reachout is completed
+            createdBy: currentUser.uid,
+            createdAt: now,
+            completedAt: now,
+          } as Omit<CalendarEvent, 'id'>);
+        } catch (eventError) {
+          console.error('Failed to create calendar event:', eventError);
+          // Don't fail contact creation if event creation fails
+        }
+      }
+
+      // Create calendar event for AI-suggested follow-up
+      if (suggestedFollowUpDate) {
+        try {
+          const contactName = `${formData.firstName || ''} ${formData.lastName || ''}`.trim() || formData.email || 'Contact';
+          // Normalize date to midnight local time to avoid timezone issues
+          const normalizedDate = new Date(suggestedFollowUpDate);
+          normalizedDate.setHours(0, 0, 0, 0);
+          
+          await addDoc(collection(db, 'calendarEvents'), {
+            storeId: permissions.currentStoreId,
+            title: `Follow-up: ${contactName}`,
+            description: suggestedFollowUpNote || `Follow up with ${contactName}`,
+            date: normalizedDate,
+            type: 'followup',
+            contactId: contactId,
+            businessId: selectedBusinessId,
+            priority: suggestedFollowUpPriority || 'medium',
+            status: 'scheduled',
+            createdBy: currentUser.uid,
+            createdAt: now,
+          } as Omit<CalendarEvent, 'id'>);
+        } catch (eventError) {
+          console.error('Failed to create follow-up calendar event:', eventError);
+          // Don't fail contact creation if event creation fails
+        }
+      }
       
       setSuccess(true);
       setFormData({
@@ -211,16 +351,14 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         lastName: '',
         email: '',
         phone: '',
-        address: '',
-        city: '',
-        state: '',
-        zipCode: '',
         personalDetails: '',
         reachoutNote: '',
         reachoutType: 'call',
         suggestedFollowUpDays: 3
       });
       setRawNotes('');
+      setIncludeDonation(false);
+      setDonationData(createEmptyDonation());
       clearTranscript();
       
       if (onSuccess) {
@@ -278,7 +416,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
       <div className="raw-notes-section">
         <h3>Raw Meeting Notes</h3>
         <p className="field-description">
-          Edit your notes below, then click "Process with AI" to extract contact information.
+          Edit your notes below, then click "Process" to extract contact information.
         </p>
         <textarea
           value={rawNotes}
@@ -294,7 +432,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
           disabled={aiProcessing || !rawNotes.trim()}
           className="btn-primary btn-ai-process"
         >
-          {aiProcessing ? '🤖 Processing...' : '🤖 Process with AI'}
+          {aiProcessing ? '🤖 Processing...' : 'Process'}
         </button>
       </div>
 
@@ -337,24 +475,36 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
                 onChange={(e) => setNewBusinessName(e.target.value)}
                 placeholder="Enter business name"
                 className="new-business-input"
+                style={{ marginBottom: '8px', width: '100%' }}
               />
-              <button
-                type="button"
-                onClick={handleCreateBusiness}
-                className="btn-primary"
-              >
-                Create
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowNewBusiness(false);
-                  setNewBusinessName('');
-                }}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
+              <Box sx={{ mb: 2 }}>
+                <AddressPicker
+                  value={newBusinessAddress}
+                  onChange={setNewBusinessAddress}
+                  label="Business Address"
+                  fullWidth
+                />
+              </Box>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={handleCreateBusiness}
+                  className="btn-primary"
+                >
+                  Create
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowNewBusiness(false);
+                    setNewBusinessName('');
+                    setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+                  }}
+                  className="btn-secondary"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -459,6 +609,163 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
           />
           <small>AI suggests: {formData.suggestedFollowUpDays} days</small>
         </div>
+
+        <Box sx={{ my: 2 }}>
+          <Divider sx={{ my: 1 }} />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={includeDonation}
+                onChange={(e) => {
+                  setIncludeDonation(e.target.checked);
+                  if (!e.target.checked) {
+                    setDonationData(createEmptyDonation());
+                  }
+                }}
+                disabled={loading || aiProcessing}
+              />
+            }
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CakeIcon fontSize="small" />
+                <Typography>Include Donation</Typography>
+              </Box>
+            }
+          />
+        </Box>
+
+        <Collapse in={includeDonation}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1, p: 2, bgcolor: 'grey.50', borderRadius: 2, mb: 2 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <CakeIcon fontSize="small" color="primary" />
+              Product Donations
+              {includeDonation && (
+                <Chip 
+                  label={`${calculateMouths(donationData)} mouths`} 
+                  size="small" 
+                  color="primary" 
+                  sx={{ ml: 'auto' }}
+                />
+              )}
+            </Typography>
+
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 6, sm: 4 }}>
+                <TextField
+                  label="FREE Bundtlet Card"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={donationData.freeBundletCard || ''}
+                  onChange={(e) => setDonationData(prev => ({ ...prev, freeBundletCard: parseInt(e.target.value) || 0 }))}
+                  helperText={`${MOUTH_VALUES.freeBundletCard} mouth each`}
+                  disabled={loading || aiProcessing}
+                  slotProps={{ htmlInput: { min: 0 } }}
+                />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 4 }}>
+                <TextField
+                  label="Dozen Bundtinis"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={donationData.dozenBundtinis || ''}
+                  onChange={(e) => setDonationData(prev => ({ ...prev, dozenBundtinis: parseInt(e.target.value) || 0 }))}
+                  helperText={`${MOUTH_VALUES.dozenBundtinis} mouths each`}
+                  disabled={loading || aiProcessing}
+                  slotProps={{ htmlInput: { min: 0 } }}
+                />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 4 }}>
+                <TextField
+                  label="8&quot; Cake"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={donationData.cake8inch || ''}
+                  onChange={(e) => setDonationData(prev => ({ ...prev, cake8inch: parseInt(e.target.value) || 0 }))}
+                  helperText={`${MOUTH_VALUES.cake8inch} mouths each`}
+                  disabled={loading || aiProcessing}
+                  slotProps={{ htmlInput: { min: 0 } }}
+                />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 4 }}>
+                <TextField
+                  label="10&quot; Cake"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={donationData.cake10inch || ''}
+                  onChange={(e) => setDonationData(prev => ({ ...prev, cake10inch: parseInt(e.target.value) || 0 }))}
+                  helperText={`${MOUTH_VALUES.cake10inch} mouths each`}
+                  disabled={loading || aiProcessing}
+                  slotProps={{ htmlInput: { min: 0 } }}
+                />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 4 }}>
+                <TextField
+                  label="Sample Tray"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={donationData.sampleTray || ''}
+                  onChange={(e) => setDonationData(prev => ({ ...prev, sampleTray: parseInt(e.target.value) || 0 }))}
+                  helperText={`${MOUTH_VALUES.sampleTray} mouths each`}
+                  disabled={loading || aiProcessing}
+                  slotProps={{ htmlInput: { min: 0 } }}
+                />
+              </Grid>
+              <Grid size={{ xs: 6, sm: 4 }}>
+                <TextField
+                  label="Bundtlet/Tower"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={donationData.bundtletTower || ''}
+                  onChange={(e) => setDonationData(prev => ({ ...prev, bundtletTower: parseInt(e.target.value) || 0 }))}
+                  helperText={`${MOUTH_VALUES.bundtletTower} mouth each`}
+                  disabled={loading || aiProcessing}
+                  slotProps={{ htmlInput: { min: 0 } }}
+                />
+              </Grid>
+            </Grid>
+
+            <TextField
+              label="Cakes Donated Notes"
+              size="small"
+              fullWidth
+              value={donationData.cakesDonatedNotes || ''}
+              onChange={(e) => setDonationData(prev => ({ ...prev, cakesDonatedNotes: e.target.value }))}
+              placeholder="Any notes about the donation..."
+              disabled={loading || aiProcessing}
+              multiline
+              rows={2}
+            />
+
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={donationData.orderedFromUs}
+                    onChange={(e) => setDonationData(prev => ({ ...prev, orderedFromUs: e.target.checked }))}
+                    disabled={loading || aiProcessing}
+                  />
+                }
+                label="Ordered from us?"
+              />
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={donationData.followedUp}
+                    onChange={(e) => setDonationData(prev => ({ ...prev, followedUp: e.target.checked }))}
+                    disabled={loading || aiProcessing}
+                  />
+                }
+                label="Followed up?"
+              />
+            </Box>
+          </Box>
+        </Collapse>
 
         {aiProcessing && (
           <div className="ai-processing">

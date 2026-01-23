@@ -1,20 +1,20 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from './AuthContext';
-import { LocationPermission } from '../types';
+import { StorePermission, Store } from '../types';
 
 interface UserPermissions {
   isGlobalAdmin: boolean;
-  locationPermissions: LocationPermission[];
-  currentLocationId: string | null;
+  storePermissions: StorePermission[];
+  currentStoreId: string | null;
 }
 
 interface PermissionContextType {
   permissions: UserPermissions;
-  setCurrentLocation: (locationId: string) => void;
-  canView: (locationId?: string) => boolean;
-  canEdit: (locationId?: string) => boolean;
+  setCurrentStore: (storeId: string) => void;
+  canView: (storeId?: string) => boolean;
+  canEdit: (storeId?: string) => boolean;
   isAdmin: () => boolean;
   hasAnyAccess: () => boolean;
   loading: boolean;
@@ -37,13 +37,15 @@ interface PermissionProviderProps {
 export function PermissionProvider({ children }: PermissionProviderProps) {
   const { currentUser } = useAuth();
   
-  // Try to load saved location from localStorage
-  const savedLocationId = localStorage.getItem('selectedLocationId');
+  // Try to load saved store from localStorage
+  const savedStoreId = typeof window !== 'undefined' 
+    ? localStorage.getItem('selectedStoreId')
+    : null;
   
   const [permissions, setPermissions] = useState<UserPermissions>({
     isGlobalAdmin: false,
-    locationPermissions: [],
-    currentLocationId: savedLocationId
+    storePermissions: [],
+    currentStoreId: savedStoreId
   });
   const [loading, setLoading] = useState(true);
 
@@ -51,8 +53,8 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     if (!currentUser) {
       setPermissions({
         isGlobalAdmin: false,
-        locationPermissions: [],
-        currentLocationId: null
+        storePermissions: [],
+        currentStoreId: null
       });
       setLoading(false);
       return;
@@ -65,84 +67,126 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   const loadUserPermissions = async () => {
     if (!currentUser) return;
 
+    // Preserve current store from state during reload to prevent flicker
+    const previousStoreId = permissions.currentStoreId 
+      || localStorage.getItem('selectedStoreId');
+
     try {
       const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
       
       if (userDoc.exists()) {
         const userData = userDoc.data();
-        const locationPerms = (userData.locationPermissions || []) as LocationPermission[];
+        const storePerms = (userData.storePermissions || []) as StorePermission[];
         
-        // Use saved location from localStorage, or first available location
-        const savedLocationId = localStorage.getItem('selectedLocationId');
-        let currentLocationId = savedLocationId;
+        // Normalize store permissions format
+        const migratedPerms = storePerms.map(perm => ({
+          storeId: perm.storeId,
+          canEdit: perm.canEdit
+        })).filter(perm => perm.storeId); // Filter out invalid entries
         
-        // Verify saved location is still valid
-        if (savedLocationId && !userData.isGlobalAdmin) {
-          const hasAccess = locationPerms.some(p => p.locationId === savedLocationId);
+        // Use saved store from localStorage, or preserve previous if available
+        const savedStoreId = localStorage.getItem('selectedStoreId') || previousStoreId;
+        let currentStoreId = savedStoreId;
+        
+        // Verify saved store is still valid
+        if (savedStoreId && !userData.isGlobalAdmin) {
+          const hasAccess = migratedPerms.some(p => p.storeId === savedStoreId);
           if (!hasAccess) {
-            currentLocationId = null;
-            localStorage.removeItem('selectedLocationId');
+            // User lost access to saved store - clear it
+            currentStoreId = null;
+            localStorage.removeItem('selectedStoreId');
           }
         }
         
-        // Don't auto-select first location - require user to explicitly choose
-        // This ensures first-time users see the location picker
+        // Auto-select first available store if none is selected and user has access
+        if (!currentStoreId) {
+          if (userData.isGlobalAdmin) {
+            // For global admins, load stores and auto-select first one if only one exists
+            try {
+              const storesSnapshot = await getDocs(collection(db, 'stores'));
+              const stores: Store[] = [];
+              storesSnapshot.forEach((doc) => {
+                stores.push({ id: doc.id, ...doc.data() } as Store);
+              });
+              stores.sort((a, b) => a.name.localeCompare(b.name));
+              
+              if (stores.length === 1) {
+                // Auto-select if only one store exists
+                currentStoreId = stores[0].id;
+                localStorage.setItem('selectedStoreId', currentStoreId);
+              } else if (stores.length > 1) {
+                // Multiple stores - require explicit selection
+                currentStoreId = null;
+              }
+            } catch (storeError) {
+              console.error('Error loading stores for auto-select:', storeError);
+              // On error, don't auto-select
+              currentStoreId = null;
+            }
+          } else if (migratedPerms.length > 0) {
+            // Auto-select first store from permissions
+            currentStoreId = migratedPerms[0].storeId;
+            localStorage.setItem('selectedStoreId', currentStoreId);
+          }
+        }
         
         setPermissions({
           isGlobalAdmin: userData.isGlobalAdmin === true,
-          locationPermissions: locationPerms,
-          currentLocationId
+          storePermissions: migratedPerms,
+          currentStoreId
         });
       } else {
+        // User document doesn't exist - preserve store if we had one
         setPermissions({
           isGlobalAdmin: false,
-          locationPermissions: [],
-          currentLocationId: null
+          storePermissions: [],
+          currentStoreId: previousStoreId
         });
       }
     } catch (error) {
       console.error('Error loading user permissions:', error);
+      // On error, preserve previous store to prevent it from disappearing
       setPermissions({
         isGlobalAdmin: false,
-        locationPermissions: [],
-        currentLocationId: null
+        storePermissions: [],
+        currentStoreId: previousStoreId
       });
     } finally {
       setLoading(false);
     }
   };
 
-  const setCurrentLocation = (locationId: string) => {
+  const setCurrentStore = (storeId: string) => {
     // Save to localStorage
-    localStorage.setItem('selectedLocationId', locationId);
+    localStorage.setItem('selectedStoreId', storeId);
     // Update state
     setPermissions(prev => ({
       ...prev,
-      currentLocationId: locationId
+      currentStoreId: storeId
     }));
   };
 
-  const canView = (locationId?: string): boolean => {
+  const canView = (storeId?: string): boolean => {
     if (permissions.isGlobalAdmin) return true;
     
-    const targetLocationId = locationId || permissions.currentLocationId;
-    if (!targetLocationId) return false;
+    const targetStoreId = storeId || permissions.currentStoreId;
+    if (!targetStoreId) return false;
 
-    // If user has ANY permission entry for this location, they can view
-    const perm = permissions.locationPermissions.find(
-      p => p.locationId === targetLocationId
+    // If user has ANY permission entry for this store, they can view
+    const perm = permissions.storePermissions.find(
+      p => p.storeId === targetStoreId
     );
     return !!perm; // Has access = can view
   };
 
-  const canEdit = (locationId?: string): boolean => {
+  const canEdit = (storeId?: string): boolean => {
     if (permissions.isGlobalAdmin) return true;
     
-    const targetLocationId = locationId || permissions.currentLocationId;
-    if (!targetLocationId) return false;
+    const targetStoreId = storeId || permissions.currentStoreId;
+    if (!targetStoreId) return false;
 
-    const perm = permissions.locationPermissions.find(
-      p => p.locationId === targetLocationId
+    const perm = permissions.storePermissions.find(
+      p => p.storeId === targetStoreId
     );
     return perm?.canEdit || false;
   };
@@ -152,14 +196,14 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   };
 
   const hasAnyAccess = (): boolean => {
-    return permissions.isGlobalAdmin || permissions.locationPermissions.length > 0;
+    return permissions.isGlobalAdmin || permissions.storePermissions.length > 0;
   };
 
   return (
     <PermissionContext.Provider
       value={{
         permissions,
-        setCurrentLocation,
+        setCurrentStore,
         canView,
         canEdit,
         isAdmin,

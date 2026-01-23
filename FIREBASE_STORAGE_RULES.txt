@@ -1,0 +1,50 @@
+===========================================
+FIREBASE STORAGE SECURITY RULES
+===========================================
+
+⚠️ IMPORTANT: These are STORAGE rules (for file uploads), NOT Firestore rules!
+These rules are completely separate from your Firestore database rules.
+
+Copy and paste these rules into your Firebase Console:
+Firebase Console → Storage → Rules (NOT Firestore → Rules)
+
+-------------------------------------------
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Allow authenticated users to upload files to contacts
+    match /contacts/{contactId}/files/{fileName} {
+      // Allow read if user is authenticated
+      allow read: if request.auth != null;
+      
+      // Allow write (upload/delete) if user is authenticated
+      allow write: if request.auth != null;
+    }
+    
+    // Deny all other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+-------------------------------------------
+SETUP INSTRUCTIONS:
+-------------------------------------------
+
+1. Go to Firebase Console → Storage
+2. If Storage is not enabled:
+   - Click "Get started"
+   - Choose "Start in test mode" (we'll add proper rules next)
+   - Select a location (same as your Firestore location)
+   - Click "Enable"
+3. Go to the "Rules" tab
+4. Replace the existing rules with the rules above
+5. Click "Publish"
+
+IMPORTANT NOTES:
+- These rules allow any authenticated user to read/write files in the contacts folder
+- Files are organized by contact ID: contacts/{contactId}/files/{fileName}
+- For production, you may want stricter rules based on your security needs
+- Consider adding file size limits and file type restrictions in your application code

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
@@ -57,34 +57,55 @@ export function BundtiniTracker() {
   });
 
   useEffect(() => {
-    if (permissions.currentLocationId) {
+    if (permissions.currentStoreId) {
       loadProgress();
     }
-  }, [permissions.currentLocationId, refreshTrigger]);
+  }, [permissions.currentStoreId, refreshTrigger]);
 
   const loadProgress = async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'contacts'));
+      if (!permissions.currentStoreId) {
+        setValue(0);
+        return;
+      }
+
+      // Filter contacts by storeId - only show contacts for current store
+      const contactsQuery = query(
+        collection(db, 'contacts'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+      const querySnapshot = await getDocs(contactsQuery);
       const contacts: Contact[] = [];
 
       querySnapshot.forEach((doc) => {
         const data = doc.data();
+        // Double-check storeId to ensure we only count contacts for this store
+        if (data.storeId !== permissions.currentStoreId) {
+          return; // Skip this contact
+        }
+        
         const reachouts = (data.reachouts || []).map((r: any) => ({
           ...r,
           date: r.date?.toDate() || new Date(),
+        }));
+
+        const files = (data.files || []).map((f: any) => ({
+          ...f,
+          uploadedAt: f.uploadedAt?.toDate() || new Date(),
         }));
 
         contacts.push({
           id: doc.id,
           ...data,
           reachouts,
+          files,
           createdAt: data.createdAt?.toDate() || new Date(),
         } as Contact);
       });
 
       const progressData = getQuarterProgress(
         contacts,
-        permissions.currentLocationId!,
+        permissions.currentStoreId!,
         new Date()
       );
       setProgress(progressData);
@@ -111,7 +132,7 @@ export function BundtiniTracker() {
     }
   };
 
-  if (!permissions.currentLocationId || loading) {
+  if (!permissions.currentStoreId || loading) {
     return null;
   }
 

@@ -4,7 +4,7 @@ import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useNavigate } from 'react-router-dom';
-import { Location, User, LocationPermission } from '../types';
+import { Store, User, StorePermission } from '../types';
 import {
   Box,
   Typography,
@@ -52,7 +52,7 @@ interface PendingInvite {
   id: string;
   email: string;
   isGlobalAdmin: boolean;
-  locationPermissions: LocationPermission[];
+  storePermissions: StorePermission[];
   invitedBy: string;
   invitedAt: Date;
   status: 'pending' | 'accepted' | 'rejected';
@@ -63,7 +63,7 @@ export function AdminPanel() {
   const { isAdmin } = usePermissions();
   const navigate = useNavigate();
   
-  const [locations, setLocations] = useState<Location[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
   const [users, setUsers] = useState<UserWithPermissions[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [filteredUsers, setFilteredUsers] = useState<UserWithPermissions[]>([]);
@@ -83,6 +83,7 @@ export function AdminPanel() {
   const [inviteAsAdmin, setInviteAsAdmin] = useState(false);
   const [inviteAccessLevels, setInviteAccessLevels] = useState<Map<string, AccessLevel>>(new Map());
   const [inviteLoading, setInviteLoading] = useState(false);
+  
 
   useEffect(() => {
     if (!isAdmin()) {
@@ -92,14 +93,14 @@ export function AdminPanel() {
     loadData();
   }, [isAdmin, navigate]);
 
-  // Initialize invite access levels when locations load
+  // Initialize invite access levels when stores load
   useEffect(() => {
-    if (locations.length > 0 && inviteAccessLevels.size === 0) {
+    if (stores.length > 0 && inviteAccessLevels.size === 0) {
       const defaultMap = new Map<string, AccessLevel>();
-      locations.forEach(loc => defaultMap.set(loc.id, 'full'));
+      stores.forEach(store => defaultMap.set(store.id, 'full'));
       setInviteAccessLevels(defaultMap);
     }
-  }, [locations]);
+  }, [stores]);
 
   useEffect(() => {
     const term = userSearchTerm.toLowerCase().trim();
@@ -119,7 +120,7 @@ export function AdminPanel() {
   const loadData = async () => {
     try {
       setLoading(true);
-      await Promise.all([loadLocations(), loadUsers(), loadPendingInvites()]);
+      await Promise.all([loadStores(), loadUsers(), loadPendingInvites()]);
     } catch (err: any) {
       setError(err.message || 'Failed to load data');
     } finally {
@@ -127,14 +128,14 @@ export function AdminPanel() {
     }
   };
 
-  const loadLocations = async () => {
-    const querySnapshot = await getDocs(collection(db, 'locations'));
-    const locationList: Location[] = [];
+  const loadStores = async () => {
+    const querySnapshot = await getDocs(collection(db, 'stores'));
+    const storeList: Store[] = [];
     querySnapshot.forEach((doc) => {
-      locationList.push({ id: doc.id, ...doc.data() } as Location);
+      storeList.push({ id: doc.id, ...doc.data() } as Store);
     });
-    locationList.sort((a, b) => a.name.localeCompare(b.name));
-    setLocations(locationList);
+    storeList.sort((a, b) => a.name.localeCompare(b.name));
+    setStores(storeList);
   };
 
   const loadUsers = async () => {
@@ -148,7 +149,7 @@ export function AdminPanel() {
         displayName: data.displayName,
         createdAt: data.createdAt?.toDate() || new Date(),
         isGlobalAdmin: data.isGlobalAdmin || false,
-        locationPermissions: data.locationPermissions || []
+        storePermissions: data.storePermissions || []
       });
     });
     userList.sort((a, b) => a.email.localeCompare(b.email));
@@ -165,7 +166,7 @@ export function AdminPanel() {
           id: doc.id,
           email: data.email || '',
           isGlobalAdmin: data.isGlobalAdmin || false,
-          locationPermissions: data.locationPermissions || [],
+          storePermissions: data.storePermissions || [],
           invitedBy: data.invitedBy || '',
           invitedAt: data.invitedAt?.toDate() || new Date(),
           status: data.status || 'pending'
@@ -226,12 +227,12 @@ export function AdminPanel() {
     try {
       const inviteId = `${newUserEmail.toLowerCase().trim()}-${Date.now()}`;
       
-      // Convert access levels to LocationPermission array
-      const permissions: LocationPermission[] = [];
-      inviteAccessLevels.forEach((level, locationId) => {
+      // Convert access levels to StorePermission array
+      const permissions: StorePermission[] = [];
+      inviteAccessLevels.forEach((level, storeId) => {
         if (level !== 'none') {
           permissions.push({
-            locationId,
+            storeId,
             canEdit: level === 'full'
           });
         }
@@ -240,7 +241,7 @@ export function AdminPanel() {
       const inviteData = {
         email: newUserEmail.toLowerCase().trim(),
         isGlobalAdmin: inviteAsAdmin,
-        locationPermissions: inviteAsAdmin ? [] : permissions,
+        storePermissions: inviteAsAdmin ? [] : permissions,
         invitedBy: currentUser?.uid || '',
         invitedAt: new Date(),
         status: 'pending'
@@ -311,7 +312,7 @@ export function AdminPanel() {
     }
   };
 
-  const getAccessLevel = (perm: LocationPermission | undefined): AccessLevel => {
+  const getAccessLevel = (perm: StorePermission | undefined): AccessLevel => {
     if (!perm) return 'none';
     return perm.canEdit ? 'full' : 'view';
   };
@@ -322,9 +323,9 @@ export function AdminPanel() {
     
     // Build access levels map from permissions
     const accessMap = new Map<string, AccessLevel>();
-    locations.forEach(loc => {
-      const perm = user.locationPermissions.find(p => p.locationId === loc.id);
-      accessMap.set(loc.id, getAccessLevel(perm));
+    stores.forEach(store => {
+      const perm = user.storePermissions.find(p => p.storeId === store.id);
+      accessMap.set(store.id, getAccessLevel(perm));
     });
     setEditAccessLevels(accessMap);
   };
@@ -335,29 +336,29 @@ export function AdminPanel() {
     setEditIsAdmin(false);
   };
 
-  const handleAccessLevelChange = (locationId: string, level: AccessLevel) => {
+  const handleAccessLevelChange = (storeId: string, level: AccessLevel) => {
     setEditAccessLevels(prev => {
       const next = new Map(prev);
-      next.set(locationId, level);
+      next.set(storeId, level);
       return next;
     });
   };
 
   const handleGrantAllAccess = () => {
     const newMap = new Map<string, AccessLevel>();
-    locations.forEach(loc => newMap.set(loc.id, 'full'));
+    stores.forEach(store => newMap.set(store.id, 'full'));
     setEditAccessLevels(newMap);
   };
 
   const handleViewOnlyAll = () => {
     const newMap = new Map<string, AccessLevel>();
-    locations.forEach(loc => newMap.set(loc.id, 'view'));
+    stores.forEach(store => newMap.set(store.id, 'view'));
     setEditAccessLevels(newMap);
   };
 
   const handleRevokeAllAccess = () => {
     const newMap = new Map<string, AccessLevel>();
-    locations.forEach(loc => newMap.set(loc.id, 'none'));
+    stores.forEach(store => newMap.set(store.id, 'none'));
     setEditAccessLevels(newMap);
   };
 
@@ -365,13 +366,13 @@ export function AdminPanel() {
     if (!editingUser) return;
     
     try {
-      // Convert access levels to LocationPermission array
-      // Only include locations with access (not 'none')
-      const permissions: LocationPermission[] = [];
-      editAccessLevels.forEach((level, locationId) => {
+      // Convert access levels to StorePermission array
+      // Only include stores with access (not 'none')
+      const permissions: StorePermission[] = [];
+      editAccessLevels.forEach((level, storeId) => {
         if (level !== 'none') {
           permissions.push({
-            locationId,
+            storeId,
             canEdit: level === 'full'
           });
         }
@@ -379,7 +380,7 @@ export function AdminPanel() {
 
       await updateDoc(doc(db, 'users', editingUser.uid), {
         isGlobalAdmin: editIsAdmin,
-        locationPermissions: editIsAdmin ? [] : permissions
+        storePermissions: editIsAdmin ? [] : permissions
       });
 
       await loadUsers();
@@ -393,42 +394,44 @@ export function AdminPanel() {
   const getUserAccessSummary = (user: UserWithPermissions): string => {
     if (user.isGlobalAdmin) return 'Global Admin';
     
-    const accessCount = user.locationPermissions.length;
-    const fullAccessCount = user.locationPermissions.filter(p => p.canEdit).length;
+    const accessCount = user.storePermissions.length;
+    const fullAccessCount = user.storePermissions.filter(p => p.canEdit).length;
     
     if (accessCount === 0) return 'No access';
-    if (accessCount === locations.length && fullAccessCount === locations.length) {
-      return 'All locations (full access)';
+    if (accessCount === stores.length && fullAccessCount === stores.length) {
+      return 'All stores (full access)';
     }
-    if (accessCount === locations.length && fullAccessCount === 0) {
-      return 'All locations (view only)';
+    if (accessCount === stores.length && fullAccessCount === 0) {
+      return 'All stores (view only)';
     }
-    if (accessCount === locations.length) {
-      return `All locations (${fullAccessCount} with edit)`;
+    if (accessCount === stores.length) {
+      return `All stores (${fullAccessCount} with edit)`;
     }
     
-    return `${accessCount} location${accessCount !== 1 ? 's' : ''} (${fullAccessCount} with edit)`;
+    return `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} with edit)`;
   };
+
 
   const getInviteAccessSummary = (invite: PendingInvite): string => {
     if (invite.isGlobalAdmin) return 'Global Admin (Pending)';
     
-    const accessCount = invite.locationPermissions.length;
-    const fullAccessCount = invite.locationPermissions.filter(p => p.canEdit).length;
+    const accessCount = invite.storePermissions.length;
+    const fullAccessCount = invite.storePermissions.filter(p => p.canEdit).length;
     
     if (accessCount === 0) return 'No access (Pending)';
-    if (accessCount === locations.length && fullAccessCount === locations.length) {
-      return 'All locations - full access (Pending)';
+    if (accessCount === stores.length && fullAccessCount === stores.length) {
+      return 'All stores - full access (Pending)';
     }
-    if (accessCount === locations.length && fullAccessCount === 0) {
-      return 'All locations - view only (Pending)';
+    if (accessCount === stores.length && fullAccessCount === 0) {
+      return 'All stores - view only (Pending)';
     }
-    if (accessCount === locations.length) {
-      return `All locations (${fullAccessCount} with edit) (Pending)`;
+    if (accessCount === stores.length) {
+      return `All stores (${fullAccessCount} with edit) (Pending)`;
     }
     
-    return `${accessCount} location${accessCount !== 1 ? 's' : ''} (${fullAccessCount} with edit) (Pending)`;
+    return `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} with edit) (Pending)`;
   };
+
 
   if (loading) {
     return (
@@ -483,28 +486,28 @@ export function AdminPanel() {
             />
           </Box>
 
-          {!inviteAsAdmin && locations.length > 0 && (
+          {!inviteAsAdmin && stores.length > 0 && (
             <>
               <Divider sx={{ my: 1 }} />
               
               <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
                 <Button size="small" variant="outlined" onClick={() => {
                   const newMap = new Map<string, AccessLevel>();
-                  locations.forEach(loc => newMap.set(loc.id, 'full'));
+                  stores.forEach(store => newMap.set(store.id, 'full'));
                   setInviteAccessLevels(newMap);
                 }}>
                   Full Access All
                 </Button>
                 <Button size="small" variant="outlined" onClick={() => {
                   const newMap = new Map<string, AccessLevel>();
-                  locations.forEach(loc => newMap.set(loc.id, 'view'));
+                  stores.forEach(store => newMap.set(store.id, 'view'));
                   setInviteAccessLevels(newMap);
                 }}>
                   View Only All
                 </Button>
                 <Button size="small" variant="outlined" color="error" onClick={() => {
                   const newMap = new Map<string, AccessLevel>();
-                  locations.forEach(loc => newMap.set(loc.id, 'none'));
+                  stores.forEach(store => newMap.set(store.id, 'none'));
                   setInviteAccessLevels(newMap);
                 }}>
                   Revoke All
@@ -512,18 +515,18 @@ export function AdminPanel() {
               </Box>
 
               <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
-                Location Permissions
+                Store Permissions
               </Typography>
 
               <List sx={{ bgcolor: 'grey.50', borderRadius: 1, mb: 2, width: '100%', maxWidth: '100%' }}>
-                {locations.map((location, index) => {
-                  const level = inviteAccessLevels.get(location.id) || 'full';
+                {stores.map((store, index) => {
+                  const level = inviteAccessLevels.get(store.id) || 'full';
                   return (
-                    <React.Fragment key={location.id}>
+                    <React.Fragment key={store.id}>
                       {index > 0 && <Divider />}
                       <ListItem sx={{ py: 1.5, flexDirection: 'column', alignItems: 'stretch' }}>
                         <Typography variant="body1" sx={{ fontWeight: 500, mb: 1 }}>
-                          {location.name}
+                          {store.name}
                         </Typography>
                         <ToggleButtonGroup
                           value={level}
@@ -532,7 +535,7 @@ export function AdminPanel() {
                             if (newLevel !== null) {
                               setInviteAccessLevels(prev => {
                                 const next = new Map(prev);
-                                next.set(location.id, newLevel);
+                                next.set(store.id, newLevel);
                                 return next;
                               });
                             }
@@ -725,7 +728,7 @@ export function AdminPanel() {
                     <Box>
                       <Typography variant="body1" sx={{ fontWeight: 500 }}>Global Administrator</Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Full access to all locations and user management
+                        Full access to all stores and user management
                       </Typography>
                     </Box>
                   }
@@ -749,25 +752,25 @@ export function AdminPanel() {
                   </Box>
 
                   <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
-                    Location Permissions
+                    Store Permissions
                   </Typography>
 
                   <List sx={{ bgcolor: 'grey.50', borderRadius: 1 }}>
-                    {locations.map((location, index) => {
-                      const level = editAccessLevels.get(location.id) || 'none';
+                    {stores.map((store, index) => {
+                      const level = editAccessLevels.get(store.id) || 'none';
                       return (
-                        <React.Fragment key={location.id}>
+                        <React.Fragment key={store.id}>
                           {index > 0 && <Divider />}
                           <ListItem sx={{ py: 1.5, flexDirection: 'column', alignItems: 'stretch' }}>
                             <Typography variant="body1" sx={{ fontWeight: 500, mb: 1 }}>
-                              {location.name}
+                              {store.name}
                             </Typography>
                             <ToggleButtonGroup
                               value={level}
                               exclusive
                               onChange={(_, newLevel) => {
                                 if (newLevel !== null) {
-                                  handleAccessLevelChange(location.id, newLevel);
+                                  handleAccessLevelChange(store.id, newLevel);
                                 }
                               }}
                               size="small"

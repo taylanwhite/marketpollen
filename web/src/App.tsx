@@ -8,9 +8,10 @@ import { Signup } from './pages/Signup';
 import { Dashboard } from './pages/Dashboard';
 import { Businesses } from './pages/Businesses';
 import { Donations } from './pages/Donations';
-import { Locations } from './pages/Locations';
+import { Calendar } from './pages/Calendar';
+import { Stores } from './pages/Stores';
 import { AdminPanel } from './pages/AdminPanel';
-import { LocationPicker } from './pages/LocationPicker';
+import { StorePicker } from './pages/StorePicker';
 import { NoAccess } from './pages/NoAccess';
 import './App.css';
 
@@ -25,10 +26,10 @@ function App() {
             <Route path="/signup" element={<Signup />} />
             <Route path="/no-access" element={<NoAccess />} />
             <Route
-              path="/select-location"
+              path="/select-store"
               element={
                 <ProtectedRoute>
-                  <LocationPicker />
+                  <StorePicker />
                 </ProtectedRoute>
               }
             />
@@ -57,10 +58,18 @@ function App() {
               }
             />
             <Route
-              path="/locations"
+              path="/calendar"
+              element={
+                <ProtectedRoute>
+                  <Calendar />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/stores"
               element={
                 <ProtectedRoute requireAdmin={true}>
-                  <Locations />
+                  <Stores />
                 </ProtectedRoute>
               }
             />
@@ -72,7 +81,7 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="/" element={<Navigate to="/select-location" replace />} />
+            <Route path="/" element={<Navigate to="/select-store" replace />} />
           </Routes>
           </DonationProvider>
         </PermissionProvider>

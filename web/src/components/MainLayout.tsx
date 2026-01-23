@@ -5,7 +5,7 @@ import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { BundtiniTracker } from './BundtiniTracker';
-import { Location } from '../types';
+import { Store } from '../types';
 import {
   AppBar,
   Box,
@@ -26,6 +26,7 @@ import {
   Menu as MenuIcon,
   Dashboard as DashboardIcon,
   Business as BusinessIcon,
+  CalendarMonth as CalendarIcon,
   LocationOn as LocationIcon,
   AdminPanelSettings as AdminIcon,
   Logout as LogoutIcon,
@@ -46,37 +47,48 @@ export function MainLayout({ children }: MainLayoutProps) {
   const { permissions, isAdmin } = usePermissions();
   
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState<Location | null>(null);
-  const [hasMultipleLocations, setHasMultipleLocations] = useState(false);
+  const [currentStore, setCurrentStore] = useState<Store | null>(null);
+  const [hasMultipleStores, setHasMultipleStores] = useState(false);
 
   useEffect(() => {
-    loadCurrentLocation();
-  }, [permissions.currentLocationId]);
+    loadCurrentStore();
+  }, [permissions.currentStoreId]);
 
-  const loadCurrentLocation = async () => {
-    if (!permissions.currentLocationId) {
-      setCurrentLocation(null);
+  const loadCurrentStore = async () => {
+    if (!permissions.currentStoreId) {
+      setCurrentStore(null);
+      setHasMultipleStores(false);
       return;
     }
 
     try {
-      const querySnapshot = await getDocs(collection(db, 'locations'));
-      const locationList: Location[] = [];
+      const querySnapshot = await getDocs(collection(db, 'stores'));
+      const storeList: Store[] = [];
       querySnapshot.forEach((doc) => {
-        locationList.push({ id: doc.id, ...doc.data() } as Location);
+        storeList.push({ id: doc.id, ...doc.data() } as Store);
       });
 
-      const availableLocations = isAdmin()
-        ? locationList
-        : locationList.filter(loc =>
-            permissions.locationPermissions.some(p => p.locationId === loc.id)
+      const availableStores = isAdmin()
+        ? storeList
+        : storeList.filter(store =>
+            permissions.storePermissions.some(p => p.storeId === store.id)
           );
       
-      setHasMultipleLocations(availableLocations.length > 1);
-      const current = locationList.find(loc => loc.id === permissions.currentLocationId);
-      setCurrentLocation(current || null);
+      setHasMultipleStores(availableStores.length > 1);
+      const current = storeList.find(store => store.id === permissions.currentStoreId);
+      
+      // If store not found, it might have been deleted - don't clear it immediately
+      // Let PermissionContext handle validation
+      if (current) {
+        setCurrentStore(current);
+      } else {
+        // Store not found - might be deleted or user lost access
+        // Keep showing it for now, PermissionContext will handle cleanup
+        setCurrentStore(null);
+      }
     } catch (error) {
-      console.error('Error loading location:', error);
+      console.error('Error loading store:', error);
+      // Don't clear store on error - might be temporary network issue
     }
   };
 
@@ -86,7 +98,7 @@ export function MainLayout({ children }: MainLayoutProps) {
 
   const handleLogout = async () => {
     try {
-      localStorage.removeItem('selectedLocationId');
+      localStorage.removeItem('selectedStoreId');
       await logout();
       navigate('/login');
     } catch (error) {
@@ -100,32 +112,33 @@ export function MainLayout({ children }: MainLayoutProps) {
     { text: 'Contacts', icon: <DashboardIcon />, path: '/dashboard' },
     { text: 'Businesses', icon: <BusinessIcon />, path: '/businesses' },
     { text: 'Donations', icon: <CakeIcon />, path: '/donations' },
+    { text: 'Calendar', icon: <CalendarIcon />, path: '/calendar' },
   ];
 
   const adminNavItems = [
-    { text: 'Locations', icon: <LocationIcon />, path: '/locations' },
+    { text: 'Stores', icon: <LocationIcon />, path: '/stores' },
     { text: 'User Management', icon: <AdminIcon />, path: '/admin' },
   ];
 
   const drawer = (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Toolbar sx={{ justifyContent: 'center', py: 2 }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <Toolbar sx={{ justifyContent: 'center', py: 2, flexShrink: 0 }}>
         <Typography variant="h6" sx={{ color: 'white', fontWeight: 700 }}>
           🎂 Bundt Marketer
         </Typography>
       </Toolbar>
-      <Box sx={{ px: 2, pb: 2 }}>
+      <Box sx={{ px: 2, pb: 2, flexShrink: 0 }}>
         <BundtiniTracker />
       </Box>
-      <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)' }} />
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)', flexShrink: 0 }} />
       
-      {hasMultipleLocations && (
+      {hasMultipleStores && (
         <>
-          <List>
+          <List sx={{ flexShrink: 0 }}>
             <ListItem disablePadding>
               <ListItemButton
                 onClick={() => {
-                  navigate('/select-location');
+                  navigate('/select-store');
                   setMobileOpen(false);
                 }}
                 sx={{
@@ -141,7 +154,7 @@ export function MainLayout({ children }: MainLayoutProps) {
                   <SwapIcon />
                 </ListItemIcon>
                 <ListItemText 
-                  primary="Change Location" 
+                  primary="Change Store" 
                   sx={{ 
                     '& .MuiListItemText-primary': { 
                       color: 'rgba(255,255,255,0.8)',
@@ -151,11 +164,11 @@ export function MainLayout({ children }: MainLayoutProps) {
               </ListItemButton>
             </ListItem>
           </List>
-          <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)', my: 1 }} />
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)', my: 1, flexShrink: 0 }} />
         </>
       )}
       
-      <List sx={{ flex: 1, pt: 2 }}>
+      <List sx={{ flex: 1, pt: 2, overflowY: 'auto', overflowX: 'hidden', minHeight: 0 }}>
         {mainNavItems.map((item) => (
           <ListItem key={item.text} disablePadding>
             <ListItemButton
@@ -240,8 +253,8 @@ export function MainLayout({ children }: MainLayoutProps) {
         )}
       </List>
 
-      <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)' }} />
-      <List>
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)', flexShrink: 0 }} />
+      <List sx={{ flexShrink: 0 }}>
         <ListItem disablePadding>
           <ListItemButton
             onClick={handleLogout}
@@ -288,10 +301,10 @@ export function MainLayout({ children }: MainLayoutProps) {
           </IconButton>
           
           <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 }, minWidth: 0, overflow: 'hidden' }}>
-            {currentLocation && (
+            {currentStore && (
               <Chip
                 icon={<LocationIcon sx={{ color: 'white !important', fontSize: { xs: 16, sm: 20 } }} />}
-                label={currentLocation.name}
+                label={currentStore.name}
                 sx={{
                   bgcolor: 'rgba(255,255,255,0.2)',
                   color: 'white',
@@ -304,11 +317,11 @@ export function MainLayout({ children }: MainLayoutProps) {
             )}
           </Box>
 
-          {hasMultipleLocations && (
+          {hasMultipleStores && (
             <Button
               color="inherit"
               startIcon={<SwapIcon />}
-              onClick={() => navigate('/select-location')}
+              onClick={() => navigate('/select-store')}
               sx={{ 
                 bgcolor: 'rgba(255,255,255,0.1)',
                 '&:hover': { bgcolor: 'rgba(255,255,255,0.2)' },
@@ -321,7 +334,7 @@ export function MainLayout({ children }: MainLayoutProps) {
                 },
               }}
             >
-              Change Location
+              Change Store
             </Button>
           )}
         </Toolbar>
@@ -343,6 +356,7 @@ export function MainLayout({ children }: MainLayoutProps) {
               boxSizing: 'border-box', 
               width: drawerWidth,
               bgcolor: '#1a1a2e',
+              overflow: 'hidden',
             },
           }}
         >
@@ -359,6 +373,7 @@ export function MainLayout({ children }: MainLayoutProps) {
               width: drawerWidth,
               bgcolor: '#1a1a2e',
               borderRight: 'none',
+              overflow: 'hidden',
             },
           }}
           open

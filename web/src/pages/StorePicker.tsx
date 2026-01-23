@@ -4,7 +4,7 @@ import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
-import { Location } from '../types';
+import { Store } from '../types';
 import {
   Box,
   Card,
@@ -20,43 +20,43 @@ import {
   Add as AddIcon,
 } from '@mui/icons-material';
 
-export function LocationPicker() {
+export function StorePicker() {
   const { currentUser, logout } = useAuth();
-  const { permissions, setCurrentLocation, isAdmin } = usePermissions();
+  const { permissions, setCurrentStore, isAdmin } = usePermissions();
   const navigate = useNavigate();
-  const [locations, setLocations] = useState<Location[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadLocations();
+    loadStores();
   }, []);
 
-  const loadLocations = async () => {
+  const loadStores = async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'locations'));
-      const locationList: Location[] = [];
+      const querySnapshot = await getDocs(collection(db, 'stores'));
+      const storeList: Store[] = [];
       querySnapshot.forEach((doc) => {
-        locationList.push({ id: doc.id, ...doc.data() } as Location);
+        storeList.push({ id: doc.id, ...doc.data() } as Store);
       });
       
-      const availableLocations = isAdmin()
-        ? locationList
-        : locationList.filter(loc =>
-            permissions.locationPermissions.some(p => p.locationId === loc.id)
+      const availableStores = isAdmin()
+        ? storeList
+        : storeList.filter(store =>
+            permissions.storePermissions.some(p => p.storeId === store.id)
           );
       
-      availableLocations.sort((a, b) => a.name.localeCompare(b.name));
-      setLocations(availableLocations);
+      availableStores.sort((a, b) => a.name.localeCompare(b.name));
+      setStores(availableStores);
     } catch (error) {
-      console.error('Error loading locations:', error);
+      console.error('Error loading stores:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSelectLocation = (locationId: string) => {
-    localStorage.setItem('selectedLocationId', locationId);
-    setCurrentLocation(locationId);
+  const handleSelectStore = (storeId: string) => {
+    localStorage.setItem('selectedStoreId', storeId);
+    setCurrentStore(storeId);
     navigate('/dashboard');
   };
 
@@ -86,23 +86,23 @@ export function LocationPicker() {
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
               <CircularProgress />
             </Box>
-          ) : locations.length === 0 ? (
+          ) : stores.length === 0 ? (
             <Box sx={{ textAlign: 'center' }}>
               <Typography variant="h4" sx={{ fontWeight: 700, mb: 2 }}>
-                🏢 No Locations Available
+                🏢 No Stores Available
               </Typography>
               <Typography color="text.secondary" sx={{ mb: 3 }}>
-                You don't have access to any locations yet.
+                You don't have access to any stores yet.
               </Typography>
               
               {isAdmin() && (
                 <Button
                   variant="contained"
                   startIcon={<AddIcon />}
-                  onClick={() => navigate('/locations')}
+                  onClick={() => navigate('/stores')}
                   sx={{ mb: 2 }}
                 >
-                  Create First Location
+                  Create First Store
                 </Button>
               )}
               
@@ -120,7 +120,7 @@ export function LocationPicker() {
             <>
               <Box sx={{ textAlign: 'center', mb: 4 }}>
                 <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
-                  🏢 Select Your Location
+                  🏢 Select Your Store
                 </Typography>
                 <Typography color="text.secondary">
                   Welcome, {currentUser?.email}
@@ -128,8 +128,8 @@ export function LocationPicker() {
               </Box>
 
               <Grid container spacing={2} sx={{ mb: 3 }}>
-                {locations.map((location) => (
-                  <Grid size={{ xs: 12, sm: 6, md: 4 }} key={location.id}>
+                {stores.map((store) => (
+                  <Grid size={{ xs: 12, sm: 6, md: 4 }} key={store.id}>
                     <Card
                       sx={{
                         cursor: 'pointer',
@@ -141,16 +141,16 @@ export function LocationPicker() {
                           boxShadow: 4,
                         },
                       }}
-                      onClick={() => handleSelectLocation(location.id)}
+                      onClick={() => handleSelectStore(store.id)}
                     >
                       <CardContent sx={{ textAlign: 'center', py: 3 }}>
                         <LocationIcon sx={{ fontSize: 40, mb: 1 }} />
                         <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                          {location.name}
+                          {store.name}
                         </Typography>
-                        {location.city && (
+                        {store.city && (
                           <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                            {location.city}, {location.state}
+                            {store.city}, {store.state}
                           </Typography>
                         )}
                       </CardContent>

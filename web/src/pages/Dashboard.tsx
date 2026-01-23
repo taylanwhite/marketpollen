@@ -44,7 +44,6 @@ import {
   Close as CloseIcon,
   Email as EmailIcon,
   Phone as PhoneIcon,
-  LocationOn as LocationIcon,
   Business as BusinessIcon,
   CalendarMonth as CalendarIcon,
   Edit as EditIcon,
@@ -58,7 +57,7 @@ import {
 
 export function Dashboard() {
   const { currentUser } = useAuth();
-  const { permissions, canEdit } = usePermissions();
+  const { permissions, canEdit, loading: permissionsLoading } = usePermissions();
   const { triggerRefresh, setLastDonationMouths } = useDonation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -88,12 +87,21 @@ export function Dashboard() {
   const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
 
   useEffect(() => {
-    if (!permissions.currentLocationId && !permissions.isGlobalAdmin) {
-      navigate('/select-location');
+    // Don't redirect if permissions are still loading
+    if (permissionsLoading) return;
+    
+    // Everyone (including global admins) must have a store selected
+    if (!permissions.currentStoreId && permissions.storePermissions.length > 0) {
+      // User has permissions but no store selected - redirect to picker
+      navigate('/select-store');
       return;
     }
-    loadData();
-  }, [permissions.currentLocationId, permissions.isGlobalAdmin, navigate]);
+    
+    // Only load data if we have a store selected
+    if (permissions.currentStoreId) {
+      loadData();
+    }
+  }, [permissions.currentStoreId, permissions.storePermissions.length, permissionsLoading, navigate]);
 
   useEffect(() => {
     let filtered = contacts;
@@ -112,7 +120,6 @@ export function Dashboard() {
           (c.email?.toLowerCase() || '').includes(term) ||
           (c.phone?.toLowerCase() || '').includes(term) ||
           businessName.includes(term) ||
-          (c.city?.toLowerCase() || '').includes(term) ||
           (c.personalDetails?.toLowerCase() || '').includes(term)
         );
       });
@@ -135,27 +142,63 @@ export function Dashboard() {
 
   const loadData = async () => {
     try {
-      const businessSnapshot = await getDocs(collection(db, 'businesses'));
+      // Everyone (including global admins) must have a store selected
+      if (!permissions.currentStoreId) {
+        setContacts([]);
+        setBusinesses(new Map());
+        setLoading(false);
+        return;
+      }
+
+      // Load businesses for current store (filtered for everyone)
+      const { query, where } = await import('firebase/firestore');
+      const businessQuery = query(
+        collection(db, 'businesses'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+      
+      const businessSnapshot = await getDocs(businessQuery);
       const businessMap = new Map<string, string>();
       businessSnapshot.forEach((doc) => {
-        businessMap.set(doc.id, doc.data().name);
+        const data = doc.data();
+        // Double-check storeId to ensure we only show businesses for this store
+        if (data.storeId === permissions.currentStoreId) {
+          businessMap.set(doc.id, data.name);
+        }
       });
       setBusinesses(businessMap);
 
-      const querySnapshot = await getDocs(collection(db, 'contacts'));
+      // Load contacts for current store (filtered for everyone)
+      const contactsQuery = query(
+        collection(db, 'contacts'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+
+      const querySnapshot = await getDocs(contactsQuery);
       const contactsData: Contact[] = [];
       
       querySnapshot.forEach((doc) => {
         const data = doc.data();
+        // Double-check storeId to ensure we only show contacts for this store
+        if (data.storeId !== permissions.currentStoreId) {
+          return; // Skip this contact if it doesn't match the current store
+        }
+        
         const reachouts = (data.reachouts || []).map((r: any) => ({
           ...r,
           date: r.date?.toDate() || new Date()
+        }));
+        
+        const files = (data.files || []).map((f: any) => ({
+          ...f,
+          uploadedAt: f.uploadedAt?.toDate() || new Date(),
         }));
         
         contactsData.push({
           id: doc.id,
           ...data,
           reachouts,
+          files,
           createdAt: data.createdAt?.toDate() || new Date(),
           lastReachoutDate: data.lastReachoutDate?.toDate(),
           suggestedFollowUpDate: data.suggestedFollowUpDate?.toDate(),
@@ -170,14 +213,17 @@ export function Dashboard() {
       setContacts(contactsData);
     } catch (error) {
       console.error('Error loading data:', error);
+      // On error, don't show any data to prevent leaking data
+      setContacts([]);
+      setBusinesses(new Map());
     } finally {
       setLoading(false);
     }
   };
 
-  const handleContactClick = (contact: Contact) => {
+  const handleContactClick = async (contact: Contact) => {
     setSelectedContact(contact);
-    const suggestions = generateFollowUpSuggestions(contact);
+    const suggestions = await generateFollowUpSuggestions(contact);
     setFollowUpSuggestions(suggestions);
   };
 
@@ -255,7 +301,7 @@ export function Dashboard() {
         rawNotes: quickReachoutData.rawNotes || null,
         createdBy: currentUser?.uid || '',
         type: quickReachoutData.type,
-        locationId: permissions.currentLocationId || undefined,
+        storeId: permissions.currentStoreId || undefined,
         donation: includeDonation ? donationData : undefined,
       };
 
@@ -412,7 +458,7 @@ export function Dashboard() {
               onClick={processWithAI}
               disabled={aiProcessing || !quickReachoutData.rawNotes.trim() || quickReachoutLoading}
             >
-              {aiProcessing ? 'Processing...' : 'Process with AI'}
+              {aiProcessing ? 'Processing...' : 'Process'}
             </Button>
 
             {/* Summary Note */}
@@ -650,15 +696,6 @@ export function Dashboard() {
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                             <PhoneIcon fontSize="small" color="action" />
                             <Typography variant="body2" color="text.secondary">{contact.phone}</Typography>
-                          </Box>
-                        )}
-                        
-                        {(contact.city || contact.state) && (
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <LocationIcon fontSize="small" color="action" />
-                            <Typography variant="body2" color="text.secondary">
-                              {[contact.city, contact.state].filter(Boolean).join(', ')}
-                            </Typography>
                           </Box>
                         )}
                       </Box>

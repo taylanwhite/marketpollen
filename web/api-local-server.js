@@ -6,6 +6,7 @@ import express from 'express';
 import cors from 'cors';
 import OpenAI from 'openai';
 import { Resend } from 'resend';
+import axios from 'axios';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -14,7 +15,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Load environment variables
-dotenv.config({ path: join(__dirname, '.env') });
+const envPath = join(__dirname, '.env');
+const result = dotenv.config({ path: envPath });
+
+if (result.error) {
+  console.warn('Warning: Could not load .env file:', result.error.message);
+} else {
+  console.log('✓ Environment variables loaded from:', envPath);
+}
+
+// Log environment variable status (without exposing the key)
+console.log('GOOGLE_PLACES_API_KEY:', process.env.GOOGLE_PLACES_API_KEY ? '✓ Set' : '✗ Not set');
+console.log('OPENAI_API_KEY:', process.env.OPENAI_API_KEY ? '✓ Set' : '✗ Not set');
+console.log('RESEND_API_KEY:', process.env.RESEND_API_KEY ? '✓ Set' : '✗ Not set');
 
 const app = express();
 const PORT = 3001;
@@ -179,9 +192,197 @@ This invitation was sent by Bundt Marketer. If you didn't expect this email, you
   }
 });
 
+// Google Places Autocomplete route
+app.post('/api/places-autocomplete', async (req, res) => {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  
+  if (!apiKey) {
+    console.error('GOOGLE_PLACES_API_KEY is missing. Checked env file at:', join(__dirname, '.env'));
+    console.error('Available env vars:', Object.keys(process.env).filter(k => k.includes('GOOGLE') || k.includes('PLACES')));
+    return res.status(500).json({ 
+      error: 'GOOGLE_PLACES_API_KEY is not configured. Please set it in your .env file in the web directory.' 
+    });
+  }
+
+  // Verify authentication token is present
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized - Authentication required' });
+  }
+
+  try {
+    const { input, sessionToken } = req.body;
+
+    if (!input || typeof input !== 'string' || input.trim().length === 0) {
+      return res.status(400).json({ 
+        error: 'Input is required and must not be empty' 
+      });
+    }
+
+    // Call Google Places API (New) - Autocomplete
+    // Documentation: https://developers.google.com/maps/documentation/places/web-service/place-autocomplete
+    const url = 'https://places.googleapis.com/v1/places:autocomplete';
+    
+    const requestBody = {
+      input, // Required: The text string on which to search
+      includedRegionCodes: ['us'], // Optional: Limit results to US (up to 15 country codes)
+      regionCode: 'us', // Optional: Region code for formatting and biasing suggestions
+    };
+
+    if (sessionToken) {
+      requestBody.sessionToken = sessionToken; // Optional: For billing optimization
+    }
+
+    const response = await axios.post(url, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text',
+      },
+    });
+
+    return res.status(200).json(response.data);
+  } catch (error) {
+    console.error('Places Autocomplete Error:', error);
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status || 500;
+      const errorData = error.response?.data;
+      
+      // Log the full error for debugging
+      console.error('Request URL:', error.config?.url);
+      console.error('Request Body:', error.config?.data);
+      console.error('Response Status:', status);
+      console.error('Response Data:', JSON.stringify(errorData, null, 2));
+      
+      // Extract error message properly
+      let errorMessage = 'Unknown error';
+      if (errorData) {
+        if (typeof errorData === 'string') {
+          errorMessage = errorData;
+        } else if (errorData.error) {
+          if (typeof errorData.error === 'string') {
+            errorMessage = errorData.error;
+          } else if (errorData.error.message) {
+            errorMessage = errorData.error.message;
+          } else {
+            errorMessage = JSON.stringify(errorData.error);
+          }
+        } else {
+          errorMessage = JSON.stringify(errorData);
+        }
+      } else {
+        errorMessage = error.message || 'Unknown error';
+      }
+      
+      return res.status(status).json({ 
+        error: `Autocomplete failed: ${errorMessage}` 
+      });
+    }
+    return res.status(500).json({ 
+      error: `Autocomplete failed: ${error.message || 'Unknown error'}` 
+    });
+  }
+});
+
+// Google Places Details route
+app.post('/api/places-details', async (req, res) => {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  
+  if (!apiKey) {
+    console.error('GOOGLE_PLACES_API_KEY is missing. Checked env file at:', join(__dirname, '.env'));
+    return res.status(500).json({ 
+      error: 'GOOGLE_PLACES_API_KEY is not configured. Please set it in your .env file in the web directory.' 
+    });
+  }
+
+  // Verify authentication token is present
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized - Authentication required' });
+  }
+
+  try {
+    const { placeId, sessionToken } = req.body;
+
+    if (!placeId || typeof placeId !== 'string') {
+      return res.status(400).json({ 
+        error: 'Place ID is required' 
+      });
+    }
+
+    // Call Google Places API (New) - Get Place Details
+    // Documentation: https://developers.google.com/maps/documentation/places/web-service/place-details
+    const url = `https://places.googleapis.com/v1/places/${placeId}`;
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': 'id,displayName,formattedAddress,addressComponents,location',
+    };
+
+    // Add sessionToken to header if provided (for billing optimization)
+    if (sessionToken) {
+      headers['X-Goog-Session-Token'] = sessionToken;
+    }
+    
+    const response = await axios.get(url, {
+      headers,
+    });
+
+    return res.status(200).json(response.data);
+  } catch (error) {
+    console.error('Places Details Error:', error);
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status || 500;
+      const errorMessage = error.response?.data?.error || error.message || 'Unknown error';
+      return res.status(status).json({ 
+        error: `Get place details failed: ${errorMessage}` 
+      });
+    }
+    return res.status(500).json({ 
+      error: `Get place details failed: ${error.message || 'Unknown error'}` 
+    });
+  }
+});
+
+// Import and proxy the new API endpoints
+// Note: These are TypeScript files, so we'll need to handle them differently
+// For now, we'll add basic proxy routes that can be enhanced later
+
+// Proxy route for create-contact-from-call
+app.post('/api/create-contact-from-call', async (req, res) => {
+  try {
+    // Import the handler dynamically (requires tsx or ts-node for TypeScript)
+    // For now, we'll return a helpful error message
+    res.status(501).json({ 
+      error: 'This endpoint requires Vercel serverless functions. Use "vercel dev" or deploy to Vercel for full functionality.',
+      note: 'For local testing with ngrok, use "vercel dev" which will handle TypeScript serverless functions.'
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Proxy route for get-calendar-events
+app.post('/api/get-calendar-events', async (req, res) => {
+  try {
+    res.status(501).json({ 
+      error: 'This endpoint requires Vercel serverless functions. Use "vercel dev" or deploy to Vercel for full functionality.',
+      note: 'For local testing with ngrok, use "vercel dev" which will handle TypeScript serverless functions.'
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Local API server running on http://localhost:${PORT}`);
   console.log(`API endpoints:`);
   console.log(`  - http://localhost:${PORT}/api/chat-completion`);
   console.log(`  - http://localhost:${PORT}/api/send-invite-email`);
+  console.log(`  - http://localhost:${PORT}/api/places-autocomplete`);
+  console.log(`  - http://localhost:${PORT}/api/places-details`);
+  console.log(`  - http://localhost:${PORT}/api/create-contact-from-call (requires vercel dev)`);
+  console.log(`  - http://localhost:${PORT}/api/get-calendar-events (requires vercel dev)`);
+  console.log(`\nNote: New endpoints require "vercel dev" for TypeScript support.`);
 });

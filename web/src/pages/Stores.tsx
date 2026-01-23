@@ -4,7 +4,8 @@ import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useNavigate } from 'react-router-dom';
-import { Location } from '../types';
+import { Store } from '../types';
+import { AddressPicker } from '../components/AddressPicker';
 import {
   Box,
   Typography,
@@ -33,13 +34,13 @@ import {
   Save as SaveIcon,
 } from '@mui/icons-material';
 
-export function Locations() {
+export function Stores() {
   const { currentUser } = useAuth();
   const { isAdmin } = usePermissions();
   const navigate = useNavigate();
   
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [filteredLocations, setFilteredLocations] = useState<Location[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [filteredStores, setFilteredStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -56,7 +57,7 @@ export function Locations() {
   });
 
   // Edit modal
-  const [editingLocation, setEditingLocation] = useState<Location | null>(null);
+  const [editingStore, setEditingStore] = useState<Store | null>(null);
   const [editFormData, setEditFormData] = useState({
     name: '',
     address: '',
@@ -70,42 +71,42 @@ export function Locations() {
       navigate('/dashboard');
       return;
     }
-    loadLocations();
+    loadStores();
   }, [isAdmin, navigate]);
 
   useEffect(() => {
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
-      setFilteredLocations(
-        locations.filter(loc =>
-          loc.name.toLowerCase().includes(term) ||
-          (loc.address?.toLowerCase() || '').includes(term) ||
-          (loc.city?.toLowerCase() || '').includes(term) ||
-          (loc.state?.toLowerCase() || '').includes(term) ||
-          (loc.zipCode?.toLowerCase() || '').includes(term)
+      setFilteredStores(
+        stores.filter(store =>
+          store.name.toLowerCase().includes(term) ||
+          (store.address?.toLowerCase() || '').includes(term) ||
+          (store.city?.toLowerCase() || '').includes(term) ||
+          (store.state?.toLowerCase() || '').includes(term) ||
+          (store.zipCode?.toLowerCase() || '').includes(term)
         )
       );
     } else {
-      setFilteredLocations(locations);
+      setFilteredStores(stores);
     }
-  }, [searchTerm, locations]);
+  }, [searchTerm, stores]);
 
-  const loadLocations = async () => {
+  const loadStores = async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'locations'));
-      const locationList: Location[] = [];
+      const querySnapshot = await getDocs(collection(db, 'stores'));
+      const storeList: Store[] = [];
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        locationList.push({
+        storeList.push({
           id: doc.id,
           ...data,
           createdAt: data.createdAt?.toDate() || new Date()
-        } as Location);
+        } as Store);
       });
-      locationList.sort((a, b) => a.name.localeCompare(b.name));
-      setLocations(locationList);
+      storeList.sort((a, b) => a.name.localeCompare(b.name));
+      setStores(storeList);
     } catch (err: any) {
-      setError(err.message || 'Failed to load locations');
+      setError(err.message || 'Failed to load stores');
     } finally {
       setLoading(false);
     }
@@ -117,12 +118,12 @@ export function Locations() {
     setSuccess('');
 
     if (!formData.name.trim()) {
-      setError('Location name is required');
+      setError('Store name is required');
       return;
     }
 
     try {
-      await addDoc(collection(db, 'locations'), {
+      await addDoc(collection(db, 'stores'), {
         name: formData.name.trim(),
         address: formData.address.trim() || null,
         city: formData.city.trim() || null,
@@ -132,44 +133,44 @@ export function Locations() {
         createdBy: currentUser?.uid
       });
 
-      setSuccess('Location created successfully!');
+      setSuccess('Store created successfully!');
       setFormData({ name: '', address: '', city: '', state: '', zipCode: '' });
       setShowForm(false);
-      await loadLocations();
+      await loadStores();
     } catch (err: any) {
-      setError(err.message || 'Failed to create location');
+      setError(err.message || 'Failed to create store');
     }
   };
 
-  const openEditModal = (location: Location) => {
-    setEditingLocation(location);
+  const openEditModal = (store: Store) => {
+    setEditingStore(store);
     setEditFormData({
-      name: location.name || '',
-      address: location.address || '',
-      city: location.city || '',
-      state: location.state || '',
-      zipCode: location.zipCode || ''
+      name: store.name || '',
+      address: store.address || '',
+      city: store.city || '',
+      state: store.state || '',
+      zipCode: store.zipCode || ''
     });
   };
 
   const closeEditModal = () => {
-    setEditingLocation(null);
+    setEditingStore(null);
     setEditFormData({ name: '', address: '', city: '', state: '', zipCode: '' });
   };
 
   const handleEditSubmit = async () => {
-    if (!editingLocation) return;
+    if (!editingStore) return;
     
     setError('');
     setSuccess('');
 
     if (!editFormData.name.trim()) {
-      setError('Location name is required');
+      setError('Store name is required');
       return;
     }
 
     try {
-      await updateDoc(doc(db, 'locations', editingLocation.id), {
+      await updateDoc(doc(db, 'stores', editingStore.id), {
         name: editFormData.name.trim(),
         address: editFormData.address.trim() || null,
         city: editFormData.city.trim() || null,
@@ -177,11 +178,11 @@ export function Locations() {
         zipCode: editFormData.zipCode.trim() || null
       });
 
-      setSuccess('Location updated successfully!');
+      setSuccess('Store updated successfully!');
       closeEditModal();
-      await loadLocations();
+      await loadStores();
     } catch (err: any) {
-      setError(err.message || 'Failed to update location');
+      setError(err.message || 'Failed to update store');
     }
   };
 
@@ -196,13 +197,13 @@ export function Locations() {
   return (
     <Box>
       <Typography variant="h4" sx={{ mb: 3, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <LocationIcon /> Manage Locations
+        <LocationIcon /> Manage Stores
       </Typography>
 
       {/* Search and Actions */}
       <Paper sx={{ p: 2, mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
         <TextField
-          placeholder="Search locations..."
+          placeholder="Search stores..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           size="small"
@@ -220,7 +221,7 @@ export function Locations() {
           startIcon={showForm ? <CloseIcon /> : <AddIcon />}
           onClick={() => setShowForm(!showForm)}
         >
-          {showForm ? 'Cancel' : 'New Location'}
+          {showForm ? 'Cancel' : 'New Store'}
         </Button>
       </Paper>
 
@@ -231,13 +232,13 @@ export function Locations() {
       <Collapse in={showForm}>
         <Paper sx={{ p: 3, mb: 3 }}>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-            Create New Location
+            Create New Store
           </Typography>
           <Box component="form" onSubmit={handleSubmit}>
             <Grid container spacing={2}>
               <Grid size={{ xs: 12 }}>
                 <TextField
-                  label="Location Name"
+                  label="Store Name"
                   name="name"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
@@ -247,12 +248,23 @@ export function Locations() {
                 />
               </Grid>
               <Grid size={{ xs: 12 }}>
-                <TextField
+                <AddressPicker
+                  value={{
+                    address: formData.address,
+                    city: formData.city,
+                    state: formData.state,
+                    zipCode: formData.zipCode,
+                  }}
+                  onChange={(address) => {
+                    setFormData({
+                      ...formData,
+                      address: address.address,
+                      city: address.city,
+                      state: address.state,
+                      zipCode: address.zipCode,
+                    });
+                  }}
                   label="Address"
-                  name="address"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  placeholder="Street address"
                   fullWidth
                 />
               </Grid>
@@ -289,7 +301,7 @@ export function Locations() {
               </Grid>
               <Grid size={{ xs: 12 }}>
                 <Button type="submit" variant="contained" startIcon={<AddIcon />}>
-                  Create Location
+                  Create Store
                 </Button>
               </Grid>
             </Grid>
@@ -297,41 +309,41 @@ export function Locations() {
         </Paper>
       </Collapse>
 
-      {/* Locations Grid */}
-      {filteredLocations.length === 0 ? (
+      {/* Stores Grid */}
+      {filteredStores.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <Typography color="text.secondary">
-            {searchTerm ? 'No locations match your search' : 'No locations yet. Create your first location!'}
+            {searchTerm ? 'No stores match your search' : 'No stores yet. Create your first store!'}
           </Typography>
         </Paper>
       ) : (
         <Grid container spacing={2}>
-          {filteredLocations.map((location) => (
-            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={location.id}>
+          {filteredStores.map((store) => (
+            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={store.id}>
               <Card>
                 <CardContent>
                   <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
-                    {location.name}
+                    {store.name}
                   </Typography>
-                  {(location.address || location.city) && (
+                  {(store.address || store.city) && (
                     <Box sx={{ color: 'text.secondary', mb: 2 }}>
-                      {location.address && (
-                        <Typography variant="body2">{location.address}</Typography>
+                      {store.address && (
+                        <Typography variant="body2">{store.address}</Typography>
                       )}
                       <Typography variant="body2">
-                        {[location.city, location.state, location.zipCode].filter(Boolean).join(', ')}
+                        {[store.city, store.state, store.zipCode].filter(Boolean).join(', ')}
                       </Typography>
                     </Box>
                   )}
                   <Typography variant="caption" color="text.secondary">
-                    Created: {location.createdAt.toLocaleDateString()}
+                    Created: {store.createdAt.toLocaleDateString()}
                   </Typography>
                 </CardContent>
                 <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
                   <Button
                     size="small"
                     startIcon={<EditIcon />}
-                    onClick={() => openEditModal(location)}
+                    onClick={() => openEditModal(store)}
                   >
                     Edit
                   </Button>
@@ -342,26 +354,38 @@ export function Locations() {
         </Grid>
       )}
 
-      {/* Edit Location Dialog */}
-      <Dialog open={!!editingLocation} onClose={closeEditModal} maxWidth="sm" fullWidth>
+      {/* Edit Store Dialog */}
+      <Dialog open={!!editingStore} onClose={closeEditModal} maxWidth="sm" fullWidth>
         <DialogTitle>
-          Edit Location
+          Edit Store
         </DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <TextField
-              label="Location Name"
+              label="Store Name"
               value={editFormData.name}
               onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
               placeholder="e.g., Downtown Store"
               required
               fullWidth
             />
-            <TextField
+            <AddressPicker
+              value={{
+                address: editFormData.address,
+                city: editFormData.city,
+                state: editFormData.state,
+                zipCode: editFormData.zipCode,
+              }}
+              onChange={(address) => {
+                setEditFormData({
+                  ...editFormData,
+                  address: address.address,
+                  city: address.city,
+                  state: address.state,
+                  zipCode: address.zipCode,
+                });
+              }}
               label="Address"
-              value={editFormData.address}
-              onChange={(e) => setEditFormData({ ...editFormData, address: e.target.value })}
-              placeholder="Street address"
               fullWidth
             />
             <Box sx={{ display: 'flex', gap: 2 }}>

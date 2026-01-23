@@ -1,64 +1,110 @@
 import { Contact, FollowUpSuggestion } from '../types';
+import { generateFollowUpSuggestion } from './openai';
 
-export function generateFollowUpSuggestions(contact: Contact): FollowUpSuggestion[] {
+/**
+ * Generate AI-powered follow-up suggestions for a contact
+ * Falls back to simple rules if AI is unavailable
+ */
+export async function generateFollowUpSuggestions(contact: Contact): Promise<FollowUpSuggestion[]> {
   const suggestions: FollowUpSuggestion[] = [];
   const now = new Date();
   
-  // If contact is new, suggest initial follow-up in 2-3 days
-  if (contact.status === 'new' || !contact.lastReachoutDate) {
-    const suggestedDate = new Date(now);
-    suggestedDate.setDate(suggestedDate.getDate() + 2);
+  try {
+    // Use AI to generate intelligent follow-up suggestion
+    const aiSuggestion = await generateFollowUpSuggestion({
+      firstName: contact.firstName || undefined,
+      lastName: contact.lastName || undefined,
+      reachouts: contact.reachouts.map(r => ({
+        date: r.date instanceof Date ? r.date : new Date(r.date),
+        note: r.note || '',
+        type: r.type || 'other',
+        donation: r.donation
+      })),
+      personalDetails: contact.personalDetails || undefined,
+      status: contact.status || undefined,
+      email: contact.email || undefined,
+      phone: contact.phone || undefined
+    });
+
+    const suggestedDate = new Date(aiSuggestion.suggestedDate);
     
     suggestions.push({
       suggestedDate,
-      message: `Follow up with ${contact.firstName || 'contact'} to discuss their needs and how we can help.`,
-      type: 'email',
-      priority: 'high'
+      message: aiSuggestion.message,
+      type: aiSuggestion.suggestedMethod,
+      priority: aiSuggestion.priority,
+      contactId: contact.id,
+      contactName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact'
     });
-  } else {
-    // Calculate days since last follow-up
-    const daysSinceLastFollowUp = Math.floor(
-      (now.getTime() - contact.lastReachoutDate.getTime()) / (1000 * 60 * 60 * 24)
-    );
+  } catch (error) {
+    console.error('AI follow-up generation failed, using fallback:', error);
     
-    // If it's been more than 7 days, suggest urgent follow-up
-    if (daysSinceLastFollowUp > 7) {
+    // Fallback to rule-based suggestions
+    if (contact.status === 'new' || !contact.lastReachoutDate) {
+      const suggestedDate = new Date(now);
+      suggestedDate.setDate(suggestedDate.getDate() + 2);
+      
       suggestions.push({
-        suggestedDate: now,
-        message: `It's been ${daysSinceLastFollowUp} days since last contact. Reconnect with ${contact.firstName || 'contact'} to maintain engagement.`,
-        type: 'call',
-        priority: 'high'
+        suggestedDate,
+        message: `Follow up with ${contact.firstName || 'contact'} to discuss their needs and how we can help.`,
+        type: contact.email ? 'email' : contact.phone ? 'call' : 'email',
+        priority: 'high',
+        contactId: contact.id,
+        contactName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact'
       });
-    } else if (daysSinceLastFollowUp > 3) {
-      // Medium priority follow-up
+    } else {
+      const daysSinceLastFollowUp = Math.floor(
+        (now.getTime() - contact.lastReachoutDate.getTime()) / (1000 * 60 * 60 * 24)
+      );
+      
+      if (daysSinceLastFollowUp > 7) {
+        suggestions.push({
+          suggestedDate: now,
+          message: `It's been ${daysSinceLastFollowUp} days since last contact. Reconnect with ${contact.firstName || 'contact'} to maintain engagement.`,
+          type: contact.phone ? 'call' : 'email',
+          priority: 'high',
+          contactId: contact.id,
+          contactName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact'
+        });
+      } else if (daysSinceLastFollowUp > 3) {
+        const suggestedDate = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+        suggestions.push({
+          suggestedDate,
+          message: `Send a follow-up ${contact.email ? 'email' : 'call'} to ${contact.firstName || 'contact'} with additional information or resources.`,
+          type: contact.email ? 'email' : 'call',
+          priority: 'medium',
+          contactId: contact.id,
+          contactName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact'
+        });
+      }
+    }
+    
+    // If contact has recent reachouts indicating interest, suggest meeting
+    const latestNote = contact.reachouts[contact.reachouts.length - 1]?.note || '';
+    if (latestNote && /interested|meeting|demo|trial/i.test(latestNote)) {
+      const suggestedDate = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
       suggestions.push({
-        suggestedDate: new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000),
-        message: `Send a follow-up email to ${contact.firstName || 'contact'} with additional information or resources.`,
-        type: 'email',
-        priority: 'medium'
+        suggestedDate,
+        message: `Schedule a meeting or demo with ${contact.firstName || 'contact'} based on their interest.`,
+        type: 'meeting',
+        priority: 'high',
+        contactId: contact.id,
+        contactName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact'
       });
     }
-  }
-  
-  // If contact has recent reachouts indicating interest, suggest meeting
-  const latestNote = contact.reachouts[contact.reachouts.length - 1]?.note || '';
-  if (latestNote && /interested|meeting|demo|trial/i.test(latestNote)) {
-    suggestions.push({
-      suggestedDate: new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000),
-      message: `Schedule a meeting or demo with ${contact.firstName || 'contact'} based on their interest.`,
-      type: 'meeting',
-      priority: 'high'
-    });
-  }
-  
-  // Default suggestion if no specific suggestions
-  if (suggestions.length === 0) {
-    suggestions.push({
-      suggestedDate: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000),
-      message: `Check in with ${contact.firstName || 'contact'} to see how things are going.`,
-      type: 'email',
-      priority: 'medium'
-    });
+    
+    // Default suggestion if no specific suggestions
+    if (suggestions.length === 0) {
+      const suggestedDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+      suggestions.push({
+        suggestedDate,
+        message: `Check in with ${contact.firstName || 'contact'} to see how things are going.`,
+        type: contact.email ? 'email' : 'call',
+        priority: 'medium',
+        contactId: contact.id,
+        contactName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact'
+      });
+    }
   }
   
   return suggestions.sort((a, b) => {

@@ -48,12 +48,12 @@ export function isInCurrentQuarter(date: Date, referenceDate: Date = new Date())
 }
 
 /**
- * Extract all reachouts with donations from contacts, optionally filtered by location and quarter
+ * Extract all reachouts with donations from contacts, optionally filtered by store and quarter
  */
 export function getReachoutsWithDonations(
   contacts: Contact[],
   options?: {
-    locationId?: string;
+    storeId?: string;
     quarterDate?: Date;
   }
 ): Array<{ contact: Contact; reachout: Reachout; mouths: number }> {
@@ -67,8 +67,8 @@ export function getReachoutsWithDonations(
       // Skip if no donation
       if (!reachout.donation) continue;
 
-      // Filter by location if specified
-      if (options?.locationId && reachout.locationId !== options.locationId) continue;
+      // Filter by store if specified
+      if (options?.storeId && reachout.storeId !== options.storeId) continue;
 
       // Filter by quarter if specified
       if (start && end) {
@@ -95,14 +95,14 @@ export function getReachoutsWithDonations(
 }
 
 /**
- * Calculate total mouths for a location in the current quarter
+ * Calculate total mouths for a store in the current quarter
  */
 export function getQuarterProgress(
   contacts: Contact[],
-  locationId: string,
+  storeId: string,
   quarterDate: Date = new Date()
 ): { totalMouths: number; goal: number; percentage: number } {
-  const donations = getReachoutsWithDonations(contacts, { locationId, quarterDate });
+  const donations = getReachoutsWithDonations(contacts, { storeId, quarterDate });
   const totalMouths = donations.reduce((sum, d) => sum + d.mouths, 0);
   
   return {
