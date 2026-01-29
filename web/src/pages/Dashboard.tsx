@@ -7,8 +7,7 @@ import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
 import { ContactForm } from '../components/ContactForm';
 import { EditContactModal } from '../components/EditContactModal';
-import { generateFollowUpSuggestions } from '../utils/followUpSuggestions';
-import { extractContactInfo } from '../utils/openai';
+import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { Contact, FollowUpSuggestion, Reachout, DonationData, MOUTH_VALUES } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
@@ -37,6 +36,7 @@ import {
   Switch,
   Checkbox,
   Divider,
+  Snackbar,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -46,9 +46,10 @@ import {
   Phone as PhoneIcon,
   Business as BusinessIcon,
   CalendarMonth as CalendarIcon,
-  Edit as EditIcon,
   Person as PersonIcon,
   AddComment as AddCommentIcon,
+  ContentCopy as ContentCopyIcon,
+  Refresh as RefreshIcon,
   Mic as MicIcon,
   MicOff as MicOffIcon,
   AutoAwesome as AIIcon,
@@ -68,9 +69,12 @@ export function Dashboard() {
   const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [followUpSuggestions, setFollowUpSuggestions] = useState<FollowUpSuggestion[]>([]);
+  const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false);
+  const [followUpDialogContact, setFollowUpDialogContact] = useState<Contact | null>(null);
+  const [followUpLoading, setFollowUpLoading] = useState(false);
+  const [copyToastOpen, setCopyToastOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
   // Quick reachout dialog
@@ -201,7 +205,10 @@ export function Dashboard() {
           files,
           createdAt: data.createdAt?.toDate() || new Date(),
           lastReachoutDate: data.lastReachoutDate?.toDate(),
-          suggestedFollowUpDate: data.suggestedFollowUpDate?.toDate(),
+          suggestedFollowUpDate: data.suggestedFollowUpDate?.toDate() || null,
+          suggestedFollowUpMethod: data.suggestedFollowUpMethod || null,
+          suggestedFollowUpNote: data.suggestedFollowUpNote || null,
+          suggestedFollowUpPriority: data.suggestedFollowUpPriority || null,
         } as Contact);
       });
       
@@ -221,10 +228,111 @@ export function Dashboard() {
     }
   };
 
-  const handleContactClick = async (contact: Contact) => {
-    setSelectedContact(contact);
-    const suggestions = await generateFollowUpSuggestions(contact);
+  const handleContactClick = (contact: Contact) => {
+    setEditingContact(contact);
+  };
+
+  const handleOpenFollowUpDialog = (contact: Contact) => {
+    setFollowUpDialogContact(contact);
+    setFollowUpDialogOpen(true);
+    
+    // Use stored follow-up suggestions from the contact (generated when contact was created/reachout was added)
+    const suggestions: FollowUpSuggestion[] = [];
+    
+    if (contact.suggestedFollowUpDate && contact.suggestedFollowUpNote) {
+      suggestions.push({
+        suggestedDate: contact.suggestedFollowUpDate,
+        message: contact.suggestedFollowUpNote,
+        type: contact.suggestedFollowUpMethod || 'email',
+        priority: contact.suggestedFollowUpPriority || 'medium',
+        contactId: contact.id,
+        contactName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact'
+      });
+    }
+    
     setFollowUpSuggestions(suggestions);
+  };
+
+  const handleCloseFollowUpDialog = () => {
+    setFollowUpDialogOpen(false);
+    setFollowUpDialogContact(null);
+    setFollowUpSuggestions([]);
+    setFollowUpLoading(false);
+  };
+
+  const handleRegenerateFollowUp = async () => {
+    if (!followUpDialogContact) return;
+
+    setFollowUpLoading(true);
+    try {
+      const aiSuggestion = await generateFollowUpSuggestion({
+        firstName: followUpDialogContact.firstName || undefined,
+        lastName: followUpDialogContact.lastName || undefined,
+        reachouts: followUpDialogContact.reachouts.map(r => ({
+          date: r.date instanceof Date ? r.date : new Date(r.date),
+          note: r.note || '',
+          type: r.type || 'other',
+          donation: r.donation
+        })),
+        personalDetails: followUpDialogContact.personalDetails || undefined,
+        status: followUpDialogContact.status || undefined,
+        email: followUpDialogContact.email || undefined,
+        phone: followUpDialogContact.phone || undefined,
+      });
+
+      // Normalize date to midnight local time to avoid timezone issues
+      const suggestedDate = new Date(aiSuggestion.suggestedDate);
+      const normalizedDate = new Date(suggestedDate);
+      normalizedDate.setHours(0, 0, 0, 0);
+
+      // Update contact in Firestore
+      await updateDoc(doc(db, 'contacts', followUpDialogContact.id), {
+        suggestedFollowUpDate: normalizedDate,
+        suggestedFollowUpMethod: aiSuggestion.suggestedMethod || null,
+        suggestedFollowUpNote: aiSuggestion.message || null,
+        suggestedFollowUpPriority: aiSuggestion.priority || null,
+      });
+
+      // Update local contact state
+      const updatedContact = {
+        ...followUpDialogContact,
+        suggestedFollowUpDate: normalizedDate,
+        suggestedFollowUpMethod: aiSuggestion.suggestedMethod || null,
+        suggestedFollowUpNote: aiSuggestion.message || null,
+        suggestedFollowUpPriority: aiSuggestion.priority || null,
+      };
+      setFollowUpDialogContact(updatedContact);
+
+      // Update suggestions in dialog
+      const suggestions: FollowUpSuggestion[] = [{
+        suggestedDate: normalizedDate,
+        message: aiSuggestion.message,
+        type: aiSuggestion.suggestedMethod || 'email',
+        priority: aiSuggestion.priority || 'medium',
+        contactId: updatedContact.id,
+        contactName: `${updatedContact.firstName || ''} ${updatedContact.lastName || ''}`.trim() || updatedContact.email || 'Contact'
+      }];
+      setFollowUpSuggestions(suggestions);
+
+      // Update the contact in the main contacts list
+      setContacts(prev => prev.map(c => 
+        c.id === updatedContact.id ? updatedContact : c
+      ));
+    } catch (error) {
+      console.error('Error regenerating follow-up suggestion:', error);
+    } finally {
+      setFollowUpLoading(false);
+    }
+  };
+
+  const handleCopySuggestion = async (suggestion: FollowUpSuggestion) => {
+    const textToCopy = suggestion.message;
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      setCopyToastOpen(true);
+    } catch (err) {
+      console.error('Failed to copy text:', err);
+    }
   };
 
   const getContactName = (contact: Contact) => {
@@ -277,6 +385,38 @@ export function Dashboard() {
         ...prev,
         note: extracted.reachoutNote || quickReachoutData.rawNotes
       }));
+
+      // Auto-fill donation data if detected
+      // Check if AI detected donation OR if notes contain donation keywords
+      const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'cake'];
+      const notesLower = quickReachoutData.rawNotes.toLowerCase();
+      const hasDonationKeywords = donationKeywords.some(keyword => notesLower.includes(keyword));
+      
+      if (extracted.donation || hasDonationKeywords) {
+        setIncludeDonation(true);
+        // If AI extracted donation data, use it directly; otherwise use fallback logic
+        if (extracted.donation) {
+          setDonationData({
+            freeBundletCard: extracted.donation.freeBundletCard ?? 0,
+            dozenBundtinis: extracted.donation.dozenBundtinis ?? 0,
+            cake8inch: extracted.donation.cake8inch ?? 0,
+            cake10inch: extracted.donation.cake10inch ?? 0,
+            sampleTray: extracted.donation.sampleTray ?? 0,
+            bundtletTower: extracted.donation.bundtletTower ?? 0,
+            cakesDonatedNotes: extracted.donation.cakesDonatedNotes || '',
+            orderedFromUs: extracted.donation.orderedFromUs ?? false,
+            followedUp: extracted.donation.followedUp ?? false,
+          });
+        } else if (hasDonationKeywords) {
+          // Fallback: enable donation toggle but keep existing data
+          setDonationData(prev => ({
+            ...prev,
+            cakesDonatedNotes: prev.cakesDonatedNotes || quickReachoutData.rawNotes,
+            orderedFromUs: notesLower.includes('order') || notesLower.includes('ordered') || notesLower.includes('ordering') ? true : prev.orderedFromUs,
+            followedUp: notesLower.includes('followed up') || notesLower.includes('follow up') ? true : prev.followedUp,
+          }));
+        }
+      }
     } catch (err) {
       setQuickReachoutData(prev => ({ ...prev, note: quickReachoutData.rawNotes }));
     } finally {
@@ -465,7 +605,8 @@ export function Dashboard() {
             <TextField
               label="Summary Note"
               multiline
-              rows={2}
+              minRows={6}
+              maxRows={12}
               value={quickReachoutData.note}
               onChange={(e) => setQuickReachoutData(prev => ({ ...prev, note: e.target.value }))}
               placeholder="AI will summarize, or type manually"
@@ -640,7 +781,7 @@ export function Dashboard() {
       {/* Content */}
       <Grid container spacing={3}>
         {/* Contacts List */}
-        <Grid size={{ xs: 12, lg: selectedContact ? 8 : 12 }}>
+        <Grid size={{ xs: 12 }}>
           <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
             Contacts ({filteredContacts.length})
           </Typography>
@@ -658,10 +799,8 @@ export function Dashboard() {
                   <Card 
                     sx={{ 
                       cursor: 'pointer',
-                      border: selectedContact?.id === contact.id ? 2 : 0,
-                      borderColor: 'primary.main',
                       transition: 'all 0.2s',
-                      '&:hover': { transform: 'translateY(-2px)' },
+                      '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 },
                     }}
                     onClick={() => handleContactClick(contact)}
                   >
@@ -739,13 +878,16 @@ export function Dashboard() {
                       </Button>
                       <Button
                         size="small"
-                        startIcon={<EditIcon />}
+                        variant="outlined"
+                        color="secondary"
+                        startIcon={followUpLoading && followUpDialogContact?.id === contact.id ? <CircularProgress size={16} /> : <CalendarIcon />}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setEditingContact(contact);
+                          handleOpenFollowUpDialog(contact);
                         }}
+                        disabled={followUpLoading}
                       >
-                        Edit
+                        Follow-up
                       </Button>
                     </CardActions>
                   </Card>
@@ -755,33 +897,65 @@ export function Dashboard() {
           )}
         </Grid>
 
-        {/* Follow-up Suggestions Sidebar */}
-        {selectedContact && (
-          <Grid size={{ xs: 12, lg: 4 }}>
-            <Paper sx={{ p: 3, position: 'sticky', top: 80 }}>
-              <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
-                Follow-up Suggestions
-              </Typography>
-              
-              <Box sx={{ mb: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                  {getContactName(selectedContact)}
-                </Typography>
+        {/* Follow-up Suggestions Dialog */}
+        <Dialog open={followUpDialogOpen} onClose={handleCloseFollowUpDialog} maxWidth="sm" fullWidth>
+          <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Box>
+              <Typography variant="h6">Follow-up Suggestions</Typography>
+              {followUpDialogContact && (
                 <Typography variant="body2" color="text.secondary">
-                  {businesses.get(selectedContact.businessId)}
+                  {getContactName(followUpDialogContact)}
+                </Typography>
+              )}
+            </Box>
+            <IconButton onClick={handleCloseFollowUpDialog} size="small">
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent>
+            {followUpDialogContact && (
+              <Box sx={{ mb: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                  {businesses.get(followUpDialogContact.businessId) || followUpDialogContact.businessId}
+                </Typography>
+                {followUpDialogContact.email && (
+                  <Typography variant="body2" color="text.secondary">
+                    {followUpDialogContact.email}
+                  </Typography>
+                )}
+              </Box>
+            )}
+
+            {followUpLoading ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 4 }}>
+                <CircularProgress sx={{ mb: 2 }} />
+                <Typography color="text.secondary">
+                  Generating follow-up suggestions...
                 </Typography>
               </Box>
-
-              {followUpSuggestions.length === 0 ? (
-                <Typography color="text.secondary">
-                  No follow-up suggestions at this time.
-                </Typography>
-              ) : (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {followUpSuggestions.map((suggestion, index) => (
-                    <Card key={index} variant="outlined">
-                      <CardContent sx={{ pb: '12px !important' }}>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+            ) : followUpSuggestions.length === 0 ? (
+              <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+                No follow-up suggestions at this time.
+              </Typography>
+            ) : (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {followUpSuggestions.map((suggestion, index) => (
+                  <Card 
+                    key={index} 
+                    variant="outlined"
+                    sx={{ 
+                      cursor: 'pointer',
+                      '&:hover': {
+                        bgcolor: 'action.hover',
+                        boxShadow: 2,
+                      },
+                      transition: 'all 0.2s ease-in-out',
+                    }}
+                    onClick={() => handleCopySuggestion(suggestion)}
+                  >
+                    <CardContent sx={{ pb: '12px !important' }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                           <Chip label={suggestion.type} size="small" />
                           <Chip 
                             label={suggestion.priority} 
@@ -789,20 +963,40 @@ export function Dashboard() {
                             color={suggestion.priority === 'high' ? 'error' : suggestion.priority === 'medium' ? 'warning' : 'default'}
                           />
                         </Box>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                          📅 {suggestion.suggestedDate.toLocaleDateString()}
-                        </Typography>
-                        <Typography variant="body2">
-                          {suggestion.message}
-                        </Typography>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </Box>
-              )}
-            </Paper>
-          </Grid>
-        )}
+                        <ContentCopyIcon fontSize="small" color="action" sx={{ mt: 0.5 }} />
+                      </Box>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        📅 {suggestion.suggestedDate.toLocaleDateString()}
+                      </Typography>
+                      <Typography variant="body2">
+                        {suggestion.message}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                ))}
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button 
+              onClick={handleRegenerateFollowUp} 
+              disabled={followUpLoading || !followUpDialogContact}
+              startIcon={followUpLoading ? <CircularProgress size={16} /> : <RefreshIcon />}
+            >
+              Regenerate Followup
+            </Button>
+            <Button onClick={handleCloseFollowUpDialog}>Close</Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* Copy Toast Notification */}
+        <Snackbar
+          open={copyToastOpen}
+          autoHideDuration={3000}
+          onClose={() => setCopyToastOpen(false)}
+          message="Reachout copied to clipboard"
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        />
       </Grid>
     </Box>
   );

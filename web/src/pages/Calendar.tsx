@@ -113,12 +113,13 @@ export function Calendar() {
         const data = docSnap.data();
         if (data.storeId === permissions.currentStoreId) {
           let eventDate = data.date?.toDate() || new Date();
-          // Normalize to local timezone to avoid date shifts
-          // If it's a Firestore timestamp, it might be in UTC, so we normalize it
+          // Normalize to local midnight to avoid date shifts and ensure accurate day-based filtering
+          // Extract the date components in local timezone, then create a new date at midnight
           const year = eventDate.getFullYear();
           const month = eventDate.getMonth();
           const day = eventDate.getDate();
-          eventDate = new Date(year, month, day, eventDate.getHours(), eventDate.getMinutes());
+          // Always normalize to midnight local time for accurate date comparison
+          eventDate = new Date(year, month, day, 0, 0, 0, 0);
           
           eventsData.push({
             id: docSnap.id,
@@ -172,9 +173,17 @@ export function Calendar() {
             
             if (!existingEvent) {
               const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact';
+              // Normalize reachout date to midnight local time for accurate date comparison
+              const reachoutDate = reachout.date instanceof Date ? reachout.date : new Date(reachout.date);
+              const normalizedReachoutDate = new Date(
+                reachoutDate.getFullYear(),
+                reachoutDate.getMonth(),
+                reachoutDate.getDate(),
+                0, 0, 0, 0
+              );
               eventsData.push({
                 id: reachoutId,
-                date: reachout.date instanceof Date ? reachout.date : new Date(reachout.date),
+                date: normalizedReachoutDate,
                 title: `Reachout: ${contactName}`,
                 type: (reachout.type || 'other') as CalendarEventType['type'],
                 contactId: contact.id,
@@ -239,11 +248,12 @@ export function Calendar() {
     if (!date) return [];
     
     // Normalize dates to local midnight for accurate comparison
-    const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
     
     return events.filter(event => {
       const eventDate = new Date(event.date);
-      const normalizedEventDate = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+      // Event dates should already be normalized to midnight when loaded, but normalize again for safety
+      const normalizedEventDate = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate(), 0, 0, 0, 0);
       return normalizedEventDate.getTime() === targetDate.getTime();
     });
   };

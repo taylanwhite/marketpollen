@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { collection, getDocs, doc, updateDoc, query, where } from 'firebase/firestore';
+import * as XLSX from 'xlsx';
 import { db } from '../firebase/config';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
@@ -50,6 +51,7 @@ import {
   Cancel as CancelIcon,
   Edit as EditIcon,
   Close as CloseIcon,
+  FileDownload as FileDownloadIcon,
 } from '@mui/icons-material';
 
 interface DonationRow {
@@ -258,6 +260,73 @@ export function Donations() {
     setEditError('');
   };
 
+  const handleExportToExcel = () => {
+    // Prepare data for export
+    const exportData = filteredDonations.map((row) => {
+      const donation = row.reachout.donation;
+      const contactName = `${row.contact.firstName || ''} ${row.contact.lastName || ''}`.trim() || '-';
+      
+      return {
+        'Date': formatDate(row.reachout.date),
+        'Business Name': row.businessName,
+        'Contact First Name': row.contact.firstName || '',
+        'Contact Last Name': row.contact.lastName || '',
+        'Contact Name': contactName,
+        'Phone': row.contact.phone || '',
+        'Email': row.contact.email || '',
+        'Mouths': row.mouths,
+        'FREE Bundtlet Card': donation?.freeBundletCard || 0,
+        'Dozen Bundtinis': donation?.dozenBundtinis || 0,
+        '8" Cake': donation?.cake8inch || 0,
+        '10" Cake': donation?.cake10inch || 0,
+        'Sample Tray': donation?.sampleTray || 0,
+        'Bundtlet/Tower': donation?.bundtletTower || 0,
+        'Cakes Donated Notes': donation?.cakesDonatedNotes || '',
+        'Followed Up': donation?.followedUp ? 'Yes' : 'No',
+        'Ordered From Us': donation?.orderedFromUs ? 'Yes' : 'No',
+        'Reachout Type': row.reachout.type || '',
+        'Reachout Note': row.reachout.note || '',
+      };
+    });
+
+    // Create workbook and worksheet
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Donations');
+
+    // Set column widths for better readability
+    const colWidths = [
+      { wch: 12 }, // Date
+      { wch: 25 }, // Business Name
+      { wch: 15 }, // Contact First Name
+      { wch: 15 }, // Contact Last Name
+      { wch: 20 }, // Contact Name
+      { wch: 15 }, // Phone
+      { wch: 25 }, // Email
+      { wch: 8 },  // Mouths
+      { wch: 12 }, // FREE Bundtlet Card
+      { wch: 12 }, // Dozen Bundtinis
+      { wch: 10 }, // 8" Cake
+      { wch: 10 }, // 10" Cake
+      { wch: 12 }, // Sample Tray
+      { wch: 12 }, // Bundtlet/Tower
+      { wch: 30 }, // Cakes Donated Notes
+      { wch: 12 }, // Followed Up
+      { wch: 15 }, // Ordered From Us
+      { wch: 12 }, // Reachout Type
+      { wch: 40 }, // Reachout Note
+    ];
+    ws['!cols'] = colWidths;
+
+    // Generate filename with current date and quarter
+    const quarterLabel = getCurrentQuarterLabel();
+    const dateStr = new Date().toISOString().split('T')[0];
+    const filename = `Donations_${quarterLabel}_${dateStr}.xlsx`;
+
+    // Write file
+    XLSX.writeFile(wb, filename);
+  };
+
   const handleEditSave = async () => {
     if (!editingDonation || !editDonationData) return;
 
@@ -414,6 +483,16 @@ export function Donations() {
             color="primary"
             variant="outlined"
           />
+
+          <Button
+            variant="outlined"
+            color="primary"
+            startIcon={<FileDownloadIcon />}
+            onClick={handleExportToExcel}
+            disabled={filteredDonations.length === 0}
+          >
+            Export to Excel
+          </Button>
         </Box>
       </Paper>
 

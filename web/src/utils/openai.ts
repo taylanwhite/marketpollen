@@ -98,18 +98,28 @@ Extract the following information and return it as JSON:
 - state: state abbreviation (2 letters, e.g., CA, NY)
 - zipCode: 5-digit zip code
 - personalDetails: any personal information mentioned (hobbies, family, interests, preferences, etc.) in a friendly sentence
-- reachoutNote: a summary of what was discussed or why this contact is important
+- reachoutNote: a clear, detailed note of what was discussed. CRITICAL: Preserve ALL important information including:
+  * Orders placed (quantities, products, dates, deadlines, delivery dates)
+  * Products given away (what was donated, quantities)
+  * Key business information (meetings scheduled, proposals, quotes, pricing discussed)
+  * Action items (what needs to happen next, who is responsible)
+  * Important dates and deadlines
+  * Customer sentiment and feedback
+  * Any specific numbers, quantities, or amounts mentioned
+  DO NOT summarize or condense - include all relevant details. If the original notes are already clear and complete, use them as-is or only make minor improvements for clarity.
 - suggestedFollowUpDays: suggest number of days until next follow-up (typically 2-7 days)
-- donation: (optional object) If we gave away any products, extract:
-  * freeBundletCard: number of free bundtlet cards given
-  * dozenBundtinis: number of dozen bundtinis given (each dozen = 12)
-  * cake8inch: number of 8" cakes given
-  * cake10inch: number of 10" cakes given
-  * sampleTray: number of sample trays given
-  * bundtletTower: number of bundtlets in a tower given
-  * cakesDonatedNotes: any notes about what was donated
-  * orderedFromUs: boolean - did they order from us? (default false)
-  * followedUp: boolean - did we follow up? (default false)
+- donation: (optional object) CRITICAL: Extract donation information if ANY of these phrases appear: "gave", "gave away", "gave them", "gave her", "gave him", "for free", "free", "donated", "sample", "treat", "gift", "complimentary", or any mention of products being provided at no cost. Extract:
+  * freeBundletCard: number of free bundtlet cards given (look for "bundtlet card", "card")
+  * dozenBundtinis: number of dozen bundtinis given (look for "dozen bundtinis", "12 bundtinis", "bundtinis" - each dozen = 12)
+  * cake8inch: number of 8" cakes given (look for "8 inch", "8\"", "8 inch cake")
+  * cake10inch: number of 10" cakes given (look for "10 inch", "10\"", "10 inch cake")
+  * sampleTray: number of sample trays given (look for "sample tray", "tray")
+  * bundtletTower: number of bundtlets in a tower given (look for "tower", "bundtlet tower")
+  * cakesDonatedNotes: any notes about what was donated, including quantities and types if not captured above (e.g., "gave her two more bundt cakes" should be noted here if exact type unclear)
+  * orderedFromUs: boolean - did they place an order with us? Look for "ordering", "ordered", "order", "purchased", "buying" (default false)
+  * followedUp: boolean - did we follow up? Look for "followed up", "follow up", "called back", "reached out" (default false)
+  
+  IMPORTANT: If someone mentions "gave her two bundt cakes" or similar, extract this even if the exact product type isn't specified. Use cakesDonatedNotes to capture the details, and if it's unclear whether it's 8" or 10", you can estimate or note it in cakesDonatedNotes.
 
 If information is not mentioned, omit that field. Return valid JSON only.`;
 

@@ -122,19 +122,35 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
       }));
 
       // Auto-fill donation data if detected
-      if (extracted.donation) {
+      // Check if AI detected donation OR if notes contain donation keywords
+      const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'cake'];
+      const notesLower = rawNotes.toLowerCase();
+      const hasDonationKeywords = donationKeywords.some(keyword => notesLower.includes(keyword));
+      
+      if (extracted.donation || hasDonationKeywords) {
         setIncludeDonation(true);
-        setDonationData(prev => ({
-          freeBundletCard: extracted.donation?.freeBundletCard || prev.freeBundletCard || 0,
-          dozenBundtinis: extracted.donation?.dozenBundtinis || prev.dozenBundtinis || 0,
-          cake8inch: extracted.donation?.cake8inch || prev.cake8inch || 0,
-          cake10inch: extracted.donation?.cake10inch || prev.cake10inch || 0,
-          sampleTray: extracted.donation?.sampleTray || prev.sampleTray || 0,
-          bundtletTower: extracted.donation?.bundtletTower || prev.bundtletTower || 0,
-          cakesDonatedNotes: extracted.donation?.cakesDonatedNotes || prev.cakesDonatedNotes || '',
-          orderedFromUs: extracted.donation?.orderedFromUs !== undefined ? extracted.donation.orderedFromUs : prev.orderedFromUs || false,
-          followedUp: extracted.donation?.followedUp !== undefined ? extracted.donation.followedUp : prev.followedUp || false,
-        }));
+        // If AI extracted donation data, use it directly; otherwise use fallback logic
+        if (extracted.donation) {
+          setDonationData({
+            freeBundletCard: extracted.donation.freeBundletCard ?? 0,
+            dozenBundtinis: extracted.donation.dozenBundtinis ?? 0,
+            cake8inch: extracted.donation.cake8inch ?? 0,
+            cake10inch: extracted.donation.cake10inch ?? 0,
+            sampleTray: extracted.donation.sampleTray ?? 0,
+            bundtletTower: extracted.donation.bundtletTower ?? 0,
+            cakesDonatedNotes: extracted.donation.cakesDonatedNotes || '',
+            orderedFromUs: extracted.donation.orderedFromUs ?? false,
+            followedUp: extracted.donation.followedUp ?? false,
+          });
+        } else if (hasDonationKeywords) {
+          // Fallback: enable donation toggle but keep existing data
+          setDonationData(prev => ({
+            ...prev,
+            cakesDonatedNotes: prev.cakesDonatedNotes || rawNotes,
+            orderedFromUs: notesLower.includes('order') || notesLower.includes('ordered') || notesLower.includes('ordering') ? true : prev.orderedFromUs,
+            followedUp: notesLower.includes('followed up') || notesLower.includes('follow up') ? true : prev.followedUp,
+          }));
+        }
       }
       
       setSuccess(true);

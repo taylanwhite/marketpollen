@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, collection, addDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, deleteDoc, query, where, getDocs, setDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
-import { useVoiceInput } from '../hooks/useVoiceInput';
-import { extractContactInfo } from '../utils/openai';
-import { Contact, Reachout, DonationData, MOUTH_VALUES, FileAttachment, CalendarEvent } from '../types';
+import { Contact, Reachout, DonationData, MOUTH_VALUES, FileAttachment } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
 import { uploadContactFile, deleteContactFile, formatFileSize, getFileIcon } from '../utils/fileUpload';
+import { AddressPicker, AddressData } from './AddressPicker';
 import {
   Dialog,
   DialogTitle,
@@ -49,9 +48,6 @@ import {
 } from '@mui/material';
 import {
   Close as CloseIcon,
-  Mic as MicIcon,
-  MicOff as MicOffIcon,
-  AutoAwesome as AIIcon,
   Save as SaveIcon,
   Add as AddIcon,
   ExpandMore as ExpandMoreIcon,
@@ -68,6 +64,9 @@ import {
   Download as DownloadIcon,
   Visibility as VisibilityIcon,
   Search as SearchIcon,
+  Settings as SettingsIcon,
+  Business as BusinessIcon,
+  Warning as WarningIcon,
 } from '@mui/icons-material';
 
 interface EditContactModalProps {
@@ -101,7 +100,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   const { currentUser } = useAuth();
   const { permissions } = usePermissions();
   const { triggerRefresh, setLastDonationMouths } = useDonation();
-  const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
+  // Note: useVoiceInput removed - it was part of the "Add Reachout" tab that was removed
   
   const [tabValue, setTabValue] = useState(0);
   const [formData, setFormData] = useState({
@@ -113,14 +112,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     status: contact.status || 'new'
   });
   
-  const [newReachout, setNewReachout] = useState({
-    note: '',
-    type: 'call' as 'call' | 'email' | 'meeting' | 'other'
-  });
-  
-  const [rawNotes, setRawNotes] = useState('');
-  const [includeDonation, setIncludeDonation] = useState(false);
-  const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation());
+  // Note: newReachout, rawNotes, includeDonation, donationData removed - they were part of the "Add Reachout" tab that was removed
   const [editingReachoutId, setEditingReachoutId] = useState<string | null>(null);
   const [editingReachoutNote, setEditingReachoutNote] = useState('');
   const [editingReachoutDonation, setEditingReachoutDonation] = useState<DonationData | null>(null);
@@ -132,17 +124,51 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   const [loadingTextPreview, setLoadingTextPreview] = useState(false);
   const [attachmentSearchTerm, setAttachmentSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
-  const [aiProcessing, setAiProcessing] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string>(contact.businessId);
+  const [deleting, setDeleting] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [showNewBusiness, setShowNewBusiness] = useState(false);
+  const [newBusinessName, setNewBusinessName] = useState('');
+  const [newBusinessAddress, setNewBusinessAddress] = useState<AddressData>({
+    address: '',
+    city: '',
+    state: '',
+    zipCode: '',
+  });
+  const [creatingBusiness, setCreatingBusiness] = useState(false);
 
-  // Update raw notes with transcript (combine final + interim for display)
+  // Load businesses for move selector
   useEffect(() => {
-    if (transcript || interimTranscript) {
-      const fullText = interimTranscript ? `${transcript} ${interimTranscript}`.trim() : transcript;
-      setRawNotes(fullText);
-    }
-  }, [transcript, interimTranscript]);
+    const loadBusinesses = async () => {
+      if (!permissions.currentStoreId) return;
+      
+      try {
+        const businessQuery = query(
+          collection(db, 'businesses'),
+          where('storeId', '==', permissions.currentStoreId)
+        );
+        
+        const businessSnapshot = await getDocs(businessQuery);
+        const businessMap = new Map<string, string>();
+        businessSnapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.storeId === permissions.currentStoreId) {
+            businessMap.set(doc.id, data.name);
+          }
+        });
+        setBusinesses(businessMap);
+      } catch (err) {
+        console.error('Error loading businesses:', err);
+      }
+    };
+    
+    loadBusinesses();
+  }, [permissions.currentStoreId]);
+
+  // Note: Voice input transcript handling removed - it was part of the "Add Reachout" tab that was removed
 
   // Load text content for preview
   useEffect(() => {
@@ -161,197 +187,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     }
   }, [previewFile]);
 
-  const processWithAI = async () => {
-    if (!rawNotes.trim()) {
-      setError('Please enter notes to process');
-      return;
-    }
-
-    setAiProcessing(true);
-    setError('');
-
-    try {
-      const extracted = await extractContactInfo(rawNotes);
-      
-      // Update reachout note (does NOT create a contact - just fills the form)
-      setNewReachout(prev => ({
-        ...prev,
-        note: extracted.reachoutNote || rawNotes
-      }));
-
-      // Update contact form fields if they're empty
-      setFormData(prev => ({
-        ...prev,
-        firstName: prev.firstName || extracted.firstName || '',
-        lastName: prev.lastName || extracted.lastName || '',
-        email: prev.email || extracted.email || '',
-        phone: prev.phone || extracted.phone || '',
-        personalDetails: prev.personalDetails || extracted.personalDetails || ''
-      }));
-
-      // Auto-fill donation data if detected
-      if (extracted.donation) {
-        setIncludeDonation(true);
-        setDonationData(prev => ({
-          freeBundletCard: extracted.donation?.freeBundletCard || prev.freeBundletCard || 0,
-          dozenBundtinis: extracted.donation?.dozenBundtinis || prev.dozenBundtinis || 0,
-          cake8inch: extracted.donation?.cake8inch || prev.cake8inch || 0,
-          cake10inch: extracted.donation?.cake10inch || prev.cake10inch || 0,
-          sampleTray: extracted.donation?.sampleTray || prev.sampleTray || 0,
-          bundtletTower: extracted.donation?.bundtletTower || prev.bundtletTower || 0,
-          cakesDonatedNotes: extracted.donation?.cakesDonatedNotes || prev.cakesDonatedNotes || '',
-          orderedFromUs: extracted.donation?.orderedFromUs !== undefined ? extracted.donation.orderedFromUs : prev.orderedFromUs || false,
-          followedUp: extracted.donation?.followedUp !== undefined ? extracted.donation.followedUp : prev.followedUp || false,
-        }));
-      }
-      
-      setSuccess('AI processed your notes! Review and adjust the extracted information.');
-    } catch (err: any) {
-      setError('AI processing failed. Using raw notes.');
-      setNewReachout(prev => ({ ...prev, note: rawNotes }));
-    } finally {
-      setAiProcessing(false);
-    }
-  };
-
-  const handleAddReachout = async () => {
-    if (!newReachout.note.trim()) {
-      setError('Please enter a note');
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-
-    try {
-      const reachout: Reachout = {
-        id: `reach-${Date.now()}`,
-        date: new Date(),
-        note: newReachout.note,
-        rawNotes: rawNotes || null,
-        createdBy: currentUser?.uid || '',
-        type: newReachout.type,
-        storeId: permissions.currentStoreId || undefined,
-        donation: includeDonation ? donationData : undefined,
-      };
-
-      const updatedReachouts = [...contact.reachouts, reachout];
-
-      // Generate AI follow-up suggestion after adding reachout
-      let followUpUpdate: any = {
-        reachouts: updatedReachouts,
-        lastReachoutDate: new Date(),
-        suggestedFollowUpDate: null,
-        suggestedFollowUpMethod: null,
-        suggestedFollowUpNote: null,
-        suggestedFollowUpPriority: null,
-      };
-
-      try {
-        const { generateFollowUpSuggestion } = await import('../utils/openai');
-        const aiSuggestion = await generateFollowUpSuggestion({
-          firstName: contact.firstName || undefined,
-          lastName: contact.lastName || undefined,
-          reachouts: updatedReachouts.map(r => ({
-            date: r.date instanceof Date ? r.date : new Date(r.date),
-            note: r.note || '',
-            type: r.type || 'other',
-            donation: r.donation
-          })),
-          personalDetails: contact.personalDetails || undefined,
-          status: contact.status || undefined,
-          email: contact.email || undefined,
-          phone: contact.phone || undefined,
-        });
-
-        followUpUpdate.suggestedFollowUpDate = new Date(aiSuggestion.suggestedDate);
-        followUpUpdate.suggestedFollowUpMethod = aiSuggestion.suggestedMethod || null;
-        followUpUpdate.suggestedFollowUpNote = aiSuggestion.message || null;
-        followUpUpdate.suggestedFollowUpPriority = aiSuggestion.priority || null;
-      } catch (aiError) {
-        console.error('AI follow-up generation failed:', aiError);
-        // Continue without AI suggestion - contact will keep existing or no suggestion
-      }
-
-      await updateDoc(doc(db, 'contacts', contact.id), followUpUpdate);
-
-      // Create calendar event for the reachout
-      try {
-        const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact';
-        // Normalize date to midnight local time
-        const reachoutDate = reachout.date instanceof Date ? reachout.date : new Date(reachout.date);
-        const normalizedReachoutDate = new Date(reachoutDate);
-        normalizedReachoutDate.setHours(0, 0, 0, 0);
-        
-        await addDoc(collection(db, 'calendarEvents'), {
-          storeId: permissions.currentStoreId || contact.storeId,
-          title: `Reachout: ${contactName}`,
-          description: reachout.note || null,
-          date: normalizedReachoutDate,
-          type: 'reachout',
-          contactId: contact.id,
-          businessId: contact.businessId,
-          priority: 'medium',
-          status: 'completed', // Past reachout is completed
-          createdBy: currentUser?.uid || '',
-          createdAt: new Date(),
-          completedAt: new Date(),
-        } as Omit<CalendarEvent, 'id'>);
-      } catch (eventError) {
-        console.error('Failed to create calendar event:', eventError);
-        // Don't fail reachout creation if event creation fails
-      }
-
-      // Create calendar event for AI-suggested follow-up
-      if (followUpUpdate.suggestedFollowUpDate) {
-        try {
-          const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact';
-          // Normalize date to midnight local time to avoid timezone issues
-          const followUpDate = followUpUpdate.suggestedFollowUpDate instanceof Date 
-            ? followUpUpdate.suggestedFollowUpDate 
-            : new Date(followUpUpdate.suggestedFollowUpDate);
-          const normalizedFollowUpDate = new Date(followUpDate);
-          normalizedFollowUpDate.setHours(0, 0, 0, 0);
-          
-          await addDoc(collection(db, 'calendarEvents'), {
-            storeId: permissions.currentStoreId || contact.storeId,
-            title: `Follow-up: ${contactName}`,
-            description: followUpUpdate.suggestedFollowUpNote || `Follow up with ${contactName}`,
-            date: normalizedFollowUpDate,
-            type: 'followup',
-            contactId: contact.id,
-            businessId: contact.businessId,
-            priority: followUpUpdate.suggestedFollowUpPriority || 'medium',
-            status: 'scheduled',
-            createdBy: currentUser?.uid || '',
-            createdAt: new Date(),
-          } as Omit<CalendarEvent, 'id'>);
-        } catch (eventError) {
-          console.error('Failed to create follow-up calendar event:', eventError);
-          // Don't fail if event creation fails
-        }
-      }
-
-      // Trigger donation tracker refresh if donation was included
-      if (includeDonation && donationData) {
-        const mouths = calculateMouths(donationData);
-        setLastDonationMouths(mouths);
-        triggerRefresh();
-      }
-
-      setNewReachout({ note: '', type: 'call' });
-      setRawNotes('');
-      setIncludeDonation(false);
-      setDonationData(createEmptyDonation());
-      clearTranscript();
-      setSuccess('Reachout added!');
-      onSuccess();
-    } catch (err: any) {
-      setError(err.message || 'Failed to add reachout');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Note: processWithAI and handleAddReachout functions removed - they were part of the "Add Reachout" tab that was removed
+  // These functions are no longer used since reachouts are now added via the Quick Reachout button
 
   const handleEditReachout = (reachout: Reachout) => {
     setEditingReachoutId(reachout.id);
@@ -542,6 +379,141 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     return formData.email || formData.phone || 'Contact';
   };
 
+  const handleDeleteContact = async () => {
+    const contactName = getContactName();
+    const confirmMessage = `Are you sure you want to delete "${contactName}"?\n\nThis action cannot be undone and will delete:\n- All contact information\n- All reachout history\n- All donations\n- All attachments\n- All calendar events`;
+    
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    setDeleting(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      // Delete all files associated with this contact
+      if (contact.files && contact.files.length > 0) {
+        for (const file of contact.files) {
+          try {
+            await deleteContactFile(file.storagePath);
+          } catch (fileError) {
+            console.error('Error deleting file:', fileError);
+            // Continue with deletion even if file deletion fails
+          }
+        }
+      }
+
+      // Delete the contact document
+      await deleteDoc(doc(db, 'contacts', contact.id));
+      
+      setSuccess('Contact deleted successfully!');
+      setTimeout(() => {
+        onSuccess();
+        onClose();
+      }, 1000);
+    } catch (err: any) {
+      console.error('Error deleting contact:', err);
+      setError(`Failed to delete contact: ${err.message}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleCreateBusiness = async () => {
+    if (!newBusinessName.trim()) {
+      setError('Business name is required');
+      return;
+    }
+
+    if (!permissions.currentStoreId) {
+      setError('Please select a store first');
+      return;
+    }
+
+    setCreatingBusiness(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const businessId = newBusinessName.trim().toUpperCase().replace(/\s+/g, '-');
+      await setDoc(doc(db, 'businesses', businessId), {
+        id: businessId,
+        name: newBusinessName.trim(),
+        storeId: permissions.currentStoreId,
+        address: newBusinessAddress.address || null,
+        city: newBusinessAddress.city || null,
+        state: newBusinessAddress.state || null,
+        zipCode: newBusinessAddress.zipCode || null,
+        createdAt: new Date(),
+        createdBy: currentUser?.uid || ''
+      });
+      
+      // Reload businesses
+      const businessQuery = query(
+        collection(db, 'businesses'),
+        where('storeId', '==', permissions.currentStoreId)
+      );
+      
+      const businessSnapshot = await getDocs(businessQuery);
+      const businessMap = new Map<string, string>();
+      businessSnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.storeId === permissions.currentStoreId) {
+          businessMap.set(doc.id, data.name);
+        }
+      });
+      setBusinesses(businessMap);
+      
+      // Select the newly created business
+      setSelectedBusinessId(businessId);
+      setNewBusinessName('');
+      setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+      setShowNewBusiness(false);
+      setSuccess('Business created successfully!');
+    } catch (err: any) {
+      console.error('Error creating business:', err);
+      setError(err.message || 'Failed to create business');
+    } finally {
+      setCreatingBusiness(false);
+    }
+  };
+
+  const handleMoveContact = async () => {
+    if (!selectedBusinessId || selectedBusinessId === contact.businessId) {
+      setError('Please select a different business');
+      return;
+    }
+
+    const contactName = getContactName();
+    const newBusinessName = businesses.get(selectedBusinessId);
+    const confirmMessage = `Move "${contactName}" to "${newBusinessName}"?\n\nThis will update the contact's business association.`;
+    
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    setMoving(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      await updateDoc(doc(db, 'contacts', contact.id), {
+        businessId: selectedBusinessId
+      });
+      
+      setSuccess('Contact moved successfully!');
+      setTimeout(() => {
+        onSuccess();
+      }, 1000);
+    } catch (err: any) {
+      console.error('Error moving contact:', err);
+      setError(`Failed to move contact: ${err.message}`);
+    } finally {
+      setMoving(false);
+    }
+  };
+
   return (
     <Dialog open onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}>
@@ -573,30 +545,30 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           >
             <MenuItem value={0}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
-                <AddIcon fontSize="small" />
-                <Typography>Add Reachout</Typography>
+                <Typography>Contact Details</Typography>
               </Box>
             </MenuItem>
             <MenuItem value={1}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
-                <Typography>Contact Details</Typography>
-              </Box>
-            </MenuItem>
-            <MenuItem value={2}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <Typography>History ({contact.reachouts.length})</Typography>
               </Box>
             </MenuItem>
-            <MenuItem value={3}>
+            <MenuItem value={2}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <CakeIcon fontSize="small" />
                 <Typography>Donations ({contact.reachouts.filter(r => r.donation).length})</Typography>
               </Box>
             </MenuItem>
-            <MenuItem value={4}>
+            <MenuItem value={3}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <AttachFileIcon fontSize="small" />
                 <Typography>Attachments ({contact.files?.length || 0})</Typography>
+              </Box>
+            </MenuItem>
+            <MenuItem value={4}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
+                <SettingsIcon fontSize="small" />
+                <Typography>Settings</Typography>
               </Box>
             </MenuItem>
           </TextField>
@@ -611,7 +583,6 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
             scrollButtons="auto"
             allowScrollButtonsMobile
           >
-            <Tab label="Add Reachout" />
             <Tab label="Contact Details" />
             <Tab label={`History (${contact.reachouts.length})`} />
             <Tab 
@@ -624,6 +595,11 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
               icon={<AttachFileIcon sx={{ fontSize: 16 }} />}
               iconPosition="start"
             />
+            <Tab 
+              label="Settings"
+              icon={<SettingsIcon sx={{ fontSize: 16 }} />}
+              iconPosition="start"
+            />
           </Tabs>
         </Box>
       </Box>
@@ -632,248 +608,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
         {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
 
-        {/* Tab 0: Add Reachout */}
+        {/* Tab 0: Contact Details */}
         <TabPanel value={tabValue} index={0}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {/* Voice Recording */}
-            <Card variant="outlined">
-              <CardContent>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                  <Button
-                    variant={isListening ? 'contained' : 'outlined'}
-                    color={isListening ? 'error' : 'primary'}
-                    startIcon={isListening ? <MicOffIcon /> : <MicIcon />}
-                    onClick={isListening ? stopListening : startListening}
-                    disabled={aiProcessing || loading}
-                  >
-                    {isListening ? 'Stop Recording' : 'Record Notes'}
-                  </Button>
-                  {isListening && (
-                    <Chip label="🔴 Listening..." color="error" size="small" />
-                  )}
-                </Box>
-                {voiceError && (
-                  <Alert severity="warning" sx={{ mb: 2 }}>{voiceError}</Alert>
-                )}
-                <TextField
-                  label="Meeting Notes"
-                  multiline
-                  rows={4}
-                  value={rawNotes}
-                  onChange={(e) => setRawNotes(e.target.value)}
-                  placeholder="Type or speak your notes about this interaction..."
-                  fullWidth
-                  disabled={aiProcessing || loading}
-                />
-                <Button
-                  variant="outlined"
-                  startIcon={aiProcessing ? <CircularProgress size={16} /> : <AIIcon />}
-                  onClick={processWithAI}
-                  disabled={aiProcessing || !rawNotes.trim() || loading}
-                  sx={{ mt: 1 }}
-                >
-                  {aiProcessing ? 'Processing...' : 'Process'}
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Reachout Details */}
-            <Box sx={{ display: 'flex', gap: 2 }}>
-              <TextField
-                select
-                label="Type"
-                value={newReachout.type}
-                onChange={(e) => setNewReachout(prev => ({ ...prev, type: e.target.value as any }))}
-                sx={{ width: 150 }}
-                disabled={loading}
-              >
-                <MenuItem value="call">📞 Call</MenuItem>
-                <MenuItem value="email">📧 Email</MenuItem>
-                <MenuItem value="meeting">🤝 Meeting</MenuItem>
-                <MenuItem value="other">📝 Other</MenuItem>
-              </TextField>
-            </Box>
-
-            <TextField
-              label="Summary Note"
-              multiline
-              rows={3}
-              value={newReachout.note}
-              onChange={(e) => setNewReachout(prev => ({ ...prev, note: e.target.value }))}
-              placeholder="Summarized note (AI will fill this, or type manually)"
-              fullWidth
-              disabled={loading}
-            />
-
-            {/* Donation Toggle */}
-            <Divider sx={{ my: 1 }} />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={includeDonation}
-                  onChange={(e) => {
-                    setIncludeDonation(e.target.checked);
-                    if (!e.target.checked) {
-                      setDonationData(createEmptyDonation());
-                    }
-                  }}
-                  disabled={loading}
-                />
-              }
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CakeIcon fontSize="small" />
-                  <Typography>Include Donation</Typography>
-                </Box>
-              }
-            />
-
-            {/* Donation Fields */}
-            <Collapse in={includeDonation}>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1, p: 2, bgcolor: 'grey.50', borderRadius: 2 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CakeIcon fontSize="small" color="primary" />
-                  Product Donations
-                  {includeDonation && (
-                    <Chip 
-                      label={`${calculateMouths(donationData)} mouths`} 
-                      size="small" 
-                      color="primary" 
-                      sx={{ ml: 'auto' }}
-                    />
-                  )}
-                </Typography>
-
-                <Grid container spacing={2}>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="FREE Bundtlet Card"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.freeBundletCard || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, freeBundletCard: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.freeBundletCard} mouth each`}
-                      disabled={loading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="Dozen Bundtinis"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.dozenBundtinis || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, dozenBundtinis: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.dozenBundtinis} mouths each`}
-                      disabled={loading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="8&quot; Cake"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.cake8inch || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, cake8inch: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.cake8inch} mouths each`}
-                      disabled={loading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="10&quot; Cake"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.cake10inch || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, cake10inch: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.cake10inch} mouths each`}
-                      disabled={loading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="Sample Tray"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.sampleTray || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, sampleTray: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.sampleTray} mouths each`}
-                      disabled={loading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="Bundtlet/Tower"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.bundtletTower || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, bundtletTower: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.bundtletTower} mouth each`}
-                      disabled={loading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                </Grid>
-
-                <TextField
-                  label="Cakes Donated Notes"
-                  size="small"
-                  fullWidth
-                  value={donationData.cakesDonatedNotes || ''}
-                  onChange={(e) => setDonationData(prev => ({ ...prev, cakesDonatedNotes: e.target.value }))}
-                  placeholder="Any notes about the donation..."
-                  disabled={loading}
-                />
-
-                <Box sx={{ display: 'flex', gap: 2 }}>
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        checked={donationData.orderedFromUs}
-                        onChange={(e) => setDonationData(prev => ({ ...prev, orderedFromUs: e.target.checked }))}
-                        disabled={loading}
-                      />
-                    }
-                    label="Ordered from us?"
-                  />
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        checked={donationData.followedUp}
-                        onChange={(e) => setDonationData(prev => ({ ...prev, followedUp: e.target.checked }))}
-                        disabled={loading}
-                      />
-                    }
-                    label="Followed up?"
-                  />
-                </Box>
-              </Box>
-            </Collapse>
-
-            <Button
-              variant="contained"
-              size="large"
-              startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <AddIcon />}
-              onClick={handleAddReachout}
-              disabled={loading || !newReachout.note.trim()}
-            >
-              {loading ? 'Saving...' : 'Add Reachout'}
-            </Button>
-          </Box>
-        </TabPanel>
-
-        {/* Tab 1: Contact Details */}
-        <TabPanel value={tabValue} index={1}>
           <Grid container spacing={2}>
             <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
@@ -948,8 +684,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           </Grid>
         </TabPanel>
 
-        {/* Tab 2: Reachout History */}
-        <TabPanel value={tabValue} index={2}>
+        {/* Tab 1: Reachout History */}
+        <TabPanel value={tabValue} index={1}>
           {contact.reachouts.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 4 }}>
               <Typography color="text.secondary">No reachouts yet</Typography>
@@ -986,7 +722,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                         <TextField
                           label="Reachout Note"
                           multiline
-                          rows={4}
+                          minRows={6}
+                          maxRows={12}
                           value={editingReachoutNote}
                           onChange={(e) => setEditingReachoutNote(e.target.value)}
                           fullWidth
@@ -1206,8 +943,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           )}
         </TabPanel>
 
-        {/* Tab 3: Donations History */}
-        <TabPanel value={tabValue} index={3}>
+        {/* Tab 2: Donations History */}
+        <TabPanel value={tabValue} index={2}>
           {(() => {
             const donationReachouts = contact.reachouts.filter(r => r.donation);
             const totalMouths = donationReachouts.reduce(
@@ -1234,10 +971,10 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                   <CardContent sx={{ py: 2 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Box>
-                        <Typography variant="body2" sx={{ opacity: 0.8 }}>
+                        <Typography variant="body2" sx={{ opacity: 0.8, color: 'white' }}>
                           Total Contribution
                         </Typography>
-                        <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                        <Typography variant="h4" sx={{ fontWeight: 700, color: 'white' }}>
                           {totalMouths.toLocaleString()} mouths
                         </Typography>
                       </Box>
@@ -1347,8 +1084,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           })()}
         </TabPanel>
 
-        {/* Tab 4: Attachments */}
-        <TabPanel value={tabValue} index={4}>
+        {/* Tab 3: Attachments */}
+        <TabPanel value={tabValue} index={3}>
           <Box>
             <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
               <AttachFileIcon />
@@ -1502,6 +1239,144 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                 </Paper>
               );
             })()}
+          </Box>
+        </TabPanel>
+
+        {/* Tab 4: Settings */}
+        <TabPanel value={tabValue} index={4}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <Alert severity="info" icon={<SettingsIcon />}>
+              <Typography variant="body2">
+                Manage contact settings and perform administrative actions.
+              </Typography>
+            </Alert>
+
+            {/* Move to Another Business */}
+            <Card variant="outlined">
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                  <BusinessIcon color="primary" />
+                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                    Move to Another Business
+                  </Typography>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Transfer this contact to a different business within the same store.
+                </Typography>
+                {!showNewBusiness ? (
+                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                    <TextField
+                      select
+                      label="Select Business"
+                      value={selectedBusinessId}
+                      onChange={(e) => {
+                        if (e.target.value === '__new__') {
+                          setShowNewBusiness(true);
+                        } else {
+                          setSelectedBusinessId(e.target.value);
+                        }
+                      }}
+                      fullWidth
+                      sx={{ flex: 1 }}
+                      disabled={moving || creatingBusiness}
+                    >
+                      {Array.from(businesses.entries()).map(([id, name]) => (
+                        <MenuItem key={id} value={id}>
+                          {name}
+                          {id === contact.businessId && ' (Current)'}
+                        </MenuItem>
+                      ))}
+                      <MenuItem value="__new__" sx={{ fontStyle: 'italic', color: 'primary.main' }}>
+                        + Create New Business
+                      </MenuItem>
+                    </TextField>
+                    <Button
+                      variant="outlined"
+                      startIcon={<BusinessIcon />}
+                      onClick={handleMoveContact}
+                      disabled={moving || selectedBusinessId === contact.businessId || creatingBusiness}
+                    >
+                      {moving ? <CircularProgress size={20} /> : 'Move Contact'}
+                    </Button>
+                  </Box>
+                ) : (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <TextField
+                      label="Business Name"
+                      value={newBusinessName}
+                      onChange={(e) => setNewBusinessName(e.target.value)}
+                      placeholder="Enter business name"
+                      fullWidth
+                      disabled={creatingBusiness}
+                      required
+                    />
+                    <AddressPicker
+                      value={newBusinessAddress}
+                      onChange={setNewBusinessAddress}
+                      label="Business Address"
+                      fullWidth
+                    />
+                    <Box sx={{ display: 'flex', gap: 2 }}>
+                      <Button
+                        variant="contained"
+                        onClick={handleCreateBusiness}
+                        disabled={creatingBusiness || !newBusinessName.trim()}
+                        startIcon={creatingBusiness ? <CircularProgress size={20} /> : <AddIcon />}
+                      >
+                        {creatingBusiness ? 'Creating...' : 'Create Business'}
+                      </Button>
+                      <Button
+                        variant="outlined"
+                        onClick={() => {
+                          setShowNewBusiness(false);
+                          setNewBusinessName('');
+                          setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+                        }}
+                        disabled={creatingBusiness}
+                      >
+                        Cancel
+                      </Button>
+                    </Box>
+                  </Box>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Delete Contact */}
+            <Card variant="outlined" sx={{ borderColor: 'error.main' }}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                  <WarningIcon color="error" />
+                  <Typography variant="h6" sx={{ fontWeight: 600, color: 'error.main' }}>
+                    Delete Contact
+                  </Typography>
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  Permanently delete this contact and all associated data. This action cannot be undone.
+                </Typography>
+                <Alert severity="error" icon={<WarningIcon />} sx={{ mb: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Warning:</strong> This will delete:
+                  </Typography>
+                  <Box component="ul" sx={{ mt: 1, mb: 0, pl: 2 }}>
+                    <li>All contact information</li>
+                    <li>All reachout history</li>
+                    <li>All donation records</li>
+                    <li>All attached files</li>
+                    <li>All calendar events</li>
+                  </Box>
+                </Alert>
+                <Button
+                  variant="contained"
+                  color="error"
+                  startIcon={deleting ? <CircularProgress size={20} color="inherit" /> : <DeleteIcon />}
+                  onClick={handleDeleteContact}
+                  disabled={deleting}
+                >
+                  {deleting ? 'Deleting...' : 'Delete Contact'}
+                </Button>
+              </CardContent>
+            </Card>
           </Box>
         </TabPanel>
       </DialogContent>
