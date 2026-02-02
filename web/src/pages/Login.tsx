@@ -53,9 +53,10 @@ export function Login() {
           <Box sx={{ textAlign: 'center', mb: 4 }}>
             <Box
               component="img"
-              src="/assets/nav-title-220x40.png"
-              alt="MarketPollen"
-              sx={{ height: 48, width: 'auto', maxWidth: 280, objectFit: 'contain', mx: 'auto', mb: 1 }}
+              src="/assets/navbar-logo-280x46.png"
+              srcSet="/assets/navbar-logo-560x92@2x.png 2x"
+              alt="Market Pollen"
+              sx={{ height: 46, width: 'auto', maxWidth: 280, objectFit: 'contain', mx: 'auto', mb: 1 }}
             />
             <Typography variant="body2" color="text.secondary">
               Sign in to your account
