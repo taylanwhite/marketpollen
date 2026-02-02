@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { TextField, Box, CircularProgress, Autocomplete, ListItem, ListItemText } from '@mui/material';
+import { TextField, Box, CircularProgress, Autocomplete, ListItem, ListItemText, SxProps, Theme } from '@mui/material';
 import { autocompletePlaces, getPlaceDetails } from '../utils/placesApi';
 
 export interface AddressData {
@@ -18,6 +18,7 @@ interface AddressPickerProps {
   required?: boolean;
   error?: boolean;
   helperText?: string;
+  sx?: SxProps<Theme>;
 }
 
 interface PlacePrediction {
@@ -34,6 +35,7 @@ export function AddressPicker({
   required = false,
   error = false,
   helperText,
+  sx,
 }: AddressPickerProps) {
   const [inputValue, setInputValue] = useState(value.address);
   const [options, setOptions] = useState<PlacePrediction[]>([]);
@@ -152,7 +154,7 @@ export function AddressPicker({
   }, [value.address]);
 
   return (
-    <Box sx={{ position: 'relative' }}>
+    <Box sx={{ position: 'relative', ...sx }}>
       <Autocomplete
         freeSolo
         options={options}

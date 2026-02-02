@@ -28,6 +28,8 @@ import placesNearbyHandler from '../dist-handlers/places-nearby.js';
 import usersIndexHandler from '../dist-handlers/users/index.js';
 import usersUidHandler from '../dist-handlers/users/[uid].js';
 import usersSyncHandler from '../dist-handlers/users/sync.js';
+import discoverySearchHandler from '../dist-handlers/discovery/search.js';
+import discoveredPlacesHandler from '../dist-handlers/discovered-places.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -72,10 +74,12 @@ app.post('/api/create-contact-from-call', route(createContactFromCallHandler));
 app.post('/api/send-invite-email', route(sendInviteEmailHandler));
 app.post('/api/places-autocomplete', route(placesAutocompleteHandler));
 app.post('/api/places-details', route(placesDetailsHandler));
-app.get('/api/places-nearby', route(placesNearbyHandler));
+app.post('/api/places-nearby', route(placesNearbyHandler));
 app.get('/api/users', route(usersIndexHandler));
 app.post('/api/users', route(usersIndexHandler));
 app.all('/api/users/:uid', withUid(usersUidHandler));
 app.post('/api/users/sync', route(usersSyncHandler));
+app.post('/api/discovery/search', route(discoverySearchHandler));
+app.get('/api/discovered-places', route(discoveredPlacesHandler));
 
 export default app;

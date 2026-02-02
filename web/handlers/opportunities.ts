@@ -3,7 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore } from './lib/store-access.js';
 
-function toOpportunityJson(r: { id: string; store_id: string; place_id: string; name: string; address: string | null; city: string | null; state: string | null; zip_code: string | null; status: string; business_id: string | null; created_at: Date; created_by: string; converted_at: Date | null }) {
+function toOpportunityJson(r: { id: string; store_id: string; place_id: string; name: string; address: string | null; city: string | null; state: string | null; zip_code: string | null; status: string; business_id: string | null; created_at: Date; created_by: string; converted_at: Date | null; dismissed_at: Date | null; dismissed_reason: string | null }) {
   return {
     id: r.id,
     storeId: r.store_id,
@@ -18,6 +18,8 @@ function toOpportunityJson(r: { id: string; store_id: string; place_id: string; 
     createdAt: r.created_at,
     createdBy: r.created_by,
     convertedAt: r.converted_at ?? undefined,
+    dismissedAt: r.dismissed_at ?? undefined,
+    dismissedReason: r.dismissed_reason ?? undefined,
   };
 }
 
@@ -25,7 +27,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
-  const storeId = (req.query?.storeId as string)?.trim();
+  // Check both query params and body for storeId
+  const storeId = (req.query?.storeId as string)?.trim() || (req.body?.storeId as string)?.trim();
   if (!storeId) return res.status(400).json({ error: 'storeId required' });
 
   const can = await canAccessStore(uid, storeId);

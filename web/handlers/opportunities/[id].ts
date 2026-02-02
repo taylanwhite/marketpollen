@@ -3,7 +3,7 @@ import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { canAccessStore } from '../lib/store-access.js';
 
-function toOpportunityJson(r: { id: string; store_id: string; place_id: string; name: string; address: string | null; city: string | null; state: string | null; zip_code: string | null; status: string; business_id: string | null; created_at: Date; created_by: string; converted_at: Date | null }) {
+function toOpportunityJson(r: { id: string; store_id: string; place_id: string; name: string; address: string | null; city: string | null; state: string | null; zip_code: string | null; status: string; business_id: string | null; created_at: Date; created_by: string; converted_at: Date | null; dismissed_at: Date | null; dismissed_reason: string | null }) {
   return {
     id: r.id,
     storeId: r.store_id,
@@ -18,6 +18,8 @@ function toOpportunityJson(r: { id: string; store_id: string; place_id: string; 
     createdAt: r.created_at,
     createdBy: r.created_by,
     convertedAt: r.converted_at ?? undefined,
+    dismissedAt: r.dismissed_at ?? undefined,
+    dismissedReason: r.dismissed_reason ?? undefined,
   };
 }
 
@@ -37,14 +39,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') return res.status(200).json(toOpportunityJson(opportunity));
 
   if (req.method === 'PATCH') {
-    const body = req.body as { status?: string };
+    const body = req.body as { status?: string; dismissedReason?: string };
+
     if (body?.status === 'dismissed') {
       const updated = await prisma.opportunity.update({
         where: { id },
-        data: { status: 'dismissed' },
+        data: {
+          status: 'dismissed',
+          dismissed_at: new Date(),
+          dismissed_reason: body.dismissedReason || null,
+        },
       });
       return res.status(200).json(toOpportunityJson(updated));
     }
+
+    if (body?.status === 'new') {
+      // Restore a dismissed opportunity
+      const updated = await prisma.opportunity.update({
+        where: { id },
+        data: {
+          status: 'new',
+          dismissed_at: null,
+          dismissed_reason: null,
+        },
+      });
+      return res.status(200).json(toOpportunityJson(updated));
+    }
+
     return res.status(400).json({ error: 'Invalid status or no changes' });
   }
 

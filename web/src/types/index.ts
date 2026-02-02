@@ -64,6 +64,8 @@ export interface Opportunity {
   createdAt: Date;
   createdBy: string;
   convertedAt?: Date | null;
+  dismissedAt?: Date | null;
+  dismissedReason?: string | null;
 }
 
 // Donation data embedded in a reachout

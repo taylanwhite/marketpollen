@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(npx prisma generate)",
+      "Bash(./node_modules/.bin/prisma generate:*)",
+      "Bash(npm exec:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm install)",
+      "Bash(npx prisma db push:*)",
+      "Bash(npm run build:server:*)",
+      "Bash(source:*)",
+      "Bash(npm run build:handlers:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

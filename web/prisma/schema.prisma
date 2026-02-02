@@ -86,19 +86,21 @@ model Business {
 }
 
 model Opportunity {
-  id          String   @id @default(uuid()) @db.Uuid
-  store_id    String   @db.Uuid
-  place_id    String
-  name        String
-  address     String?
-  city        String?
-  state       String?
-  zip_code    String?
-  status      String   @default("new") // new | converted | dismissed
-  business_id String?  @db.Uuid
-  created_at  DateTime @default(now())
-  created_by  String
-  converted_at DateTime?
+  id               String    @id @default(uuid()) @db.Uuid
+  store_id         String    @db.Uuid
+  place_id         String
+  name             String
+  address          String?
+  city             String?
+  state            String?
+  zip_code         String?
+  status           String    @default("new") // new | converted | dismissed
+  business_id      String?   @db.Uuid
+  created_at       DateTime  @default(now())
+  created_by       String
+  converted_at     DateTime?
+  dismissed_at     DateTime?
+  dismissed_reason String?
 
   store    Store    @relation(fields: [store_id], references: [id], onDelete: Cascade)
   business Business? @relation(fields: [business_id], references: [id], onDelete: SetNull)
@@ -241,4 +243,31 @@ model ApiKey {
   created_at DateTime @default(now())
 
   @@map("api_keys")
+}
+
+// Global registry of discovered places - used for deduplication
+model DiscoveredPlace {
+  id                String    @id @default(uuid()) @db.Uuid
+  place_id          String    @unique  // Google Places ID - dedupe key
+  name              String?
+  primary_type      String?
+  formatted_address String?
+  lat               Float?
+  lng               Float?
+  first_seen_at     DateTime  @default(now())
+  last_seen_at      DateTime  @default(now())
+  enriched_at       DateTime?
+  status            String    @default("NEW")  // NEW | ENRICHED | SKIPPED
+
+  // Enriched details (from Place Details API)
+  phone             String?
+  website           String?
+  rating            Float?
+  review_count      Int?
+  price_level       Int?
+  opening_hours     Json?
+
+  @@index([status])
+  @@index([primary_type])
+  @@map("discovered_places")
 }
