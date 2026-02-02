@@ -38,6 +38,9 @@ import {
   Phone as PhoneIcon,
   Event as MeetingIcon,
   Message as MessageIcon,
+  ContentCopy as CopyIcon,
+  Route as RouteIcon,
+  Assignment as PlannerIcon,
 } from '@mui/icons-material';
 
 interface CalendarEventDisplay {
@@ -55,6 +58,32 @@ interface CalendarEventDisplay {
   location?: string | null;
 }
 
+interface DayPlannerFollowUp {
+  contactId: string;
+  contactName: string;
+  method: 'email' | 'call' | 'meeting' | 'text' | 'other';
+  message: string;
+  draftEmail?: string;
+  eventTitle?: string;
+}
+
+interface DayPlannerOpportunity {
+  id: string;
+  name: string;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zipCode?: string | null;
+}
+
+interface DayPlannerData {
+  storeName: string;
+  storeAddress: string;
+  date: string;
+  followUpTasks: DayPlannerFollowUp[];
+  optimizedRoute: DayPlannerOpportunity[];
+}
+
 export function Calendar() {
   const navigate = useNavigate();
   const { permissions } = usePermissions();
@@ -68,6 +97,9 @@ export function Calendar() {
   const [editingEvent, setEditingEvent] = useState<CalendarEventDisplay | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [planDate, setPlanDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [dayPlan, setDayPlan] = useState<DayPlannerData | null>(null);
+  const [dayPlanLoading, setDayPlanLoading] = useState(false);
 
   // Form state for creating/editing events
   const [eventForm, setEventForm] = useState({
@@ -87,6 +119,30 @@ export function Calendar() {
       loadCalendarData();
     }
   }, [permissions.currentStoreId, currentDate]);
+
+  useEffect(() => {
+    if (permissions.currentStoreId && planDate) {
+      loadDayPlan();
+    } else {
+      setDayPlan(null);
+    }
+  }, [permissions.currentStoreId, planDate]);
+
+  const loadDayPlan = async () => {
+    if (!permissions.currentStoreId || !planDate) return;
+    try {
+      setDayPlanLoading(true);
+      const data = await api.get<DayPlannerData>(
+        `/day-planner?storeId=${permissions.currentStoreId}&date=${planDate}`
+      );
+      setDayPlan(data);
+    } catch (e) {
+      console.error('Load day plan:', e);
+      setDayPlan(null);
+    } finally {
+      setDayPlanLoading(false);
+    }
+  };
 
   const loadCalendarData = async () => {
     if (!permissions.currentStoreId) {
@@ -624,6 +680,185 @@ export function Calendar() {
           })}
         </Grid>
       </Paper>
+
+      {/* Day Planner */}
+      {permissions.currentStoreId && (
+        <Paper sx={{ p: 2, mb: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+            <PlannerIcon color="action" />
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Day planner
+            </Typography>
+            <TextField
+              size="small"
+              type="date"
+              label="Plan for"
+              value={planDate}
+              onChange={(e) => setPlanDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ width: 160 }}
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={loadDayPlan}
+              disabled={dayPlanLoading}
+              startIcon={dayPlanLoading ? <CircularProgress size={16} /> : undefined}
+            >
+              {dayPlanLoading ? 'Loading…' : 'Refresh'}
+            </Button>
+          </Box>
+          {dayPlanLoading && !dayPlan ? (
+            <Box sx={{ py: 3, display: 'flex', justifyContent: 'center' }}>
+              <CircularProgress />
+            </Box>
+          ) : dayPlan ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {/* Suggested follow-ups */}
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 600 }}>
+                  Suggested follow-ups
+                </Typography>
+                {dayPlan.followUpTasks.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No follow-ups scheduled for this day.
+                  </Typography>
+                ) : (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {dayPlan.followUpTasks.map((task) => (
+                      <Card key={task.contactId} variant="outlined" sx={{ overflow: 'visible' }}>
+                        <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, flexWrap: 'wrap' }}>
+                            {task.method === 'email' && <EmailIcon fontSize="small" color="primary" />}
+                            {task.method === 'call' && <PhoneIcon fontSize="small" color="success" />}
+                            {task.method === 'meeting' && <MeetingIcon fontSize="small" color="warning" />}
+                            {task.method === 'text' && <MessageIcon fontSize="small" color="info" />}
+                            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                              {task.method === 'email' ? 'Email' : task.method === 'call' ? 'Call' : task.method === 'meeting' ? 'Meeting' : task.method === 'text' ? 'Text' : 'Follow up'}{' '}
+                              {task.contactName}
+                            </Typography>
+                          </Box>
+                          {task.eventTitle && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                              {task.eventTitle}
+                            </Typography>
+                          )}
+                          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                            {task.message}
+                          </Typography>
+                          {task.method === 'email' && task.draftEmail && (
+                            <Box sx={{ mt: 1.5, p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                                Suggested email to copy and paste:
+                              </Typography>
+                              <Typography
+                                component="pre"
+                                variant="body2"
+                                sx={{
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  fontFamily: 'inherit',
+                                  m: 0,
+                                }}
+                              >
+                                {task.draftEmail}
+                              </Typography>
+                              <Tooltip title="Copy email">
+                                <IconButton
+                                  size="small"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(task.draftEmail!);
+                                    setSuccess('Copied to clipboard');
+                                    setTimeout(() => setSuccess(''), 2000);
+                                  }}
+                                  sx={{ mt: 0.5 }}
+                                >
+                                  <CopyIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </Box>
+                          )}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </Box>
+                )}
+              </Box>
+              {/* Optimized route */}
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 600 }}>
+                  Planned route (store → opportunities, least distance)
+                </Typography>
+                {dayPlan.optimizedRoute.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No opportunities to visit. Add opportunities from the Opportunities page.
+                  </Typography>
+                ) : (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                      <RouteIcon fontSize="small" color="action" />
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                        Start: {dayPlan.storeName}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {dayPlan.storeAddress}
+                      </Typography>
+                    </Box>
+                    {dayPlan.optimizedRoute.map((opp, idx) => {
+                      const addr = [opp.address, opp.city, opp.state, opp.zipCode].filter(Boolean).join(', ') || '—';
+                      return (
+                        <Box
+                          key={opp.id}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1,
+                            pl: 2,
+                            borderLeft: 2,
+                            borderColor: 'divider',
+                          }}
+                        >
+                          <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 24 }}>
+                            {idx + 1}.
+                          </Typography>
+                          <Box sx={{ flex: 1 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                              {opp.name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {addr}
+                            </Typography>
+                          </Box>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Maps
+                          </Button>
+                        </Box>
+                      );
+                    })}
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<RouteIcon />}
+                      href={`https://www.google.com/maps/dir/${encodeURIComponent(dayPlan.storeAddress)}/${dayPlan.optimizedRoute.map((o) => [o.address, o.city, o.state, o.zipCode].filter(Boolean).join(', ')).filter(Boolean).map(encodeURIComponent).join('/')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      sx={{ mt: 1, alignSelf: 'flex-start' }}
+                    >
+                      Open full route in Google Maps
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+            </Box>
+          ) : null}
+        </Paper>
+      )}
 
       {/* Selected Date Events */}
       {selectedDate && selectedDateEvents.length > 0 && (
