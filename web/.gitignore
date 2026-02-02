@@ -29,7 +29,8 @@ dist-ssr
 *.sw?
 .vercel
 
-# Compiled API (built by build:api; do not commit)
-dist-api
-api/**/*.js
-api/**/*.js.map
+# Compiled server (build:handlers → dist-handlers, build:server → server.js)
+dist-handlers/
+dist-api/
+server.js
+server.js.map

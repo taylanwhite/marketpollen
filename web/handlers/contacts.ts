@@ -1,4 +1,5 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
+import { Prisma } from '@prisma/client';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore } from './lib/store-access.js';
@@ -63,12 +64,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!can) return res.status(404).json({ error: 'Store not found' });
 
   if (req.method === 'GET') {
-    const rows = await prisma.contact.findMany({
-      where: { store_id: storeId },
-      include: { reachouts: { orderBy: { date: 'desc' } } },
-      orderBy: [{ last_reachout_date: 'desc' }, { created_at: 'desc' }],
-    });
-    return res.status(200).json(rows.map(contactToJson));
+    try {
+      const rows = await prisma.contact.findMany({
+        where: { store_id: storeId },
+        include: { reachouts: { orderBy: { date: 'desc' } } },
+        orderBy: [{ last_reachout_date: 'desc' }, { created_at: 'desc' }],
+      });
+      return res.status(200).json(rows.map(contactToJson));
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2023') {
+        return res.status(400).json({ error: 'Invalid store id format' });
+      }
+      throw err;
+    }
   }
 
   if (req.method === 'POST') {
@@ -85,23 +93,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     if (!body?.businessId) return res.status(400).json({ error: 'businessId is required' });
     const contactIdApp = body.contactId || `contact-${Date.now()}`;
-    const row = await prisma.contact.create({
-      data: {
-        business_id: body.businessId,
-        store_id: storeId,
-        contact_id: contactIdApp,
-        first_name: body.firstName ?? null,
-        last_name: body.lastName ?? null,
-        email: body.email ?? null,
-        phone: body.phone ?? null,
-        employee_count: body.employeeCount ?? null,
-        personal_details: body.personalDetails ?? null,
-        status: body.status ?? 'new',
-        created_by: uid,
-      },
-      include: { reachouts: true },
-    });
-    return res.status(201).json(contactToJson(row));
+    try {
+      const row = await prisma.contact.create({
+        data: {
+          business_id: body.businessId,
+          store_id: storeId,
+          contact_id: contactIdApp,
+          first_name: body.firstName ?? null,
+          last_name: body.lastName ?? null,
+          email: body.email ?? null,
+          phone: body.phone ?? null,
+          employee_count: body.employeeCount ?? null,
+          personal_details: body.personalDetails ?? null,
+          status: body.status ?? 'new',
+          created_by: uid,
+        },
+        include: { reachouts: true },
+      });
+      return res.status(201).json(contactToJson(row));
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2023') {
+        return res.status(400).json({ error: 'Invalid store id format' });
+      }
+      throw err;
+    }
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

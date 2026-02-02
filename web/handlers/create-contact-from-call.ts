@@ -440,7 +440,7 @@ async function generateFollowUpSuggestion(contact: {
   const hasDonations = contact.reachouts.some(r => r.donation);
   const hasEmail = !!contact.email;
   const hasPhone = !!contact.phone;
-  const availableMethods = [];
+  const availableMethods: string[] = [];
   if (hasEmail) availableMethods.push('email');
   if (hasPhone) availableMethods.push('call', 'text');
   availableMethods.push('meeting', 'other');

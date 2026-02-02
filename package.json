@@ -1,0 +1,7 @@
+{
+  "name": "marketpollen-app",
+  "private": true,
+  "scripts": {
+    "vercel:test": "cd web && npm run build && cd .. && vercel dev --listen 3000"
+  }
+}
