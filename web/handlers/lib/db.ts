@@ -1,5 +1,10 @@
 import { PrismaClient } from '@prisma/client';
 
+// Resolve and sanitize DB URL (Vercel may use different var names or add quotes/whitespace)
+let url = process.env.DATABASE_URL ?? process.env.POSTGRES_PRISMA_URL ?? process.env.POSTGRES_URL ?? '';
+url = url.trim().replace(/^["']|["']$/g, '');
+if (url) process.env.DATABASE_URL = url;
+
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
 
 /**
