@@ -17,6 +17,8 @@
     "deploy": "vercel deploy --prod",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate"
   },
