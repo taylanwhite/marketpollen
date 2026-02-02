@@ -1,0 +1,21 @@
+/**
+ * MarketPollen — white base + yellow accent (no black surfaces)
+ */
+:root {
+  --brand-bg: #ffffff;
+  --brand-paper: #ffffff;
+  --brand-sidebar-bg: #f5f5f5;
+  --brand-appbar-bg: #ffffff;
+
+  --brand-text: #2d2d2d;
+  --brand-text-secondary: #5a5a5a;
+
+  /* Yellow accent */
+  --brand-yellow: #f5c842;
+  --brand-yellow-light: #f8d054;
+  --brand-yellow-dark: #e8b923;
+  --brand-honey: #f0c14b;
+  --brand-pollen: #f5c842;
+  --brand-amber: #d4a017;
+  --brand-gold: #e8b923;
+}

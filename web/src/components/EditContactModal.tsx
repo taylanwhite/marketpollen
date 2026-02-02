@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, collection, deleteDoc, query, where, getDocs, setDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
-import { useAuth } from '../contexts/AuthContext';
-import { Contact, Reachout, DonationData, MOUTH_VALUES, FileAttachment } from '../types';
+import { api } from '../api/client';
+import { Contact, Reachout, DonationData, MOUTH_VALUES } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
-import { uploadContactFile, deleteContactFile, formatFileSize, getFileIcon } from '../utils/fileUpload';
 import { AddressPicker, AddressData } from './AddressPicker';
 import {
   Dialog,
@@ -35,16 +32,6 @@ import {
   Divider,
   Collapse,
   Checkbox,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemSecondaryAction,
-  Paper,
-  LinearProgress,
-  Dialog as PreviewDialog,
-  DialogTitle as PreviewDialogTitle,
-  DialogContent as PreviewDialogContent,
-  DialogActions as PreviewDialogActions,
 } from '@mui/material';
 import {
   Close as CloseIcon,
@@ -59,11 +46,7 @@ import {
   CheckCircle as CheckCircleIcon,
   Cancel as CancelIcon,
   Edit as EditIcon,
-  AttachFile as AttachFileIcon,
   Delete as DeleteIcon,
-  Download as DownloadIcon,
-  Visibility as VisibilityIcon,
-  Search as SearchIcon,
   Settings as SettingsIcon,
   Business as BusinessIcon,
   Warning as WarningIcon,
@@ -97,7 +80,6 @@ const reachoutTypeIcons: Record<string, React.ReactElement> = {
 };
 
 export function EditContactModal({ contact, onClose, onSuccess }: EditContactModalProps) {
-  const { currentUser } = useAuth();
   const { permissions } = usePermissions();
   const { triggerRefresh, setLastDonationMouths } = useDonation();
   // Note: useVoiceInput removed - it was part of the "Add Reachout" tab that was removed
@@ -117,12 +99,6 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   const [editingReachoutNote, setEditingReachoutNote] = useState('');
   const [editingReachoutDonation, setEditingReachoutDonation] = useState<DonationData | null>(null);
   const [editingIncludeDonation, setEditingIncludeDonation] = useState(false);
-  const [uploadingFiles, setUploadingFiles] = useState<Map<string, number>>(new Map()); // file name -> progress
-  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
-  const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
-  const [previewTextContent, setPreviewTextContent] = useState<string>('');
-  const [loadingTextPreview, setLoadingTextPreview] = useState(false);
-  const [attachmentSearchTerm, setAttachmentSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -140,52 +116,22 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   });
   const [creatingBusiness, setCreatingBusiness] = useState(false);
 
-  // Load businesses for move selector
   useEffect(() => {
     const loadBusinesses = async () => {
       if (!permissions.currentStoreId) return;
-      
       try {
-        const businessQuery = query(
-          collection(db, 'businesses'),
-          where('storeId', '==', permissions.currentStoreId)
-        );
-        
-        const businessSnapshot = await getDocs(businessQuery);
+        const list = await api.get<Array<{ id: string; name: string }>>(`/businesses?storeId=${permissions.currentStoreId}`);
         const businessMap = new Map<string, string>();
-        businessSnapshot.forEach((doc) => {
-          const data = doc.data();
-          if (data.storeId === permissions.currentStoreId) {
-            businessMap.set(doc.id, data.name);
-          }
-        });
+        list.forEach((b) => businessMap.set(b.id, b.name));
         setBusinesses(businessMap);
       } catch (err) {
         console.error('Error loading businesses:', err);
       }
     };
-    
     loadBusinesses();
   }, [permissions.currentStoreId]);
 
   // Note: Voice input transcript handling removed - it was part of the "Add Reachout" tab that was removed
-
-  // Load text content for preview
-  useEffect(() => {
-    if (previewFile && (previewFile.mimeType.startsWith('text/') || previewFile.mimeType.includes('json') || previewFile.mimeType.includes('xml'))) {
-      setLoadingTextPreview(true);
-      fetch(previewFile.downloadURL)
-        .then(res => res.text())
-        .then(text => setPreviewTextContent(text))
-        .catch(err => {
-          console.error('Error loading text preview:', err);
-          setPreviewTextContent('Error loading file content');
-        })
-        .finally(() => setLoadingTextPreview(false));
-    } else {
-      setPreviewTextContent('');
-    }
-  }, [previewFile]);
 
   // Note: processWithAI and handleAddReachout functions removed - they were part of the "Add Reachout" tab that was removed
   // These functions are no longer used since reachouts are now added via the Quick Reachout button
@@ -232,7 +178,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         return r;
       });
 
-      await updateDoc(doc(db, 'contacts', contact.id), {
+      await api.patch(`/contacts/${contact.id}`, {
         reachouts: updatedReachouts
       });
 
@@ -270,91 +216,12 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     setEditingIncludeDonation(false);
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0 || !currentUser) return;
-
-    setError('');
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const fileName = file.name;
-      
-      try {
-        // Update upload progress
-        setUploadingFiles(prev => new Map(prev).set(fileName, 0));
-        
-        // Upload file
-        const fileAttachment = await uploadContactFile(contact.id, file, currentUser.uid);
-        
-        // Add to contact's files array
-        const currentFiles = contact.files || [];
-        const updatedFiles = [...currentFiles, fileAttachment];
-        
-        await updateDoc(doc(db, 'contacts', contact.id), {
-          files: updatedFiles
-        });
-        
-        setUploadingFiles(prev => {
-          const next = new Map(prev);
-          next.delete(fileName);
-          return next;
-        });
-        setSuccess(`File "${file.name}" uploaded successfully!`);
-        onSuccess();
-      } catch (err: any) {
-        console.error('Error uploading file:', err);
-        setError(`Failed to upload "${file.name}": ${err.message}`);
-        setUploadingFiles(prev => {
-          const next = new Map(prev);
-          next.delete(fileName);
-          return next;
-        });
-      }
-    }
-    
-    // Reset file input
-    event.target.value = '';
-  };
-
-  const handleFileDelete = async (fileId: string) => {
-    if (!window.confirm('Are you sure you want to delete this file?')) {
-      return;
-    }
-
-    const fileToDelete = contact.files?.find(f => f.id === fileId);
-    if (!fileToDelete) return;
-
-    setDeletingFileId(fileId);
-    setError('');
-
-    try {
-      // Delete from Firebase Storage
-      await deleteContactFile(fileToDelete.storagePath);
-      
-      // Remove from contact's files array
-      const updatedFiles = (contact.files || []).filter(f => f.id !== fileId);
-      
-      await updateDoc(doc(db, 'contacts', contact.id), {
-        files: updatedFiles
-      });
-      
-      setSuccess('File deleted successfully!');
-      onSuccess();
-    } catch (err: any) {
-      console.error('Error deleting file:', err);
-      setError(`Failed to delete file: ${err.message}`);
-    } finally {
-      setDeletingFileId(null);
-    }
-  };
-
   const handleUpdateContact = async () => {
     setLoading(true);
     setError('');
 
     try {
-      await updateDoc(doc(db, 'contacts', contact.id), {
+      await api.patch(`/contacts/${contact.id}`, {
         firstName: formData.firstName || null,
         lastName: formData.lastName || null,
         email: formData.email || null,
@@ -381,7 +248,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
 
   const handleDeleteContact = async () => {
     const contactName = getContactName();
-    const confirmMessage = `Are you sure you want to delete "${contactName}"?\n\nThis action cannot be undone and will delete:\n- All contact information\n- All reachout history\n- All donations\n- All attachments\n- All calendar events`;
+    const confirmMessage = `Are you sure you want to delete "${contactName}"?\n\nThis action cannot be undone and will delete:\n- All contact information\n- All reachout history\n- All donations\n- All calendar events`;
     
     if (!window.confirm(confirmMessage)) {
       return;
@@ -392,20 +259,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     setSuccess('');
 
     try {
-      // Delete all files associated with this contact
-      if (contact.files && contact.files.length > 0) {
-        for (const file of contact.files) {
-          try {
-            await deleteContactFile(file.storagePath);
-          } catch (fileError) {
-            console.error('Error deleting file:', fileError);
-            // Continue with deletion even if file deletion fails
-          }
-        }
-      }
-
-      // Delete the contact document
-      await deleteDoc(doc(db, 'contacts', contact.id));
+      await api.delete(`/contacts/${contact.id}`);
       
       setSuccess('Contact deleted successfully!');
       setTimeout(() => {
@@ -436,37 +290,18 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     setSuccess('');
 
     try {
-      const businessId = newBusinessName.trim().toUpperCase().replace(/\s+/g, '-');
-      await setDoc(doc(db, 'businesses', businessId), {
-        id: businessId,
+      const created = await api.post<{ id: string; name: string }>(`/businesses?storeId=${permissions.currentStoreId}`, {
         name: newBusinessName.trim(),
-        storeId: permissions.currentStoreId,
-        address: newBusinessAddress.address || null,
-        city: newBusinessAddress.city || null,
-        state: newBusinessAddress.state || null,
-        zipCode: newBusinessAddress.zipCode || null,
-        createdAt: new Date(),
-        createdBy: currentUser?.uid || ''
+        address: newBusinessAddress.address || undefined,
+        city: newBusinessAddress.city || undefined,
+        state: newBusinessAddress.state || undefined,
+        zipCode: newBusinessAddress.zipCode || undefined,
       });
-      
-      // Reload businesses
-      const businessQuery = query(
-        collection(db, 'businesses'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
-      
-      const businessSnapshot = await getDocs(businessQuery);
+      const list = await api.get<Array<{ id: string; name: string }>>(`/businesses?storeId=${permissions.currentStoreId}`);
       const businessMap = new Map<string, string>();
-      businessSnapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.storeId === permissions.currentStoreId) {
-          businessMap.set(doc.id, data.name);
-        }
-      });
+      list.forEach((b) => businessMap.set(b.id, b.name));
       setBusinesses(businessMap);
-      
-      // Select the newly created business
-      setSelectedBusinessId(businessId);
+      setSelectedBusinessId(created.id);
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
       setShowNewBusiness(false);
@@ -498,7 +333,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     setSuccess('');
 
     try {
-      await updateDoc(doc(db, 'contacts', contact.id), {
+      await api.patch(`/contacts/${contact.id}`, {
         businessId: selectedBusinessId
       });
       
@@ -561,12 +396,6 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
             </MenuItem>
             <MenuItem value={3}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
-                <AttachFileIcon fontSize="small" />
-                <Typography>Attachments ({contact.files?.length || 0})</Typography>
-              </Box>
-            </MenuItem>
-            <MenuItem value={4}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <SettingsIcon fontSize="small" />
                 <Typography>Settings</Typography>
               </Box>
@@ -583,16 +412,11 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
             scrollButtons="auto"
             allowScrollButtonsMobile
           >
-            <Tab label="Contact Details" />
-            <Tab label={`History (${contact.reachouts.length})`} />
+          <Tab label="Contact Details" />
+          <Tab label={`History (${contact.reachouts.length})`} />
             <Tab 
               label={`Donations (${contact.reachouts.filter(r => r.donation).length})`}
               icon={<CakeIcon sx={{ fontSize: 16 }} />}
-              iconPosition="start"
-            />
-            <Tab 
-              label={`Attachments (${contact.files?.length || 0})`}
-              icon={<AttachFileIcon sx={{ fontSize: 16 }} />}
               iconPosition="start"
             />
             <Tab 
@@ -600,7 +424,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
               icon={<SettingsIcon sx={{ fontSize: 16 }} />}
               iconPosition="start"
             />
-          </Tabs>
+        </Tabs>
         </Box>
       </Box>
 
@@ -914,8 +738,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                       <>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
                           <Typography variant="body1" sx={{ flex: 1 }}>
-                            {reachout.note}
-                          </Typography>
+                      {reachout.note}
+                    </Typography>
                           <IconButton
                             size="small"
                             onClick={() => handleEditReachout(reachout)}
@@ -924,15 +748,15 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                             <EditIcon fontSize="small" />
                           </IconButton>
                         </Box>
-                        {reachout.rawNotes && (
-                          <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
-                            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-                              Original Notes:
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>
-                              {reachout.rawNotes}
-                            </Typography>
-                          </Box>
+                    {reachout.rawNotes && (
+                      <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                          Original Notes:
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>
+                          {reachout.rawNotes}
+                        </Typography>
+                      </Box>
                         )}
                       </>
                     )}
@@ -1084,166 +908,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           })()}
         </TabPanel>
 
-        {/* Tab 3: Attachments */}
+        {/* Tab 3: Settings */}
         <TabPanel value={tabValue} index={3}>
-          <Box>
-            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
-              <AttachFileIcon />
-              Attached Files
-            </Typography>
-            
-            {/* File Upload */}
-            <Box sx={{ mb: 2 }}>
-              <input
-                accept="*/*"
-                style={{ display: 'none' }}
-                id="file-upload-input"
-                type="file"
-                multiple
-                onChange={handleFileUpload}
-                disabled={loading || uploadingFiles.size > 0}
-              />
-              <label htmlFor="file-upload-input">
-                <Button
-                  variant="outlined"
-                  component="span"
-                  startIcon={<AttachFileIcon />}
-                  disabled={loading || uploadingFiles.size > 0}
-                  sx={{ mb: 2 }}
-                >
-                  Upload Files
-                </Button>
-              </label>
-              
-              {/* Upload Progress */}
-              {uploadingFiles.size > 0 && (
-                <Box sx={{ mt: 1 }}>
-                  {Array.from(uploadingFiles.keys()).map((fileName) => (
-                    <Box key={fileName} sx={{ mb: 1 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        Uploading {fileName}...
-                      </Typography>
-                      <LinearProgress variant="indeterminate" sx={{ mt: 0.5 }} />
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </Box>
-
-            {/* Search Bar */}
-            {contact.files && contact.files.length > 0 && (
-              <Box sx={{ mb: 2 }}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  placeholder="Search attachments..."
-                  value={attachmentSearchTerm}
-                  onChange={(e) => setAttachmentSearchTerm(e.target.value)}
-                  InputProps={{
-                    startAdornment: <SearchIcon sx={{ color: 'text.secondary', mr: 1, fontSize: 20 }} />,
-                  }}
-                />
-              </Box>
-            )}
-
-            {/* File List */}
-            {(() => {
-              const filteredFiles = contact.files?.filter(file => 
-                file.name.toLowerCase().includes(attachmentSearchTerm.toLowerCase())
-              ) || [];
-
-              if (!contact.files || contact.files.length === 0) {
-                return (
-                  <Box sx={{ textAlign: 'center', py: 4 }}>
-                    <AttachFileIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
-                    <Typography color="text.secondary">No files attached</Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                      Upload files to attach them to this contact
-                    </Typography>
-                  </Box>
-                );
-              }
-
-              if (filteredFiles.length === 0) {
-                return (
-                  <Box sx={{ textAlign: 'center', py: 4 }}>
-                    <SearchIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
-                    <Typography color="text.secondary">No files match your search</Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                      Try a different search term
-                    </Typography>
-                  </Box>
-                );
-              }
-
-              return (
-                <Paper variant="outlined" sx={{ p: 2 }}>
-                  <List>
-                    {filteredFiles.map((file, index) => (
-                    <React.Fragment key={file.id}>
-                      {index > 0 && <Divider />}
-                      <ListItem>
-                        <ListItemText
-                          primary={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Typography variant="body2">{getFileIcon(file.mimeType)}</Typography>
-                              <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                                {file.name}
-                              </Typography>
-                            </Box>
-                          }
-                          secondary={
-                            <Typography variant="caption" color="text.secondary" component="span">
-                              {formatFileSize(file.size)} • {file.uploadedAt.toLocaleDateString()}
-                            </Typography>
-                          }
-                        />
-                        <ListItemSecondaryAction>
-                          <Box sx={{ display: 'flex', gap: 1 }}>
-                            <IconButton
-                              edge="end"
-                              size="small"
-                              onClick={() => setPreviewFile(file)}
-                              title="Preview"
-                            >
-                              <VisibilityIcon fontSize="small" />
-                            </IconButton>
-                            <IconButton
-                              edge="end"
-                              size="small"
-                              onClick={() => window.open(file.downloadURL, '_blank')}
-                              title="Download"
-                            >
-                              <DownloadIcon fontSize="small" />
-                            </IconButton>
-                            <IconButton
-                              edge="end"
-                              size="small"
-                              onClick={() => handleFileDelete(file.id)}
-                              disabled={deletingFileId === file.id}
-                              color="error"
-                              title="Delete"
-                            >
-                              {deletingFileId === file.id ? (
-                                <CircularProgress size={16} />
-                              ) : (
-                                <DeleteIcon fontSize="small" />
-                              )}
-                            </IconButton>
-                          </Box>
-                        </ListItemSecondaryAction>
-                      </ListItem>
-                    </React.Fragment>
-                    ))}
-                  </List>
-                </Paper>
-              );
-            })()}
-          </Box>
-        </TabPanel>
-
-        {/* Tab 4: Settings */}
-        <TabPanel value={tabValue} index={4}>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             <Alert severity="info" icon={<SettingsIcon />}>
               <Typography variant="body2">
@@ -1385,77 +1051,6 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
 
-      {/* File Preview Dialog */}
-      <PreviewDialog
-        open={!!previewFile}
-        onClose={() => setPreviewFile(null)}
-        maxWidth="md"
-        fullWidth
-      >
-        {previewFile && (
-          <>
-            <PreviewDialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Typography variant="h6">{previewFile.name}</Typography>
-              <IconButton onClick={() => setPreviewFile(null)} size="small">
-                <CloseIcon />
-              </IconButton>
-            </PreviewDialogTitle>
-            <PreviewDialogContent>
-              {previewFile.mimeType.startsWith('image/') ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 400 }}>
-                  <img
-                    src={previewFile.downloadURL}
-                    alt={previewFile.name}
-                    style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }}
-                  />
-                </Box>
-              ) : previewFile.mimeType.includes('pdf') ? (
-                <Box sx={{ width: '100%', height: '70vh' }}>
-                  <iframe
-                    src={previewFile.downloadURL}
-                    style={{ width: '100%', height: '100%', border: 'none' }}
-                    title={previewFile.name}
-                  />
-                </Box>
-              ) : previewFile.mimeType.startsWith('text/') || previewFile.mimeType.includes('json') || previewFile.mimeType.includes('xml') ? (
-                <Box sx={{ width: '100%', maxHeight: '70vh', overflow: 'auto' }}>
-                  {loadingTextPreview ? (
-                    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 200 }}>
-                      <CircularProgress />
-                    </Box>
-                  ) : (
-                    <Typography variant="body2" component="pre" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
-                      {previewTextContent}
-                    </Typography>
-                  )}
-                </Box>
-              ) : (
-                <Box sx={{ textAlign: 'center', py: 4 }}>
-                  <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-                    Preview not available for this file type
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    {previewFile.mimeType}
-                  </Typography>
-                  <Button
-                    variant="contained"
-                    startIcon={<DownloadIcon />}
-                    onClick={() => window.open(previewFile.downloadURL, '_blank')}
-                  >
-                    Download to View
-                  </Button>
-                </Box>
-              )}
-            </PreviewDialogContent>
-            <PreviewDialogActions>
-              <Button onClick={() => window.open(previewFile.downloadURL, '_blank')} startIcon={<DownloadIcon />}>
-                Download
-              </Button>
-              <Button onClick={() => setPreviewFile(null)}>Close</Button>
-            </PreviewDialogActions>
-          </>
-        )}
-      </PreviewDialog>
     </Dialog>
   );
 }

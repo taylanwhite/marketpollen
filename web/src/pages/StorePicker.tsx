@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { Store } from '../types';
+import { api } from '../api/client';
 import {
   Box,
   Card,
@@ -33,18 +32,12 @@ export function StorePicker() {
 
   const loadStores = async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'stores'));
-      const storeList: Store[] = [];
-      querySnapshot.forEach((doc) => {
-        storeList.push({ id: doc.id, ...doc.data() } as Store);
-      });
-      
+      const storeList = await api.get<Store[]>('/stores');
       const availableStores = isAdmin()
         ? storeList
         : storeList.filter(store =>
             permissions.storePermissions.some(p => p.storeId === store.id)
           );
-      
       availableStores.sort((a, b) => a.name.localeCompare(b.name));
       setStores(availableStores);
     } catch (error) {
@@ -76,11 +69,19 @@ export function StorePicker() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        bgcolor: '#ffffff',
         p: 2,
       }}
     >
-      <Card sx={{ maxWidth: 800, width: '100%' }}>
+      <Card
+        sx={{
+          maxWidth: 800,
+          width: '100%',
+          border: '1px solid',
+          borderColor: 'grey.200',
+          boxShadow: '0 2px 12px rgba(0, 0, 0, 0.06)',
+        }}
+      >
         <CardContent sx={{ p: 4 }}>
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
@@ -88,6 +89,13 @@ export function StorePicker() {
             </Box>
           ) : stores.length === 0 ? (
             <Box sx={{ textAlign: 'center' }}>
+              <Box
+                component="img"
+                src="/assets/navbar-logo-280x46.png"
+                srcSet="/assets/navbar-logo-560x92@2x.png 2x"
+                alt="Market Pollen"
+                sx={{ height: 46, width: 'auto', maxWidth: 280, objectFit: 'contain', mx: 'auto', mb: 2 }}
+              />
               <Typography variant="h4" sx={{ fontWeight: 700, mb: 2 }}>
                 🏢 No Stores Available
               </Typography>
@@ -119,6 +127,13 @@ export function StorePicker() {
           ) : (
             <>
               <Box sx={{ textAlign: 'center', mb: 4 }}>
+                <Box
+                  component="img"
+                  src="/assets/navbar-logo-280x46.png"
+                  srcSet="/assets/navbar-logo-560x92@2x.png 2x"
+                  alt="Market Pollen"
+                  sx={{ height: 46, width: 'auto', maxWidth: 280, objectFit: 'contain', mx: 'auto', mb: 1 }}
+                />
                 <Typography variant="h4" sx={{ fontWeight: 700, mb: 1 }}>
                   🏢 Select Your Store
                 </Typography>
@@ -134,22 +149,26 @@ export function StorePicker() {
                       sx={{
                         cursor: 'pointer',
                         transition: 'all 0.2s',
-                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                        color: 'white',
+                        bgcolor: '#ffffff',
+                        color: '#252525',
+                        border: '1px solid',
+                        borderColor: 'grey.200',
                         '&:hover': {
                           transform: 'translateY(-4px)',
-                          boxShadow: 4,
+                          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
+                          borderColor: '#f5c842',
+                          bgcolor: '#ffffff',
                         },
                       }}
                       onClick={() => handleSelectStore(store.id)}
                     >
                       <CardContent sx={{ textAlign: 'center', py: 3 }}>
-                        <LocationIcon sx={{ fontSize: 40, mb: 1 }} />
-                        <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                        <LocationIcon sx={{ fontSize: 40, mb: 1, color: '#252525' }} />
+                        <Typography variant="h6" sx={{ fontWeight: 600, color: '#252525' }}>
                           {store.name}
                         </Typography>
                         {store.city && (
-                          <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                          <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                             {store.city}, {store.state}
                           </Typography>
                         )}

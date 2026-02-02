@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
-import { Business } from '../types';
+import { Business, Contact } from '../types';
 import { AddressPicker } from '../components/AddressPicker';
 import {
   Box,
@@ -75,78 +74,37 @@ export function Businesses() {
 
   const loadBusinesses = async () => {
     try {
-      // Everyone (including global admins) must have a store selected
       if (!permissions.currentStoreId) {
         setBusinesses([]);
         setLoading(false);
         return;
       }
+      const storeId = permissions.currentStoreId;
 
-      // Load businesses for current store (filtered for everyone)
-      const businessQuery = query(
-        collection(db, 'businesses'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
+      const [businessList, contactsList] = await Promise.all([
+        api.get<Business[]>(`/businesses?storeId=${storeId}`),
+        api.get<Contact[]>(`/contacts?storeId=${storeId}`),
+      ]);
 
-      const businessSnapshot = await getDocs(businessQuery);
-      const businessList: Business[] = [];
-      businessSnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        // Double-check storeId to ensure we only show businesses for this store
-        if (data.storeId === permissions.currentStoreId) {
-          businessList.push({
-            id: docSnap.id,
-            name: data.name,
-            storeId: data.storeId,
-            address: data.address || null,
-            city: data.city || null,
-            state: data.state || null,
-            zipCode: data.zipCode || null,
-            createdAt: data.createdAt?.toDate() || new Date(),
-            createdBy: data.createdBy
-          });
-        }
-      });
-
-      // Load contacts for current store (filtered for everyone)
-      const contactsQuery = query(
-        collection(db, 'contacts'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
-
-      const contactsSnapshot = await getDocs(contactsQuery);
-      const contactsByBusiness = new Map<string, any[]>();
-      
-      contactsSnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Double-check storeId to ensure we only show contacts for this store
-        if (data.storeId !== permissions.currentStoreId) {
-          return; // Skip this contact
-        }
-        const businessId = data.businessId;
-        if (!contactsByBusiness.has(businessId)) {
-          contactsByBusiness.set(businessId, []);
-        }
-        contactsByBusiness.get(businessId)!.push(data);
-      });
+      const contactsByBusiness = new Map<string, Contact[]>();
+      for (const c of contactsList) {
+        const list = contactsByBusiness.get(c.businessId) || [];
+        list.push(c);
+        contactsByBusiness.set(c.businessId, list);
+      }
 
       const businessesWithStats: BusinessWithStats[] = businessList.map(business => {
         const contacts = contactsByBusiness.get(business.id) || [];
         let lastReachout: Date | undefined;
-
         contacts.forEach(contact => {
-          if (contact.lastReachoutDate) {
-            const date = contact.lastReachoutDate.toDate();
-            if (!lastReachout || date > lastReachout) {
-              lastReachout = date;
-            }
-          }
+          const d = contact.lastReachoutDate instanceof Date ? contact.lastReachoutDate : contact.lastReachoutDate ? new Date(contact.lastReachoutDate) : undefined;
+          if (d && (!lastReachout || d > lastReachout)) lastReachout = d;
         });
-
         return {
           ...business,
+          createdAt: business.createdAt instanceof Date ? business.createdAt : new Date(business.createdAt),
           contactCount: contacts.length,
-          lastReachout
+          lastReachout,
         };
       });
 
@@ -206,12 +164,12 @@ export function Businesses() {
     }
 
     try {
-      await updateDoc(doc(db, 'businesses', editingBusiness.id), {
+      await api.patch(`/businesses/${editingBusiness.id}`, {
         name: editFormData.name.trim(),
-        address: editFormData.address.trim() || null,
-        city: editFormData.city.trim() || null,
-        state: editFormData.state.trim().toUpperCase() || null,
-        zipCode: editFormData.zipCode.trim() || null
+        address: editFormData.address.trim() || undefined,
+        city: editFormData.city.trim() || undefined,
+        state: editFormData.state.trim().toUpperCase() || undefined,
+        zipCode: editFormData.zipCode.trim() || undefined
       });
 
       setSuccess('Business updated successfully!');

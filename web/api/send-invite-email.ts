@@ -45,12 +45,12 @@ export default async function handler(
 
     // Send invitation email
     // Resend provides onboarding@resend.dev as a default sender (no domain verification needed)
-    const fromEmail = process.env.RESEND_FROM_EMAIL || 'Bundt Marketer <onboarding@resend.dev>';
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'MarketPollen <onboarding@resend.dev>';
     
     const { data, error } = await resend.emails.send({
       from: fromEmail,
       to: email,
-      subject: 'You\'re Invited to Bundt Marketer',
+      subject: 'You\'re Invited to MarketPollen',
       html: `
         <!DOCTYPE html>
         <html>
@@ -59,18 +59,18 @@ export default async function handler(
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
           </head>
           <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-              <h1 style="color: white; margin: 0; font-size: 32px;">🎂 Bundt Marketer</h1>
+            <div style="background: #1a1a1a; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+              <h1 style="color: #f4c430; margin: 0; font-size: 32px;">MarketPollen</h1>
             </div>
-            <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
-              <h2 style="color: #667eea; margin-top: 0;">You're Invited!</h2>
-              <p>You've been invited to join Bundt Marketer${isGlobalAdmin ? ' as a Global Administrator' : ''}.</p>
+            <div style="background: #fefce8; padding: 30px; border-radius: 0 0 10px 10px;">
+              <h2 style="color: #1a1a1a; margin-top: 0;">You're Invited!</h2>
+              <p>You've been invited to join MarketPollen${isGlobalAdmin ? ' as a Global Administrator' : ''}.</p>
               ${invitedByEmail ? `<p><strong>Invited by:</strong> ${invitedByEmail}</p>` : ''}
               <p>Click the button below to create your account and get started:</p>
               <div style="text-align: center; margin: 30px 0;">
                 <a href="${signupUrl}" 
-                   style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                          color: white; 
+                   style="background: #f4c430; 
+                          color: #1a1a1a; 
                           padding: 15px 30px; 
                           text-decoration: none; 
                           border-radius: 5px; 
@@ -82,24 +82,24 @@ export default async function handler(
               </div>
               <p style="color: #666; font-size: 14px; margin-top: 30px;">
                 Or copy and paste this link into your browser:<br>
-                <a href="${signupUrl}" style="color: #667eea; word-break: break-all;">${signupUrl}</a>
+                <a href="${signupUrl}" style="color: #d4a017; word-break: break-all;">${signupUrl}</a>
               </p>
               <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
               <p style="color: #666; font-size: 12px; margin: 0;">
-                This invitation was sent by Bundt Marketer. If you didn't expect this email, you can safely ignore it.
+                This invitation was sent by MarketPollen. If you didn't expect this email, you can safely ignore it.
               </p>
             </div>
           </body>
         </html>
       `,
       text: `
-You've been invited to join Bundt Marketer${isGlobalAdmin ? ' as a Global Administrator' : ''}.
+You've been invited to join MarketPollen${isGlobalAdmin ? ' as a Global Administrator' : ''}.
 
 ${invitedByEmail ? `Invited by: ${invitedByEmail}\n\n` : ''}Click the link below to create your account:
 
 ${signupUrl}
 
-This invitation was sent by Bundt Marketer. If you didn't expect this email, you can safely ignore it.
+This invitation was sent by MarketPollen. If you didn't expect this email, you can safely ignore it.
       `.trim(),
     });
 

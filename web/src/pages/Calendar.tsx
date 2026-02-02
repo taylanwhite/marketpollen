@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, getDocs, query, where, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useAuth } from '../contexts/AuthContext';
 import { CalendarEvent as CalendarEventType, Contact } from '../types';
@@ -97,108 +96,79 @@ export function Calendar() {
 
     try {
       setLoading(true);
-      
-      // Load calendar events for current store
-      // Note: Sorting in memory to avoid requiring a Firestore composite index
-      const eventsQuery = query(
-        collection(db, 'calendarEvents'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
+      const storeId = permissions.currentStoreId;
 
-      const eventsSnapshot = await getDocs(eventsQuery);
+      const [eventsList, contactsList] = await Promise.all([
+        api.get<Array<{ id: string; date: string | Date; title: string; type?: string; contactId?: string; priority?: string; status?: string; description?: string; startTime?: string; endTime?: string }>>(`/calendar-events?storeId=${storeId}`),
+        api.get<Contact[]>(`/contacts?storeId=${storeId}`),
+      ]);
+
       const eventsData: CalendarEventDisplay[] = [];
       const contactsMap = new Map<string, Contact>();
 
-      eventsSnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data.storeId === permissions.currentStoreId) {
-          let eventDate = data.date?.toDate() || new Date();
-          // Normalize to local midnight to avoid date shifts and ensure accurate day-based filtering
-          // Extract the date components in local timezone, then create a new date at midnight
-          const year = eventDate.getFullYear();
-          const month = eventDate.getMonth();
-          const day = eventDate.getDate();
-          // Always normalize to midnight local time for accurate date comparison
-          eventDate = new Date(year, month, day, 0, 0, 0, 0);
-          
-          eventsData.push({
-            id: docSnap.id,
-            date: eventDate,
-            title: data.title || 'Untitled Event',
-            type: data.type || 'other',
-            contactId: data.contactId || null,
-            contactName: data.contactName || null,
-            priority: data.priority || null,
-            status: data.status || 'scheduled',
-            description: data.description || null,
-            startTime: data.startTime || null,
-            endTime: data.endTime || null,
-            location: data.location || null,
-          });
-        }
-      });
+      for (const c of contactsList) {
+        const contact: Contact = {
+          ...c,
+          reachouts: (c.reachouts || []).map((r: any) => ({
+            ...r,
+            date: r.date instanceof Date ? r.date : new Date(r.date),
+          })),
+          createdAt: c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt),
+        };
+        contactsMap.set(c.id, contact);
+      }
 
-      // Load contacts for contact name resolution and to show reachouts as events
-      const contactsQuery = query(
-        collection(db, 'contacts'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
+      for (const data of eventsList) {
+        let eventDate = data.date instanceof Date ? data.date : new Date(data.date);
+        const year = eventDate.getFullYear();
+        const month = eventDate.getMonth();
+        const day = eventDate.getDate();
+        eventDate = new Date(year, month, day, 0, 0, 0, 0);
+        eventsData.push({
+          id: data.id,
+          date: eventDate,
+          title: data.title || 'Untitled Event',
+          type: (data.type || 'other') as CalendarEventType['type'],
+          contactId: data.contactId || null,
+          contactName: undefined,
+          priority: (data.priority as 'low' | 'medium' | 'high') || null,
+          status: (data.status as 'scheduled' | 'completed' | 'cancelled') || 'scheduled',
+          description: data.description || null,
+          startTime: data.startTime || null,
+          endTime: data.endTime || null,
+          location: undefined,
+        });
+      }
 
-      const contactsSnapshot = await getDocs(contactsQuery);
-      
-      contactsSnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data.storeId === permissions.currentStoreId) {
-          const contact: Contact = {
-            id: docSnap.id,
-            ...data,
-            reachouts: (data.reachouts || []).map((r: any) => ({
-              ...r,
-              date: r.date?.toDate() || new Date(),
-            })),
-            createdAt: data.createdAt?.toDate() || new Date(),
-          } as Contact;
-          
-          contactsMap.set(docSnap.id, contact);
-
-          // Create calendar events for reachouts that don't have corresponding calendar events
-          // (for backward compatibility with existing data)
-          contact.reachouts.forEach(reachout => {
-            const reachoutId = `reachout-${contact.id}-${reachout.id}`;
-            const existingEvent = eventsData.find(e => 
-              e.contactId === contact.id && 
-              e.type === 'reachout' &&
-              Math.abs(new Date(e.date).getTime() - new Date(reachout.date).getTime()) < 60000 // Within 1 minute
-            );
-            
-            if (!existingEvent) {
-              const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact';
-              // Normalize reachout date to midnight local time for accurate date comparison
-              const reachoutDate = reachout.date instanceof Date ? reachout.date : new Date(reachout.date);
-              const normalizedReachoutDate = new Date(
-                reachoutDate.getFullYear(),
-                reachoutDate.getMonth(),
-                reachoutDate.getDate(),
-                0, 0, 0, 0
-              );
-              eventsData.push({
-                id: reachoutId,
-                date: normalizedReachoutDate,
-                title: `Reachout: ${contactName}`,
-                type: (reachout.type || 'other') as CalendarEventType['type'],
-                contactId: contact.id,
-                contactName: contactName,
-                priority: null,
-                status: 'completed', // Past reachouts are completed
-                description: reachout.note || null,
-                startTime: null,
-                endTime: null,
-                location: null,
-              });
-            }
-          });
-        }
-      });
+      for (const contact of contactsMap.values()) {
+        contact.reachouts.forEach(reachout => {
+          const reachoutId = `reachout-${contact.id}-${reachout.id}`;
+          const existingEvent = eventsData.find(e =>
+            e.contactId === contact.id &&
+            e.type === 'reachout' &&
+            Math.abs(new Date(e.date).getTime() - new Date(reachout.date).getTime()) < 60000
+          );
+          if (!existingEvent) {
+            const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact';
+            const reachoutDate = reachout.date instanceof Date ? reachout.date : new Date(reachout.date);
+            const normalizedReachoutDate = new Date(reachoutDate.getFullYear(), reachoutDate.getMonth(), reachoutDate.getDate(), 0, 0, 0, 0);
+            eventsData.push({
+              id: reachoutId,
+              date: normalizedReachoutDate,
+              title: `Reachout: ${contactName}`,
+              type: (reachout.type || 'other') as CalendarEventType['type'],
+              contactId: contact.id,
+              contactName: contactName,
+              priority: null,
+              status: 'completed',
+              description: reachout.note || null,
+              startTime: null,
+              endTime: null,
+              location: null,
+            });
+          }
+        });
+      }
 
       // Resolve contact names for calendar events
       eventsData.forEach(event => {
@@ -408,14 +378,33 @@ export function Calendar() {
         cancelledAt: null,
       };
 
-      if (editingEvent) {
-        await updateDoc(doc(db, 'calendarEvents', editingEvent.id), {
-          ...eventData,
-          updatedAt: new Date(),
+      if (editingEvent && !editingEvent.id.startsWith('reachout-')) {
+        await api.patch(`/calendar-events/${editingEvent.id}`, {
+          title: eventData.title,
+          description: eventData.description,
+          date: eventData.date,
+          startTime: eventData.startTime,
+          endTime: eventData.endTime,
+          type: eventData.type,
+          contactId: eventData.contactId,
+          businessId: eventData.businessId,
+          priority: eventData.priority,
+          status: eventData.status,
         });
         setSuccess('Event updated successfully!');
-      } else {
-        await addDoc(collection(db, 'calendarEvents'), eventData);
+      } else if (!editingEvent) {
+        await api.post(`/calendar-events?storeId=${permissions.currentStoreId}`, {
+          title: eventData.title,
+          description: eventData.description,
+          date: eventData.date,
+          startTime: eventData.startTime,
+          endTime: eventData.endTime,
+          type: eventData.type,
+          contactId: eventData.contactId || undefined,
+          businessId: eventData.businessId || undefined,
+          priority: eventData.priority,
+          status: eventData.status,
+        });
         setSuccess('Event created successfully!');
       }
 
@@ -427,12 +416,13 @@ export function Calendar() {
   };
 
   const handleDeleteEvent = async (eventId: string) => {
+    if (eventId.startsWith('reachout-')) return;
     if (!window.confirm('Are you sure you want to delete this event?')) {
       return;
     }
 
     try {
-      await deleteDoc(doc(db, 'calendarEvents', eventId));
+      await api.delete(`/calendar-events/${eventId}`);
       setSuccess('Event deleted successfully!');
       await loadCalendarData();
     } catch (err: any) {
@@ -441,11 +431,11 @@ export function Calendar() {
   };
 
   const handleCompleteEvent = async (event: CalendarEventDisplay) => {
+    if (event.id.startsWith('reachout-')) return;
     try {
-      await updateDoc(doc(db, 'calendarEvents', event.id), {
+      await api.patch(`/calendar-events/${event.id}`, {
         status: 'completed',
         completedAt: new Date(),
-        updatedAt: new Date(),
       });
       setSuccess('Event marked as completed!');
       await loadCalendarData();
@@ -455,11 +445,10 @@ export function Calendar() {
   };
 
   const handleCancelEvent = async (event: CalendarEventDisplay) => {
+    if (event.id.startsWith('reachout-')) return;
     try {
-      await updateDoc(doc(db, 'calendarEvents', event.id), {
+      await api.patch(`/calendar-events/${event.id}`, {
         status: 'cancelled',
-        cancelledAt: new Date(),
-        updatedAt: new Date(),
       });
       setSuccess('Event cancelled!');
       await loadCalendarData();

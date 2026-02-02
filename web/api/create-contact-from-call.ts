@@ -1,7 +1,8 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import OpenAI from 'openai';
 import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
-import { getFirestore, Timestamp, FieldValue, Firestore } from 'firebase-admin/firestore';
+import { prisma } from './lib/db.js';
+import type { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -153,10 +154,9 @@ let apiKeyCache: { key: string; timestamp: number } | null = null;
 const API_KEY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Validate API key against Firestore
- * Uses caching to avoid reading from Firestore on every request
+ * Validate API key (env fallback; Neon api_keys uses key_hash for production)
  */
-async function validateApiKey(providedKey: string, db: any): Promise<boolean> {
+async function validateApiKey(providedKey: string): Promise<boolean> {
   // First check environment variables (backward compatibility)
   const envKey = process.env.VOICE_API_KEY || process.env.AI_PHONE_API_KEY;
   if (envKey && providedKey === envKey) {
@@ -169,54 +169,30 @@ async function validateApiKey(providedKey: string, db: any): Promise<boolean> {
   }
 
   try {
-    // Read from Firestore apiKeys collection
-    // Expected structure: apiKeys/{docId} with field: key (string)
-    const apiKeysSnapshot = await db.collection('apiKeys').limit(10).get();
-    
-    let validKey: string | null = null;
-    apiKeysSnapshot.forEach((doc: any) => {
-      const data = doc.data();
-      if (data.key && typeof data.key === 'string') {
-        // Use the first valid key found, or check all if multiple
-        if (!validKey) {
-          validKey = data.key;
-        }
-        // If provided key matches any stored key, it's valid
-        if (providedKey === data.key) {
-          validKey = data.key;
-        }
+    // API keys are stored in Neon api_keys (key_hash); for serverless we use env fallback
+    if (envKey) {
+      const valid = providedKey === envKey;
+      if (valid) {
+        apiKeyCache = { key: envKey, timestamp: Date.now() };
       }
-    });
-
-    if (validKey) {
-      // Update cache
-      apiKeyCache = {
-        key: validKey,
-        timestamp: Date.now()
-      };
-      return providedKey === validKey;
+      return valid;
     }
-
-    // No valid key found in Firestore
     return false;
   } catch (error) {
-    console.error('Error validating API key from Firestore:', error);
-    // Fallback to environment variable if Firestore read fails
-    return envKey ? providedKey === envKey : false;
+    console.error('Error validating API key:', error);
+    return false;
   }
 }
 
 /**
  * Look up store by name using AI for fuzzy matching
  */
-async function lookupStoreByName(storeName: string, db: any): Promise<string | null> {
-  // First try exact match (case-insensitive)
-  const storesSnapshot = await db.collection('stores').get();
-  const stores: Array<{ id: string; name: string }> = [];
-  
-  storesSnapshot.forEach((doc: any) => {
-    stores.push({ id: doc.id, name: doc.data().name || '' });
-  });
+async function lookupStoreByName(storeName: string, prisma: PrismaClient): Promise<string | null> {
+  const rows = await prisma.store.findMany({ select: { id: true, name: true } });
+  const stores: Array<{ id: string; name: string }> = rows.map((r) => ({
+    id: String(r.id),
+    name: r.name || '',
+  }));
 
   // Exact match (case-insensitive)
   const exactMatch = stores.find(s => s.name.toLowerCase() === storeName.toLowerCase());
@@ -280,16 +256,15 @@ Find the best match:`;
 /**
  * Look up business by name within a store using AI for fuzzy matching
  */
-async function lookupBusinessByName(businessName: string, storeId: string, db: any): Promise<string | null> {
-  // Query businesses for this store
-  const businessesSnapshot = await db.collection('businesses')
-    .where('storeId', '==', storeId)
-    .get();
-  
-  const businesses: Array<{ id: string; name: string }> = [];
-  businessesSnapshot.forEach((doc: any) => {
-    businesses.push({ id: doc.id, name: doc.data().name || '' });
+async function lookupBusinessByName(businessName: string, storeId: string, prisma: PrismaClient): Promise<string | null> {
+  const rows = await prisma.business.findMany({
+    where: { store_id: storeId },
+    select: { id: true, name: true },
   });
+  const businesses: Array<{ id: string; name: string }> = rows.map((r) => ({
+    id: String(r.id),
+    name: r.name || '',
+  }));
 
   // Exact match (case-insensitive)
   const exactMatch = businesses.find(b => b.name.toLowerCase() === businessName.toLowerCase());
@@ -588,7 +563,7 @@ export default async function handler(
   // if (apiKey) {
   //   const app = getAdminApp();
   //   const db = getFirestore(app);
-  //   const isValid = await validateApiKey(apiKey, db);
+  //   const isValid = await validateApiKey(apiKey);
   //   if (!isValid) {
   //     return res.status(401).json({ error: 'Invalid API key' });
   //   }
@@ -617,22 +592,8 @@ export default async function handler(
   }
 
   try {
-    // Initialize Firebase Admin
-    let app: App;
-    let db: Firestore;
-    try {
-      app = getAdminApp();
-      db = getFirestore(app);
-    } catch (firebaseError: any) {
-      console.error('Firebase Admin initialization failed:', firebaseError);
-      return res.status(500).json({ 
-        error: `Firebase initialization failed: ${firebaseError.message || 'Unknown error'}`,
-        details: process.env.NODE_ENV === 'development' ? firebaseError.stack : undefined
-      });
-    }
-
     // Step 1: Look up store by name
-    const finalStoreId = await lookupStoreByName(storeName, db);
+    const finalStoreId = await lookupStoreByName(storeName, prisma);
     if (!finalStoreId) {
       return res.status(400).json({ 
         error: `Store "${storeName}" not found. Please check the store name.` 
@@ -643,50 +604,35 @@ export default async function handler(
     const extracted = await extractContactInfoFromNotes(notes);
 
     // Step 3: Handle business (look up by name or create if needed)
-    // Try to find existing business by name
-    let finalBusinessId = await lookupBusinessByName(businessName, finalStoreId, db);
+    let finalBusinessId = await lookupBusinessByName(businessName, finalStoreId, prisma);
     
-    // If not found, create new business
     if (!finalBusinessId) {
-      const businessIdSlug = businessName.trim().toUpperCase().replace(/\s+/g, '-').replace(/[^A-Z0-9-]/g, '');
-      const businessRef = db.collection('businesses').doc(businessIdSlug);
-      const businessDoc = await businessRef.get();
-
-      if (!businessDoc.exists) {
-        await businessRef.set({
-          id: businessIdSlug,
+      const newBiz = await prisma.business.create({
+        data: {
+          store_id: finalStoreId,
           name: businessName.trim(),
-          storeId: finalStoreId,
-          address: null,
-          city: null,
-          state: null,
-          zipCode: null,
-          createdAt: Timestamp.now(),
-          createdBy: 'ai-phone-system',
-        });
-      }
-      finalBusinessId = businessIdSlug;
+          created_by: 'ai-phone-system',
+        },
+      });
+      finalBusinessId = newBiz.id;
     }
 
-    // Step 3: Generate contact ID
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const contactId = `CONT-${timestamp}-${random}`;
+    const contactIdApp = `CONT-${timestamp}-${random}`;
+    const now = new Date();
+    const nowIso = now.toISOString();
 
-    // Step 4: Create initial reachout
-    const now = Timestamp.now();
+    const d = extracted.donation || {};
     const initialReachout = {
-      id: `reach-${Date.now()}`,
-      date: now,
       note: extracted.reachoutNote || 'Contact created from AI phone call',
       rawNotes: notes,
       createdBy: 'ai-phone-system',
-      type: 'call',
+      type: 'call' as const,
       storeId: finalStoreId,
-      donation: extracted.donation || undefined,
+      donation: extracted.donation,
     };
 
-    // Step 6: Generate follow-up suggestion
     let suggestedFollowUpDate: Date | null = null;
     let suggestedFollowUpMethod: 'email' | 'call' | 'meeting' | 'text' | 'other' | null = null;
     let suggestedFollowUpNote: string | null = null;
@@ -696,25 +642,18 @@ export default async function handler(
       const aiSuggestion = await generateFollowUpSuggestion({
         firstName: extracted.firstName,
         lastName: extracted.lastName,
-        reachouts: [{
-          date: new Date(),
-          note: extracted.reachoutNote || '',
-          type: 'call',
-          donation: extracted.donation
-        }],
+        reachouts: [{ date: new Date(), note: extracted.reachoutNote || '', type: 'call', donation: extracted.donation }],
         personalDetails: extracted.personalDetails,
         status: 'new',
         email: extracted.email,
         phone: extracted.phone,
       });
-
       suggestedFollowUpDate = new Date(aiSuggestion.suggestedDate);
       suggestedFollowUpMethod = aiSuggestion.suggestedMethod;
       suggestedFollowUpNote = aiSuggestion.message;
       suggestedFollowUpPriority = aiSuggestion.priority;
     } catch (aiError) {
       console.error('AI follow-up generation failed:', aiError);
-      // Fallback
       const fallbackDate = new Date();
       fallbackDate.setDate(fallbackDate.getDate() + 3);
       suggestedFollowUpDate = fallbackDate;
@@ -723,71 +662,106 @@ export default async function handler(
       suggestedFollowUpPriority = 'medium';
     }
 
-    // Step 7: Create contact
+    const contactRow = await prisma.contact.create({
+      data: {
+        business_id: finalBusinessId,
+        store_id: finalStoreId,
+        contact_id: contactIdApp,
+        first_name: extracted.firstName ?? null,
+        last_name: extracted.lastName ?? null,
+        email: extracted.email ?? null,
+        phone: extracted.phone ?? null,
+        personal_details: extracted.personalDetails ?? null,
+        suggested_follow_up_date: suggestedFollowUpDate ?? null,
+        suggested_follow_up_method: suggestedFollowUpMethod ?? null,
+        suggested_follow_up_note: suggestedFollowUpNote ?? null,
+        suggested_follow_up_priority: suggestedFollowUpPriority ?? null,
+        last_reachout_date: now,
+        status: 'new',
+        created_by: 'ai-phone-system',
+      },
+    });
+    const createdContactId = contactRow.id;
+
+    await prisma.reachout.create({
+      data: {
+        contact_id: createdContactId,
+        date: now,
+        note: initialReachout.note,
+        raw_notes: initialReachout.rawNotes ?? null,
+        created_by: 'ai-phone-system',
+        type: 'call',
+        store_id: finalStoreId,
+        free_bundlet_card: d.freeBundletCard ?? 0,
+        dozen_bundtinis: d.dozenBundtinis ?? 0,
+        cake_8inch: d.cake8inch ?? 0,
+        cake_10inch: d.cake10inch ?? 0,
+        sample_tray: d.sampleTray ?? 0,
+        bundtlet_tower: d.bundtletTower ?? 0,
+        cakes_donated_notes: d.cakesDonatedNotes ?? null,
+        ordered_from_us: d.orderedFromUs === true,
+        followed_up: d.followedUp === true,
+      },
+    });
+
+    const contactName = `${extracted.firstName || ''} ${extracted.lastName || ''}`.trim() || extracted.email || 'Contact';
+    const normalizedReachoutDate = new Date();
+    normalizedReachoutDate.setHours(0, 0, 0, 0);
+
+    await prisma.calendarEvent.create({
+      data: {
+        store_id: finalStoreId,
+        title: `Reachout: ${contactName}`,
+        description: extracted.reachoutNote || notes || null,
+        date: normalizedReachoutDate,
+        type: 'reachout',
+        contact_id: createdContactId,
+        business_id: finalBusinessId,
+        priority: 'medium',
+        status: 'completed',
+        created_by: 'ai-phone-system',
+        completed_at: now,
+      },
+    });
+
+    if (suggestedFollowUpDate) {
+      const normalizedFollowUpDate = new Date(suggestedFollowUpDate);
+      normalizedFollowUpDate.setHours(0, 0, 0, 0);
+      await prisma.calendarEvent.create({
+        data: {
+          store_id: finalStoreId,
+          title: `Follow-up: ${contactName}`,
+          description: suggestedFollowUpNote || `Follow up with ${contactName}`,
+          date: normalizedFollowUpDate,
+          type: 'followup',
+          contact_id: createdContactId,
+          business_id: finalBusinessId,
+          priority: (suggestedFollowUpPriority as 'low' | 'medium' | 'high') || 'medium',
+          status: 'scheduled',
+          created_by: 'ai-phone-system',
+        },
+      });
+    }
+
     const contactData = {
       businessId: finalBusinessId,
       storeId: finalStoreId,
-      contactId: contactId,
+      contactId: contactIdApp,
       firstName: extracted.firstName || null,
       lastName: extracted.lastName || null,
       email: extracted.email || null,
       phone: extracted.phone || null,
       personalDetails: extracted.personalDetails || null,
-      suggestedFollowUpDate: suggestedFollowUpDate ? Timestamp.fromDate(suggestedFollowUpDate) : null,
+      suggestedFollowUpDate: suggestedFollowUpDate?.toISOString() || null,
       suggestedFollowUpMethod: suggestedFollowUpMethod || null,
       suggestedFollowUpNote: suggestedFollowUpNote || null,
       suggestedFollowUpPriority: suggestedFollowUpPriority || null,
       reachouts: [initialReachout],
-      createdAt: now,
+      createdAt: nowIso,
       createdBy: 'ai-phone-system',
-      lastReachoutDate: now,
+      lastReachoutDate: nowIso,
       status: 'new',
     };
-
-    const contactRef = await db.collection('contacts').add(contactData);
-    const createdContactId = contactRef.id;
-
-    // Step 8: Create calendar events
-    const contactName = `${extracted.firstName || ''} ${extracted.lastName || ''}`.trim() || extracted.email || 'Contact';
-
-    // Calendar event for the reachout (normalized to midnight local time)
-    const normalizedReachoutDate = new Date();
-    normalizedReachoutDate.setHours(0, 0, 0, 0);
-    
-    await db.collection('calendarEvents').add({
-      storeId: finalStoreId,
-      title: `Reachout: ${contactName}`,
-      description: extracted.reachoutNote || notes || null,
-      date: Timestamp.fromDate(normalizedReachoutDate),
-      type: 'reachout',
-      contactId: createdContactId,
-      businessId: finalBusinessId,
-      priority: 'medium',
-      status: 'completed',
-      createdBy: 'ai-phone-system',
-      createdAt: now,
-      completedAt: now,
-    });
-
-    // Calendar event for follow-up (normalized to midnight local time)
-    if (suggestedFollowUpDate) {
-      const normalizedFollowUpDate = new Date(suggestedFollowUpDate);
-      normalizedFollowUpDate.setHours(0, 0, 0, 0);
-
-      await db.collection('calendarEvents').add({
-        storeId: finalStoreId,
-        title: `Follow-up: ${contactName}`,
-        description: suggestedFollowUpNote || `Follow up with ${contactName}`,
-        date: Timestamp.fromDate(normalizedFollowUpDate),
-        type: 'followup',
-        contactId: createdContactId,
-        businessId: finalBusinessId,
-        priority: suggestedFollowUpPriority || 'medium',
-        status: 'scheduled',
-        createdBy: 'ai-phone-system',
-        createdAt: now,
-      });
-    }
 
     return res.status(200).json({
       success: true,

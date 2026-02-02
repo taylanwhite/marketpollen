@@ -44,8 +44,26 @@ export interface Business {
   city?: string | null;
   state?: string | null;
   zipCode?: string | null;
+  placeId?: string | null; // Google Places ID; set when created from an opportunity
   createdAt: Date;
   createdBy: string; // user uid
+}
+
+// Opportunity types (nearby places to pursue; convert to business or dismiss)
+export interface Opportunity {
+  id: string;
+  storeId: string;
+  placeId: string;
+  name: string;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zipCode?: string | null;
+  status: 'new' | 'converted' | 'dismissed';
+  businessId?: string | null;
+  createdAt: Date;
+  createdBy: string;
+  convertedAt?: Date | null;
 }
 
 // Donation data embedded in a reachout
@@ -86,18 +104,6 @@ export interface Reachout {
   donation?: DonationData; // Optional donation data
 }
 
-// File attachment for contacts
-export interface FileAttachment {
-  id: string;
-  name: string;
-  storagePath: string; // Firebase Storage path
-  downloadURL: string;
-  size: number; // File size in bytes
-  mimeType: string;
-  uploadedAt: Date;
-  uploadedBy: string; // user uid
-}
-
 // Contact types
 export interface Contact {
   id: string;
@@ -110,7 +116,6 @@ export interface Contact {
   phone?: string | null;
   employeeCount?: number | null; // Number of employees at the business
   reachouts: Reachout[]; // History of all interactions
-  files?: FileAttachment[]; // Attached files
   personalDetails?: string | null; // AI-extracted personal info (hobbies, family, interests)
   suggestedFollowUpDate?: Date | null; // AI-suggested next follow-up date
   suggestedFollowUpMethod?: 'email' | 'call' | 'meeting' | 'text' | 'other' | null; // AI-suggested follow-up method

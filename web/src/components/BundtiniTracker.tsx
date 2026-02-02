@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
 import { useAnimatedCount } from '../hooks/useAnimatedCount';
@@ -68,40 +67,15 @@ export function BundtiniTracker() {
         setValue(0);
         return;
       }
-
-      // Filter contacts by storeId - only show contacts for current store
-      const contactsQuery = query(
-        collection(db, 'contacts'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
-      const querySnapshot = await getDocs(contactsQuery);
-      const contacts: Contact[] = [];
-
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Double-check storeId to ensure we only count contacts for this store
-        if (data.storeId !== permissions.currentStoreId) {
-          return; // Skip this contact
-        }
-        
-        const reachouts = (data.reachouts || []).map((r: any) => ({
+      const contactsList = await api.get<Contact[]>(`/contacts?storeId=${permissions.currentStoreId}`);
+      const contacts = contactsList.map((c) => ({
+        ...c,
+        reachouts: (c.reachouts || []).map((r: any) => ({
           ...r,
-          date: r.date?.toDate() || new Date(),
-        }));
-
-        const files = (data.files || []).map((f: any) => ({
-          ...f,
-          uploadedAt: f.uploadedAt?.toDate() || new Date(),
-        }));
-
-        contacts.push({
-          id: doc.id,
-          ...data,
-          reachouts,
-          files,
-          createdAt: data.createdAt?.toDate() || new Date(),
-        } as Contact);
-      });
+          date: r.date instanceof Date ? r.date : new Date(r.date),
+        })),
+        createdAt: c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt),
+      }));
 
       const progressData = getQuarterProgress(
         contacts,
@@ -143,8 +117,8 @@ export function BundtiniTracker() {
   const isCelebrating = isAnimating;
 
   const colorMap = {
-    success: '#4caf50',
-    warning: '#ff9800',
+    success: '#f5c842',
+    warning: '#e8b923',
     error: '#f44336',
   };
 
@@ -162,7 +136,7 @@ export function BundtiniTracker() {
             {progress.percentage.toFixed(1)}% complete
           </Typography>
           {lastDonationMouths > 0 && isCelebrating && (
-            <Typography variant="body2" sx={{ color: '#4caf50', fontWeight: 600, mt: 1 }}>
+            <Typography variant="body2" sx={{ color: '#252525', fontWeight: 600, mt: 1 }}>
               +{lastDonationMouths} mouths added!
             </Typography>
           )}
@@ -187,7 +161,7 @@ export function BundtiniTracker() {
           display: 'flex',
           alignItems: 'center',
           gap: 1,
-          bgcolor: isCelebrating ? 'rgba(255, 215, 0, 0.3)' : 'rgba(255,255,255,0.15)',
+          bgcolor: isCelebrating ? 'rgba(245, 200, 66, 0.25)' : 'rgba(0,0,0,0.06)',
           borderRadius: 2,
           px: 1.5,
           py: 0.75,
@@ -236,7 +210,7 @@ export function BundtiniTracker() {
             <Typography
               variant="caption"
               sx={{
-                color: 'white',
+                color: '#2d2d2d',
                 fontWeight: isCelebrating ? 700 : 500,
                 fontSize: isCelebrating ? '0.85rem' : '0.75rem',
                 transition: 'all 0.3s ease',
@@ -251,7 +225,7 @@ export function BundtiniTracker() {
             <Typography 
               variant="caption" 
               sx={{ 
-                color: 'rgba(255,255,255,0.7)',
+                color: '#5a5a5a',
                 fontSize: '0.75rem',
                 whiteSpace: 'nowrap',
               }}
@@ -265,7 +239,7 @@ export function BundtiniTracker() {
             sx={{
               height: isCelebrating ? 8 : 6,
               borderRadius: 3,
-              bgcolor: 'rgba(255,255,255,0.2)',
+              bgcolor: 'rgba(0,0,0,0.1)',
               transition: 'height 0.3s ease',
               '& .MuiLinearProgress-bar': {
                 bgcolor: isCelebrating ? '#FFD700' : colorMap[color],
@@ -282,7 +256,7 @@ export function BundtiniTracker() {
             height: 20,
             fontSize: '0.7rem',
             bgcolor: isCelebrating ? '#FFD700' : colorMap[color],
-            color: isCelebrating ? '#333' : 'white',
+            color: '#2d2d2d',
             fontWeight: 600,
             animation: isCelebrating ? `${bounce} 0.5s ease-in-out infinite 0.2s` : 'none',
             '& .MuiChip-label': {

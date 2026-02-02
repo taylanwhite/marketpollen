@@ -28,3 +28,8 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+
+# Compiled API (built by build:api; do not commit)
+dist-api
+api/**/*.js
+api/**/*.js.map

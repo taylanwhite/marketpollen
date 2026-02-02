@@ -114,9 +114,9 @@ export function getQuarterProgress(
 
 /**
  * Get progress color based on how on-track we are for the quarter
- * Green: >= 75% of expected pace
- * Yellow: 50-75% of expected pace
- * Red: < 50% of expected pace
+ * Gold/success: >= 75% of expected pace (brand yellow)
+ * Warning: 50-75% of expected pace
+ * Error: < 50% of expected pace
  */
 export function getProgressColor(percentage: number, quarterDate: Date = new Date()): 'success' | 'warning' | 'error' {
   // Calculate expected progress based on how far into the quarter we are

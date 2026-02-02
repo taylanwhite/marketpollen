@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, setDoc, doc } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
-import { Contact, Reachout, DonationData, MOUTH_VALUES, Business, CalendarEvent } from '../types';
+import { Contact, Reachout, DonationData, MOUTH_VALUES, Business } from '../types';
 import { createEmptyDonation, calculateMouths } from '../utils/donationCalculations';
 import { Box, Switch, FormControlLabel, Typography, Divider, Collapse, TextField, Grid, Checkbox, Chip } from '@mui/material';
 import { AddressPicker, AddressData } from './AddressPicker';
@@ -62,26 +61,11 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         setBusinesses([]);
         return;
       }
-
-      // Get businesses for the current store
-      const { query, where } = await import('firebase/firestore');
-      const businessesQuery = query(
-        collection(db, 'businesses'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
-      const querySnapshot = await getDocs(businessesQuery);
-      const businessList: Business[] = [];
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        businessList.push({ 
-          id: doc.id, 
-          name: data.name,
-          storeId: data.storeId || permissions.currentStoreId || '',
-          createdAt: data.createdAt?.toDate() || new Date(),
-          createdBy: data.createdBy || '',
-        });
-      });
-      // Sort businesses alphabetically
+      const list = await api.get<Business[]>(`/businesses?storeId=${permissions.currentStoreId}`);
+      const businessList = list.map((b) => ({
+        ...b,
+        createdAt: b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt),
+      }));
       businessList.sort((a, b) => a.name.localeCompare(b.name));
       setBusinesses(businessList);
     } catch (error) {
@@ -188,21 +172,15 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
     }
 
     try {
-      const businessId = newBusinessName.trim().toUpperCase().replace(/\s+/g, '-');
-      await setDoc(doc(db, 'businesses', businessId), {
-        id: businessId,
+      const created = await api.post<Business>(`/businesses?storeId=${permissions.currentStoreId}`, {
         name: newBusinessName.trim(),
-        storeId: permissions.currentStoreId,
-        address: newBusinessAddress.address || null,
-        city: newBusinessAddress.city || null,
-        state: newBusinessAddress.state || null,
-        zipCode: newBusinessAddress.zipCode || null,
-        createdAt: new Date(),
-        createdBy: currentUser?.uid
+        address: newBusinessAddress.address || undefined,
+        city: newBusinessAddress.city || undefined,
+        state: newBusinessAddress.state || undefined,
+        zipCode: newBusinessAddress.zipCode || undefined,
       });
-      
       await loadBusinesses();
-      setSelectedBusinessId(businessId);
+      setSelectedBusinessId(created.id);
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
       setShowNewBusiness(false);
@@ -284,38 +262,36 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         suggestedFollowUpPriority = 'medium';
       }
 
-      const contactData: Omit<Contact, 'id'> = {
+      const storeId = permissions.currentStoreId;
+      const contactIdApp = generateContactId();
+
+      const created = await api.post<Contact>(`/contacts?storeId=${storeId}`, {
         businessId: selectedBusinessId,
-        storeId: permissions.currentStoreId,
-        contactId: generateContactId(),
+        contactId: contactIdApp,
         firstName: formData.firstName || null,
         lastName: formData.lastName || null,
         email: formData.email || null,
         phone: formData.phone || null,
         personalDetails: formData.personalDetails || null,
+        status: 'new',
+      });
+
+      await api.patch(`/contacts/${created.id}`, {
         suggestedFollowUpDate: suggestedFollowUpDate || null,
         suggestedFollowUpMethod: suggestedFollowUpMethod || null,
         suggestedFollowUpNote: suggestedFollowUpNote || null,
         suggestedFollowUpPriority: suggestedFollowUpPriority || null,
-        reachouts: [initialReachout],
-        createdAt: now,
-        createdBy: currentUser.uid,
         lastReachoutDate: now,
-        status: 'new'
-      };
+        reachouts: [initialReachout],
+      });
 
-      const contactRef = await addDoc(collection(db, 'contacts'), contactData);
-      const contactId = contactRef.id;
+      const contactId = created.id;
 
-      // Create calendar event for the initial reachout
       if (formData.reachoutNote || rawNotes) {
         try {
-          // Normalize date to midnight local time for today's reachout
           const normalizedNow = new Date(now);
           normalizedNow.setHours(0, 0, 0, 0);
-          
-          await addDoc(collection(db, 'calendarEvents'), {
-            storeId: permissions.currentStoreId,
+          await api.post(`/calendar-events?storeId=${storeId}`, {
             title: `Reachout: ${formData.firstName || formData.lastName || 'New Contact'}`,
             description: formData.reachoutNote || rawNotes || null,
             date: normalizedNow,
@@ -323,27 +299,20 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
             contactId: contactId,
             businessId: selectedBusinessId,
             priority: 'medium',
-            status: 'completed', // Past reachout is completed
+            status: 'completed',
             createdBy: currentUser.uid,
-            createdAt: now,
-            completedAt: now,
-          } as Omit<CalendarEvent, 'id'>);
+          });
         } catch (eventError) {
           console.error('Failed to create calendar event:', eventError);
-          // Don't fail contact creation if event creation fails
         }
       }
 
-      // Create calendar event for AI-suggested follow-up
       if (suggestedFollowUpDate) {
         try {
           const contactName = `${formData.firstName || ''} ${formData.lastName || ''}`.trim() || formData.email || 'Contact';
-          // Normalize date to midnight local time to avoid timezone issues
           const normalizedDate = new Date(suggestedFollowUpDate);
           normalizedDate.setHours(0, 0, 0, 0);
-          
-          await addDoc(collection(db, 'calendarEvents'), {
-            storeId: permissions.currentStoreId,
+          await api.post(`/calendar-events?storeId=${storeId}`, {
             title: `Follow-up: ${contactName}`,
             description: suggestedFollowUpNote || `Follow up with ${contactName}`,
             date: normalizedDate,
@@ -353,11 +322,9 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
             priority: suggestedFollowUpPriority || 'medium',
             status: 'scheduled',
             createdBy: currentUser.uid,
-            createdAt: now,
-          } as Omit<CalendarEvent, 'id'>);
+          });
         } catch (eventError) {
           console.error('Failed to create follow-up calendar event:', eventError);
-          // Don't fail contact creation if event creation fails
         }
       }
       

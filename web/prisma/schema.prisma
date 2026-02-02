@@ -1,0 +1,244 @@
+// BundtMarketer – Prisma schema (Postgres)
+// Run: npx prisma generate && npx prisma db push (or migrate dev)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String   @id
+  email          String
+  display_name   String?
+  created_at     DateTime @default(now())
+  is_global_admin Boolean @default(false)
+
+  store_permissions StorePermission[]
+  stores_created     Store[]            @relation("StoreCreatedBy")
+  businesses_created Business[]         @relation("BusinessCreatedBy")
+  contacts_created  Contact[]          @relation("ContactCreatedBy")
+  reachouts_created Reachout[]          @relation("ReachoutCreatedBy")
+  contact_files_uploaded ContactFile[]  @relation("ContactFileUploadedBy")
+  calendar_events_created CalendarEvent[] @relation("CalendarEventCreatedBy")
+  invites_sent   Invite[]               @relation("InviteSentBy")
+  opportunities_created Opportunity[]   @relation("OpportunityCreatedBy")
+
+  @@map("users")
+}
+
+model Store {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String
+  address    String?
+  city       String?
+  state      String?
+  zip_code   String?
+  created_at DateTime @default(now())
+  created_by String
+
+  creator    User     @relation("StoreCreatedBy", fields: [created_by], references: [id])
+  permissions StorePermission[]
+  businesses  Business[]
+  contacts   Contact[]
+  calendar_events CalendarEvent[]
+  invites    Invite[]
+  opportunities Opportunity[]
+  reachouts  Reachout[]
+
+  @@map("stores")
+}
+
+model StorePermission {
+  user_id   String
+  store_id  String   @db.Uuid
+  can_edit  Boolean  @default(false)
+
+  user  User  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, store_id])
+  @@map("store_permissions")
+}
+
+model Business {
+  id         String   @id @default(uuid()) @db.Uuid
+  store_id   String   @db.Uuid
+  name       String
+  address    String?
+  city       String?
+  state      String?
+  zip_code   String?
+  place_id   String?
+  created_at DateTime @default(now())
+  created_by String
+
+  store   Store   @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  creator User    @relation("BusinessCreatedBy", fields: [created_by], references: [id])
+  contacts Contact[]
+  opportunities_converted Opportunity[]
+  calendar_events CalendarEvent[]
+
+  @@map("businesses")
+}
+
+model Opportunity {
+  id          String   @id @default(uuid()) @db.Uuid
+  store_id    String   @db.Uuid
+  place_id    String
+  name        String
+  address     String?
+  city        String?
+  state       String?
+  zip_code    String?
+  status      String   @default("new") // new | converted | dismissed
+  business_id String?  @db.Uuid
+  created_at  DateTime @default(now())
+  created_by  String
+  converted_at DateTime?
+
+  store    Store    @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  business Business? @relation(fields: [business_id], references: [id], onDelete: SetNull)
+  creator  User     @relation("OpportunityCreatedBy", fields: [created_by], references: [id])
+
+  @@unique([store_id, place_id])
+  @@index([store_id])
+  @@index([store_id, status])
+  @@map("opportunities")
+}
+
+model Contact {
+  id                         String    @id @default(uuid()) @db.Uuid
+  business_id                String    @db.Uuid
+  store_id                   String    @db.Uuid
+  contact_id                 String
+  first_name                 String?
+  last_name                  String?
+  email                      String?
+  phone                      String?
+  employee_count             Int?
+  personal_details           String?
+  suggested_follow_up_date    DateTime?
+  suggested_follow_up_method  String?
+  suggested_follow_up_note    String?
+  suggested_follow_up_priority String?
+  last_reachout_date         DateTime?
+  status                     String?
+  created_at                 DateTime  @default(now())
+  created_by                 String
+
+  business  Business   @relation(fields: [business_id], references: [id], onDelete: Cascade)
+  store     Store      @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  creator   User       @relation("ContactCreatedBy", fields: [created_by], references: [id])
+  reachouts Reachout[]
+  contact_files ContactFile[]
+  calendar_events CalendarEvent[]
+
+  @@unique([business_id, contact_id])
+  @@index([store_id])
+  @@index([business_id])
+  @@map("contacts")
+}
+
+model Reachout {
+  id                 String   @id @default(uuid()) @db.Uuid
+  contact_id         String   @db.Uuid
+  date               DateTime @default(now())
+  note               String
+  raw_notes          String?
+  created_by         String
+  type               String   @default("other")
+  store_id           String?  @db.Uuid
+  free_bundlet_card  Int      @default(0)
+  dozen_bundtinis    Int      @default(0)
+  cake_8inch         Int      @default(0)
+  cake_10inch        Int      @default(0)
+  sample_tray        Int      @default(0)
+  bundtlet_tower     Int      @default(0)
+  cakes_donated_notes String?
+  ordered_from_us    Boolean  @default(false)
+  followed_up        Boolean  @default(false)
+
+  contact Contact @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  store   Store?  @relation(fields: [store_id], references: [id])
+  creator User    @relation("ReachoutCreatedBy", fields: [created_by], references: [id])
+
+  @@index([contact_id])
+  @@map("reachouts")
+}
+
+model ContactFile {
+  id           String   @id @default(uuid()) @db.Uuid
+  contact_id   String   @db.Uuid
+  name         String
+  storage_path String
+  download_url String
+  size         BigInt
+  mime_type    String
+  uploaded_at  DateTime @default(now())
+  uploaded_by  String
+
+  contact Contact @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  creator User    @relation("ContactFileUploadedBy", fields: [uploaded_by], references: [id])
+
+  @@index([contact_id])
+  @@map("contact_files")
+}
+
+model CalendarEvent {
+  id           String    @id @default(uuid()) @db.Uuid
+  store_id     String    @db.Uuid
+  title        String
+  description  String?
+  date         DateTime
+  start_time   String?
+  end_time     String?
+  type         String    @default("other")
+  contact_id   String?   @db.Uuid
+  business_id  String?   @db.Uuid
+  priority     String?
+  status       String?
+  location     String?
+  notes        String?
+  created_by   String
+  created_at   DateTime  @default(now())
+  completed_at DateTime?
+  cancelled_at DateTime?
+
+  store    Store    @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  contact  Contact? @relation(fields: [contact_id], references: [id], onDelete: SetNull)
+  business Business? @relation(fields: [business_id], references: [id], onDelete: SetNull)
+  creator  User     @relation("CalendarEventCreatedBy", fields: [created_by], references: [id])
+
+  @@index([store_id, date])
+  @@map("calendar_events")
+}
+
+model Invite {
+  id              String   @id @default(uuid()) @db.Uuid
+  email           String
+  store_id        String   @db.Uuid
+  can_edit        Boolean  @default(false)
+  invited_by      String
+  invited_at      DateTime @default(now())
+  status          String   @default("pending")
+  is_global_admin Boolean  @default(false)
+
+  store   Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  creator User  @relation("InviteSentBy", fields: [invited_by], references: [id])
+
+  @@index([email, status])
+  @@map("invites")
+}
+
+model ApiKey {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String?
+  key_hash   String
+  created_at DateTime @default(now())
+
+  @@map("api_keys")
+}

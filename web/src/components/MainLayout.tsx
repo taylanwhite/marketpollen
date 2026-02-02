@@ -1,11 +1,10 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { BundtiniTracker } from './BundtiniTracker';
 import { Store } from '../types';
+import { api } from '../api/client';
 import {
   AppBar,
   Box,
@@ -26,6 +25,7 @@ import {
   Menu as MenuIcon,
   Dashboard as DashboardIcon,
   Business as BusinessIcon,
+  Explore as ExploreIcon,
   CalendarMonth as CalendarIcon,
   LocationOn as LocationIcon,
   AdminPanelSettings as AdminIcon,
@@ -62,18 +62,12 @@ export function MainLayout({ children }: MainLayoutProps) {
     }
 
     try {
-      const querySnapshot = await getDocs(collection(db, 'stores'));
-      const storeList: Store[] = [];
-      querySnapshot.forEach((doc) => {
-        storeList.push({ id: doc.id, ...doc.data() } as Store);
-      });
-
+      const storeList = await api.get<Store[]>('/stores');
       const availableStores = isAdmin()
         ? storeList
         : storeList.filter(store =>
             permissions.storePermissions.some(p => p.storeId === store.id)
           );
-      
       setHasMultipleStores(availableStores.length > 1);
       const current = storeList.find(store => store.id === permissions.currentStoreId);
       
@@ -111,6 +105,7 @@ export function MainLayout({ children }: MainLayoutProps) {
   const mainNavItems = [
     { text: 'Contacts', icon: <DashboardIcon />, path: '/dashboard' },
     { text: 'Businesses', icon: <BusinessIcon />, path: '/businesses' },
+    { text: 'Opportunities', icon: <ExploreIcon />, path: '/opportunities' },
     { text: 'Donations', icon: <CakeIcon />, path: '/donations' },
     { text: 'Calendar', icon: <CalendarIcon />, path: '/calendar' },
   ];
@@ -121,16 +116,20 @@ export function MainLayout({ children }: MainLayoutProps) {
   ];
 
   const drawer = (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', bgcolor: '#f5f5f5', background: '#f5f5f5' }}>
       <Toolbar sx={{ justifyContent: 'center', py: 2, flexShrink: 0 }}>
-        <Typography variant="h6" sx={{ color: 'white', fontWeight: 700 }}>
-          🎂 Bundt Marketer
-        </Typography>
+        <Box
+          component="img"
+          src="/assets/sidemenu-logo-48.png"
+          srcSet="/assets/sidemenu-logo-96@2x.png 2x"
+          alt="Market Pollen"
+          sx={{ height: 48, width: 48, objectFit: 'contain' }}
+        />
       </Toolbar>
       <Box sx={{ px: 2, pb: 2, flexShrink: 0 }}>
         <BundtiniTracker />
       </Box>
-      <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)', flexShrink: 0 }} />
+      <Divider sx={{ borderColor: 'rgba(0,0,0,0.08)', flexShrink: 0 }} />
       
       {hasMultipleStores && (
         <>
@@ -146,20 +145,20 @@ export function MainLayout({ children }: MainLayoutProps) {
                   borderRadius: 2,
                   mb: 0.5,
                   '&:hover': {
-                    bgcolor: 'rgba(102, 126, 234, 0.2)',
+                    bgcolor: 'rgba(245, 200, 66, 0.12)',
                   },
                 }}
               >
-                <ListItemIcon sx={{ color: 'rgba(255,255,255,0.7)', minWidth: 40 }}>
+                <ListItemIcon sx={{ color: '#2d2d2d', minWidth: 40 }}>
                   <SwapIcon />
                 </ListItemIcon>
                 <ListItemText 
-                  primary="Change Store" 
-                  sx={{ 
-                    '& .MuiListItemText-primary': { 
-                      color: 'rgba(255,255,255,0.8)',
-                    } 
-                  }} 
+primary="Change Store" 
+                sx={{ 
+                  '& .MuiListItemText-primary': { 
+                    color: '#2d2d2d',
+                  } 
+                }}
                 />
               </ListItemButton>
             </ListItem>
@@ -180,20 +179,20 @@ export function MainLayout({ children }: MainLayoutProps) {
                 mx: 1,
                 borderRadius: 2,
                 mb: 0.5,
-                bgcolor: isActive(item.path) ? 'rgba(102, 126, 234, 0.3)' : 'transparent',
+                bgcolor: isActive(item.path) ? 'rgba(245, 200, 66, 0.2)' : 'transparent',
                 '&:hover': {
-                  bgcolor: 'rgba(102, 126, 234, 0.2)',
+                  bgcolor: isActive(item.path) ? 'rgba(245, 200, 66, 0.25)' : 'rgba(0, 0, 0, 0.04)',
                 },
               }}
             >
-              <ListItemIcon sx={{ color: isActive(item.path) ? '#667eea' : 'rgba(255,255,255,0.7)', minWidth: 40 }}>
+              <ListItemIcon sx={{ color: '#2d2d2d', minWidth: 40 }}>
                 {item.icon}
               </ListItemIcon>
               <ListItemText 
                 primary={item.text} 
                 sx={{ 
                   '& .MuiListItemText-primary': { 
-                    color: isActive(item.path) ? '#fff' : 'rgba(255,255,255,0.8)',
+                    color: '#2d2d2d',
                     fontWeight: isActive(item.path) ? 600 : 400,
                   } 
                 }} 
@@ -204,13 +203,13 @@ export function MainLayout({ children }: MainLayoutProps) {
 
         {isAdmin() && (
           <>
-            <Divider sx={{ my: 2, borderColor: 'rgba(255,255,255,0.1)' }} />
+            <Divider sx={{ my: 2, borderColor: 'rgba(0, 0, 0, 0.08)' }} />
             <Typography 
               variant="caption" 
               sx={{ 
                 px: 3, 
                 py: 1, 
-                color: 'rgba(255,255,255,0.5)', 
+                color: '#5a5a5a', 
                 textTransform: 'uppercase',
                 letterSpacing: 1,
               }}
@@ -228,20 +227,20 @@ export function MainLayout({ children }: MainLayoutProps) {
                     mx: 1,
                     borderRadius: 2,
                     mb: 0.5,
-                    bgcolor: isActive(item.path) ? 'rgba(102, 126, 234, 0.3)' : 'transparent',
+                    bgcolor: isActive(item.path) ? 'rgba(245, 200, 66, 0.2)' : 'transparent',
                     '&:hover': {
-                      bgcolor: 'rgba(102, 126, 234, 0.2)',
+                      bgcolor: isActive(item.path) ? 'rgba(245, 200, 66, 0.25)' : 'rgba(0, 0, 0, 0.04)',
                     },
                   }}
                 >
-                  <ListItemIcon sx={{ color: isActive(item.path) ? '#667eea' : 'rgba(255,255,255,0.7)', minWidth: 40 }}>
+                  <ListItemIcon sx={{ color: '#2d2d2d', minWidth: 40 }}>
                     {item.icon}
                   </ListItemIcon>
                   <ListItemText 
                     primary={item.text} 
                     sx={{ 
                       '& .MuiListItemText-primary': { 
-                        color: isActive(item.path) ? '#fff' : 'rgba(255,255,255,0.8)',
+                        color: '#2d2d2d',
                         fontWeight: isActive(item.path) ? 600 : 400,
                       } 
                     }} 
@@ -253,7 +252,7 @@ export function MainLayout({ children }: MainLayoutProps) {
         )}
       </List>
 
-      <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)', flexShrink: 0 }} />
+      <Divider sx={{ borderColor: 'rgba(0,0,0,0.08)', flexShrink: 0 }} />
       <List sx={{ flexShrink: 0 }}>
         <ListItem disablePadding>
           <ListItemButton
@@ -283,12 +282,16 @@ export function MainLayout({ children }: MainLayoutProps) {
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <AppBar
         position="fixed"
+        elevation={0}
         sx={{
           width: { sm: `calc(100% - ${drawerWidth}px)` },
           ml: { sm: `${drawerWidth}px` },
+          bgcolor: '#ffffff',
+          color: '#2d2d2d',
+          borderBottom: '1px solid rgba(245, 200, 66, 0.4)',
         }}
       >
-        <Toolbar sx={{ px: { xs: 1, sm: 2 }, minHeight: { xs: 56, sm: 64 } }}>
+        <Toolbar sx={{ px: { xs: 1, sm: 2 }, minHeight: { xs: 56, sm: 64 }, position: 'relative' }}>
           <IconButton
             color="inherit"
             aria-label="open drawer"
@@ -300,31 +303,49 @@ export function MainLayout({ children }: MainLayoutProps) {
             <MenuIcon />
           </IconButton>
           
-          <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 }, minWidth: 0, overflow: 'hidden' }}>
+          <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 }, minWidth: 0, overflow: 'hidden' }}>
             {currentStore && (
               <Chip
-                icon={<LocationIcon sx={{ color: 'white !important', fontSize: { xs: 16, sm: 20 } }} />}
+                icon={<LocationIcon sx={{ color: '#2d2d2d !important', fontSize: { xs: 16, sm: 20 } }} />}
                 label={currentStore.name}
                 sx={{
-                  bgcolor: 'rgba(255,255,255,0.2)',
-                  color: 'white',
+                  bgcolor: 'rgba(245, 200, 66, 0.15)',
+                  color: '#2d2d2d',
+                  border: '1px solid rgba(245, 200, 66, 0.5)',
                   fontWeight: 500,
                   fontSize: { xs: '0.75rem', sm: '0.875rem' },
                   height: { xs: 28, sm: 32 },
-                  '& .MuiChip-icon': { color: 'white' },
+                  transition: 'background-color 0.2s ease, border-color 0.2s ease',
+                  '& .MuiChip-icon': { color: '#2d2d2d' },
                 }}
               />
             )}
           </Box>
 
+          <Box
+            component="img"
+            src="/assets/nav-title-220x40.png"
+            srcSet="/assets/nav-title-440x80@2x.png 2x"
+            alt="Market Pollen"
+            sx={{
+              position: 'absolute',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              height: 36,
+              width: 'auto',
+              maxWidth: 200,
+              objectFit: 'contain',
+              pointerEvents: 'none',
+            }}
+          />
+
           {hasMultipleStores && (
             <Button
-              color="inherit"
+              variant="contained"
+              color="primary"
               startIcon={<SwapIcon />}
               onClick={() => navigate('/select-store')}
-              sx={{ 
-                bgcolor: 'rgba(255,255,255,0.1)',
-                '&:hover': { bgcolor: 'rgba(255,255,255,0.2)' },
+              sx={{
                 fontSize: { xs: '0.75rem', sm: '0.875rem' },
                 px: { xs: 1, sm: 2 },
                 minWidth: { xs: 'auto', sm: 140 },
@@ -355,7 +376,8 @@ export function MainLayout({ children }: MainLayoutProps) {
             '& .MuiDrawer-paper': { 
               boxSizing: 'border-box', 
               width: drawerWidth,
-              bgcolor: '#1a1a2e',
+              backgroundColor: '#f5f5f5',
+              background: '#f5f5f5',
               overflow: 'hidden',
             },
           }}
@@ -371,7 +393,8 @@ export function MainLayout({ children }: MainLayoutProps) {
             '& .MuiDrawer-paper': { 
               boxSizing: 'border-box', 
               width: drawerWidth,
-              bgcolor: '#1a1a2e',
+              backgroundColor: '#f5f5f5',
+              background: '#f5f5f5',
               borderRight: 'none',
               overflow: 'hidden',
             },

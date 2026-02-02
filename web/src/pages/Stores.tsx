@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
-import { useAuth } from '../contexts/AuthContext';
+import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useNavigate } from 'react-router-dom';
 import { Store } from '../types';
@@ -35,7 +33,6 @@ import {
 } from '@mui/icons-material';
 
 export function Stores() {
-  const { currentUser } = useAuth();
   const { isAdmin } = usePermissions();
   const navigate = useNavigate();
   
@@ -93,16 +90,11 @@ export function Stores() {
 
   const loadStores = async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'stores'));
-      const storeList: Store[] = [];
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        storeList.push({
-          id: doc.id,
-          ...data,
-          createdAt: data.createdAt?.toDate() || new Date()
-        } as Store);
-      });
+      const list = await api.get<Store[]>(`/stores`);
+      const storeList = list.map((s) => ({
+        ...s,
+        createdAt: s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt),
+      }));
       storeList.sort((a, b) => a.name.localeCompare(b.name));
       setStores(storeList);
     } catch (err: any) {
@@ -123,14 +115,12 @@ export function Stores() {
     }
 
     try {
-      await addDoc(collection(db, 'stores'), {
+      await api.post<Store>(`/stores`, {
         name: formData.name.trim(),
-        address: formData.address.trim() || null,
-        city: formData.city.trim() || null,
-        state: formData.state.trim().toUpperCase() || null,
-        zipCode: formData.zipCode.trim() || null,
-        createdAt: new Date(),
-        createdBy: currentUser?.uid
+        address: formData.address.trim() || undefined,
+        city: formData.city.trim() || undefined,
+        state: formData.state.trim().toUpperCase() || undefined,
+        zipCode: formData.zipCode.trim() || undefined
       });
 
       setSuccess('Store created successfully!');
@@ -170,12 +160,12 @@ export function Stores() {
     }
 
     try {
-      await updateDoc(doc(db, 'stores', editingStore.id), {
+      await api.patch(`/stores/${editingStore.id}`, {
         name: editFormData.name.trim(),
-        address: editFormData.address.trim() || null,
-        city: editFormData.city.trim() || null,
-        state: editFormData.state.trim().toUpperCase() || null,
-        zipCode: editFormData.zipCode.trim() || null
+        address: editFormData.address.trim() || undefined,
+        city: editFormData.city.trim() || undefined,
+        state: editFormData.state.trim().toUpperCase() || undefined,
+        zipCode: editFormData.zipCode.trim() || undefined
       });
 
       setSuccess('Store updated successfully!');

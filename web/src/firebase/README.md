@@ -10,35 +10,25 @@ Create a `.env` file in the `web/` directory with your Firebase configuration:
 VITE_FIREBASE_API_KEY=your-api-key-here
 VITE_FIREBASE_AUTH_DOMAIN=your-project-id.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=your-project-id
-VITE_FIREBASE_STORAGE_BUCKET=your-project-id.appspot.com
 VITE_FIREBASE_MESSAGING_SENDER_ID=your-messaging-sender-id
 VITE_FIREBASE_APP_ID=your-app-id
 ```
+(Firebase Storage has been removed; use Neon/Postgres + external storage if needed.)
 
 You can find these values in your [Firebase Console](https://console.firebase.google.com/):
 - Go to Project Settings > General > Your apps > Web app
 
 ## 2. Use Firebase in Your Components
 
-```typescript
-import { auth, db, storage } from './firebase/config';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { collection, getDocs } from 'firebase/firestore';
+Firebase is used for **Authentication only**. Data is stored in **Neon (Postgres)** via the `/api` routes.
 
-// Example: Authentication
+```typescript
+import { auth } from './firebase/config';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+
 const login = async (email: string, password: string) => {
   await signInWithEmailAndPassword(auth, email, password);
 };
-
-// Example: Firestore
-const getData = async () => {
-  const querySnapshot = await getDocs(collection(db, 'your-collection'));
-  // ...
-};
 ```
 
-## Available Services
-
-- **auth**: Firebase Authentication
-- **db**: Cloud Firestore
-- **storage**: Firebase Storage
+Use the `api` client in `src/api/client.ts` for all data (stores, businesses, contacts, calendar events, etc.).

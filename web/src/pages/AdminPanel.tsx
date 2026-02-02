@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useNavigate } from 'react-router-dom';
@@ -50,6 +49,7 @@ interface UserWithPermissions extends User {
 
 interface PendingInvite {
   id: string;
+  inviteIds: string[];
   email: string;
   isGlobalAdmin: boolean;
   storePermissions: StorePermission[];
@@ -129,64 +129,61 @@ export function AdminPanel() {
   };
 
   const loadStores = async () => {
-    const querySnapshot = await getDocs(collection(db, 'stores'));
-    const storeList: Store[] = [];
-    querySnapshot.forEach((doc) => {
-      storeList.push({ id: doc.id, ...doc.data() } as Store);
-    });
+    const list = await api.get<Store[]>('/stores');
+    const storeList = list.map((s) => ({ ...s, createdAt: s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt) }));
     storeList.sort((a, b) => a.name.localeCompare(b.name));
     setStores(storeList);
   };
 
   const loadUsers = async () => {
-    const querySnapshot = await getDocs(collection(db, 'users'));
-    const userList: UserWithPermissions[] = [];
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      userList.push({
-        uid: doc.id,
-        email: data.email || '',
-        displayName: data.displayName,
-        createdAt: data.createdAt?.toDate() || new Date(),
-        isGlobalAdmin: data.isGlobalAdmin || false,
-        storePermissions: data.storePermissions || []
-      });
-    });
+    const list = await api.get<UserWithPermissions[]>('/users');
+    const userList = list.map((u) => ({
+      ...u,
+      createdAt: u.createdAt instanceof Date ? u.createdAt : new Date(u.createdAt),
+    }));
     userList.sort((a, b) => a.email.localeCompare(b.email));
     setUsers(userList);
   };
 
   const loadPendingInvites = async () => {
-    const querySnapshot = await getDocs(collection(db, 'invites'));
-    const inviteList: PendingInvite[] = [];
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      if (data.status === 'pending') {
-        inviteList.push({
-          id: doc.id,
-          email: data.email || '',
-          isGlobalAdmin: data.isGlobalAdmin || false,
-          storePermissions: data.storePermissions || [],
-          invitedBy: data.invitedBy || '',
-          invitedAt: data.invitedAt?.toDate() || new Date(),
-          status: data.status || 'pending'
+    const rows = await api.get<Array<{ id: string; email: string; storeId: string; canEdit: boolean; invitedBy: string; invitedAt: string | Date; status: string; isGlobalAdmin: boolean }>>('/invites');
+    const pending = rows.filter((r) => r.status === 'pending');
+    const byEmail = new Map<string, { inviteIds: string[]; email: string; isGlobalAdmin: boolean; storePermissions: StorePermission[]; invitedBy: string; invitedAt: Date }>();
+    for (const r of pending) {
+      const existing = byEmail.get(r.email);
+      const invitedAt = r.invitedAt instanceof Date ? r.invitedAt : new Date(r.invitedAt);
+      if (!existing) {
+        byEmail.set(r.email, {
+          inviteIds: [r.id],
+          email: r.email,
+          isGlobalAdmin: r.isGlobalAdmin,
+          storePermissions: [{ storeId: r.storeId, canEdit: r.canEdit }],
+          invitedBy: r.invitedBy,
+          invitedAt,
         });
+      } else {
+        existing.inviteIds.push(r.id);
+        existing.storePermissions.push({ storeId: r.storeId, canEdit: r.canEdit });
       }
-    });
+    }
+    const inviteList: PendingInvite[] = Array.from(byEmail.entries()).map(([email, data]) => ({
+      id: data.inviteIds[0],
+      inviteIds: data.inviteIds,
+      email,
+      isGlobalAdmin: data.isGlobalAdmin,
+      storePermissions: data.storePermissions,
+      invitedBy: data.invitedBy,
+      invitedAt: data.invitedAt,
+      status: 'pending' as const,
+    }));
     inviteList.sort((a, b) => a.email.localeCompare(b.email));
     setPendingInvites(inviteList);
   };
 
   const checkExistingPendingInvite = async (email: string): Promise<boolean> => {
+    const rows = await api.get<Array<{ email: string; status: string }>>('/invites');
     const normalizedEmail = email.toLowerCase().trim();
-    const invitesRef = collection(db, 'invites');
-    const q = query(
-      invitesRef,
-      where('email', '==', normalizedEmail),
-      where('status', '==', 'pending')
-    );
-    const querySnapshot = await getDocs(q);
-    return !querySnapshot.empty;
+    return rows.some((r) => r.email === normalizedEmail && r.status === 'pending');
   };
 
   const handleInviteUser = async (e: React.FormEvent) => {
@@ -225,30 +222,34 @@ export function AdminPanel() {
     }
 
     try {
-      const inviteId = `${newUserEmail.toLowerCase().trim()}-${Date.now()}`;
-      
-      // Convert access levels to StorePermission array
+      const email = newUserEmail.toLowerCase().trim();
       const permissions: StorePermission[] = [];
       inviteAccessLevels.forEach((level, storeId) => {
         if (level !== 'none') {
-          permissions.push({
-            storeId,
-            canEdit: level === 'full'
-          });
+          permissions.push({ storeId, canEdit: level === 'full' });
         }
       });
 
-      const inviteData = {
-        email: newUserEmail.toLowerCase().trim(),
-        isGlobalAdmin: inviteAsAdmin,
-        storePermissions: inviteAsAdmin ? [] : permissions,
-        invitedBy: currentUser?.uid || '',
-        invitedAt: new Date(),
-        status: 'pending'
-      };
+      if (inviteAsAdmin && permissions.length === 0) {
+        setError('Global admin must have at least one store, or create a store first.');
+        setInviteLoading(false);
+        return;
+      }
 
-      console.log('Creating invitation:', inviteData);
-      await setDoc(doc(db, 'invites', inviteId), inviteData);
+      if (!inviteAsAdmin && permissions.length === 0) {
+        setError('Select at least one store with access.');
+        setInviteLoading(false);
+        return;
+      }
+
+      for (const p of permissions) {
+        await api.post('/invites', {
+          email,
+          storeId: p.storeId,
+          canEdit: p.canEdit,
+          isGlobalAdmin: inviteAsAdmin,
+        });
+      }
       
       // Reload invites to show the new one
       await loadPendingInvites();
@@ -267,7 +268,7 @@ export function AdminPanel() {
           },
           body: JSON.stringify({
             email: newUserEmail.toLowerCase().trim(),
-            isGlobalAdmin: inviteAsAdmin,
+        isGlobalAdmin: inviteAsAdmin,
             invitedByEmail: currentUser?.email || '',
           }),
         });
@@ -297,15 +298,17 @@ export function AdminPanel() {
     }
   };
 
-  const handleCancelInvite = async (inviteId: string, email: string) => {
-    if (!window.confirm(`Are you sure you want to cancel the invitation for ${email}?`)) {
+  const handleCancelInvite = async (invite: PendingInvite) => {
+    if (!window.confirm(`Are you sure you want to cancel the invitation for ${invite.email}?`)) {
       return;
     }
 
     try {
-      await deleteDoc(doc(db, 'invites', inviteId));
+      for (const id of invite.inviteIds) {
+        await api.delete(`/invites/${id}`);
+      }
       await loadPendingInvites();
-      setSuccess(`Invitation for ${email} has been cancelled.`);
+      setSuccess(`Invitation for ${invite.email} has been cancelled.`);
     } catch (err: any) {
       console.error('Error cancelling invitation:', err);
       setError(err.message || 'Failed to cancel invitation');
@@ -378,7 +381,7 @@ export function AdminPanel() {
         }
       });
 
-      await updateDoc(doc(db, 'users', editingUser.uid), {
+      await api.patch(`/users/${editingUser.uid}`, {
         isGlobalAdmin: editIsAdmin,
         storePermissions: editIsAdmin ? [] : permissions
       });
@@ -467,11 +470,11 @@ export function AdminPanel() {
           />
           
           <Box sx={{ mb: 2 }}>
-            <FormControlLabel
-              control={
+          <FormControlLabel
+            control={
                 <Switch
-                  checked={inviteAsAdmin}
-                  onChange={(e) => setInviteAsAdmin(e.target.checked)}
+                checked={inviteAsAdmin}
+                onChange={(e) => setInviteAsAdmin(e.target.checked)}
                   color="secondary"
                 />
               }
@@ -686,7 +689,7 @@ export function AdminPanel() {
                   <ListItemSecondaryAction sx={{ position: { xs: 'relative', sm: 'absolute' }, right: { xs: 0, sm: 0 }, top: { xs: 'auto', sm: '50%' }, transform: { xs: 'none', sm: 'translateY(-50%)' }, mt: { xs: 1, sm: 0 } }}>
                     <IconButton
                       edge="end"
-                      onClick={() => handleCancelInvite(invite.id, invite.email)}
+                      onClick={() => handleCancelInvite(invite)}
                       color="error"
                       size="small"
                       title="Cancel invitation"

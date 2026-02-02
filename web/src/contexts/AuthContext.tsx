@@ -1,22 +1,23 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { 
+import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../firebase/config';
+import { auth } from '../firebase/config';
+import { api } from '../api/client';
+import type { StorePermission } from '../types';
 
-// Extract User type from auth functions
 type FirebaseUser = Awaited<ReturnType<typeof createUserWithEmailAndPassword>>['user'];
 
-// User data type (from Firestore)
 interface UserData {
   uid: string;
   email: string;
+  displayName?: string;
   createdAt: Date;
-  role?: 'admin' | 'user';
+  isGlobalAdmin: boolean;
+  storePermissions: StorePermission[];
 }
 
 interface AuthContextType {
@@ -47,14 +48,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
       if (user) {
-        // Fetch user data from Firestore
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        if (userDoc.exists()) {
-          const data = userDoc.data();
-          setUserData({
-            ...data,
-            createdAt: data.createdAt?.toDate() || new Date()
-          } as UserData);
+        try {
+          const me = await api.get<{ user: { uid: string; email: string; displayName?: string; createdAt: string; isGlobalAdmin: boolean }; storePermissions: { storeId: string; canEdit: boolean }[] }>('/me');
+          if (me.user) {
+            setUserData({
+              uid: me.user.uid,
+              email: me.user.email,
+              displayName: me.user.displayName,
+              createdAt: new Date(me.user.createdAt),
+              isGlobalAdmin: me.user.isGlobalAdmin,
+              storePermissions: me.storePermissions || [],
+            });
+          } else {
+            await api.post('/users/sync', { email: user.email || '', displayName: user.displayName || undefined });
+            const me2 = await api.get<{ user: { uid: string; email: string; displayName?: string; createdAt: string; isGlobalAdmin: boolean }; storePermissions: { storeId: string; canEdit: boolean }[] }>('/me');
+            if (me2.user) {
+              setUserData({
+                uid: me2.user.uid,
+                email: me2.user.email,
+                displayName: me2.user.displayName,
+                createdAt: new Date(me2.user.createdAt),
+                isGlobalAdmin: me2.user.isGlobalAdmin,
+                storePermissions: me2.storePermissions || [],
+              });
+            } else {
+              setUserData(null);
+            }
+          }
+        } catch (err) {
+          console.error('Error loading user from API:', err);
+          setUserData(null);
         }
       } else {
         setUserData(null);
@@ -67,53 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signup(email: string, password: string) {
     const { user } = await createUserWithEmailAndPassword(auth, email, password);
-    
-    // Check for pending invitations
-    const { collection, query, where, getDocs, updateDoc } = await import('firebase/firestore');
-    const invitesQuery = query(
-      collection(db, 'invites'),
-      where('email', '==', user.email!.toLowerCase()),
-      where('status', '==', 'pending')
-    );
-    
-    const invitesSnapshot = await getDocs(invitesQuery);
-    const invites = invitesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    
-    // Aggregate permissions from all invitations
-    const storePermissions: any[] = [];
-    let isGlobalAdmin = false;
-    
-    for (const invite of invites) {
-      const inviteData = invite as any;
-      if (inviteData.isGlobalAdmin) {
-        isGlobalAdmin = true;
-      } else if (inviteData.storePermissions) {
-        // New format: invite has storePermissions array
-        storePermissions.push(...inviteData.storePermissions);
-      } else if (inviteData.storeId) {
-        // Legacy format: single store with canEdit
-        storePermissions.push({
-          storeId: inviteData.storeId,
-          canEdit: inviteData.canEdit || false
-        });
-      }
-      
-      // Mark invite as accepted
-      await updateDoc(doc(db, 'invites', invite.id), {
-        status: 'accepted'
-      });
-    }
-    
-    // Create user document in Firestore with permissions
-    const userData = {
-      uid: user.uid,
-      email: user.email!,
-      createdAt: new Date(),
-      isGlobalAdmin,
-      storePermissions
-    };
-    
-    await setDoc(doc(db, 'users', user.uid), userData);
+    await api.post('/users/sync', { email: user.email || '', displayName: user.displayName || undefined });
   }
 
   async function login(email: string, password: string) {

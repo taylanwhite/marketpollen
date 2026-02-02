@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, updateDoc, query, where } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
-import { db } from '../firebase/config';
+import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
 import { Contact, Reachout, DonationData, MOUTH_VALUES, QUARTERLY_GOAL } from '../types';
@@ -116,62 +115,33 @@ export function Donations() {
 
   const loadDonations = async () => {
     try {
-      // Everyone (including global admins) must have a store selected
       if (!permissions.currentStoreId) {
         setDonations([]);
         setBusinesses(new Map());
         return;
       }
+      const storeId = permissions.currentStoreId;
 
-      // Load businesses for current store (filtered for everyone)
-      const businessQuery = query(
-        collection(db, 'businesses'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
-      
-      const businessSnapshot = await getDocs(businessQuery);
+      const [businessList, contactsList] = await Promise.all([
+        api.get<Array<{ id: string; name: string }>>(`/businesses?storeId=${storeId}`),
+        api.get<Contact[]>(`/contacts?storeId=${storeId}`),
+      ]);
+
       const businessMap = new Map<string, string>();
-      businessSnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Double-check storeId to ensure we only show businesses for this store
-        if (data.storeId === permissions.currentStoreId) {
-          businessMap.set(doc.id, data.name);
-        }
-      });
+      businessList.forEach((b) => businessMap.set(b.id, b.name));
       setBusinesses(businessMap);
 
-      // Load contacts for current store (filtered for everyone)
-      const contactsQuery = query(
-        collection(db, 'contacts'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
-
-      const querySnapshot = await getDocs(contactsQuery);
-      const contacts: Contact[] = [];
-
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Double-check storeId to ensure we only show contacts for this store
-        if (data.storeId !== permissions.currentStoreId) {
-          return; // Skip this contact
-        }
-        
-        const reachouts = (data.reachouts || []).map((r: any) => ({
+      const contacts: Contact[] = contactsList.map((c) => ({
+        ...c,
+        reachouts: (c.reachouts || []).map((r: any) => ({
           ...r,
-          date: r.date?.toDate() || new Date(),
-        }));
+          date: r.date instanceof Date ? r.date : new Date(r.date),
+        })),
+        createdAt: c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt),
+      }));
 
-        contacts.push({
-          id: doc.id,
-          ...data,
-          reachouts,
-          createdAt: data.createdAt?.toDate() || new Date(),
-        } as Contact);
-      });
-
-      // Get donations for current store and quarter
       const donationsWithData = getReachoutsWithDonations(contacts, {
-        storeId: permissions.currentStoreId || undefined,
+        storeId: storeId || undefined,
         quarterDate: new Date(),
       });
 
@@ -182,9 +152,8 @@ export function Donations() {
 
       setDonations(donationRows);
 
-      // Calculate progress
-      if (permissions.currentStoreId) {
-        const progressData = getQuarterProgress(contacts, permissions.currentStoreId, new Date());
+      if (storeId) {
+        const progressData = getQuarterProgress(contacts, storeId, new Date());
         setProgress(progressData);
       }
     } catch (error) {
@@ -211,7 +180,7 @@ export function Donations() {
         return r;
       });
 
-      await updateDoc(doc(db, 'contacts', row.contact.id), {
+      await api.patch(`/contacts/${row.contact.id}`, {
         reachouts: updatedReachouts,
       });
 
@@ -238,7 +207,7 @@ export function Donations() {
         return r;
       });
 
-      await updateDoc(doc(db, 'contacts', row.contact.id), {
+      await api.patch(`/contacts/${row.contact.id}`, {
         reachouts: updatedReachouts,
       });
 
@@ -344,7 +313,7 @@ export function Donations() {
         return r;
       });
 
-      await updateDoc(doc(db, 'contacts', editingDonation.contact.id), {
+      await api.patch(`/contacts/${editingDonation.contact.id}`, {
         reachouts: updatedReachouts,
       });
 
@@ -380,8 +349,8 @@ export function Donations() {
 
   const progressColor = getProgressColor(progress.percentage);
   const colorMap = {
-    success: '#4caf50',
-    warning: '#ff9800',
+    success: '#f5c842',
+    warning: '#e8b923',
     error: '#f44336',
   };
 
@@ -400,13 +369,13 @@ export function Donations() {
       </Typography>
 
       {/* Progress Card */}
-      <Card sx={{ mb: 3, bgcolor: 'primary.main', color: 'white' }}>
+      <Card sx={{ mb: 3, bgcolor: 'rgba(245, 200, 66, 0.2)', border: '1px solid rgba(245, 200, 66, 0.5)', color: '#2d2d2d' }}>
         <CardContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
             <Typography variant="h6">{getCurrentQuarterLabel()} Bundtini Goal</Typography>
             <Chip
               label={`${progress.percentage.toFixed(1)}%`}
-              sx={{ bgcolor: colorMap[progressColor], color: 'white', fontWeight: 600 }}
+              sx={{ bgcolor: colorMap[progressColor], color: '#2d2d2d', fontWeight: 600 }}
             />
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -424,7 +393,7 @@ export function Donations() {
               mt: 2,
               height: 10,
               borderRadius: 5,
-              bgcolor: 'rgba(255,255,255,0.3)',
+              bgcolor: 'rgba(0,0,0,0.1)',
               '& .MuiLinearProgress-bar': {
                 bgcolor: colorMap[progressColor],
                 borderRadius: 5,

@@ -1,6 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
-import { getFirestore, Timestamp, Firestore } from 'firebase-admin/firestore';
+import { prisma } from './lib/db.js';
+import type { PrismaClient } from '@prisma/client';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
@@ -152,7 +153,7 @@ const API_KEY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
  * Validate API key against Firestore
  * Uses caching to avoid reading from Firestore on every request
  */
-async function validateApiKey(providedKey: string, db: any): Promise<boolean> {
+async function validateApiKey(providedKey: string): Promise<boolean> {
   // First check environment variables (backward compatibility)
   const envKey = process.env.VOICE_API_KEY || process.env.AI_PHONE_API_KEY;
   if (envKey && providedKey === envKey) {
@@ -165,40 +166,15 @@ async function validateApiKey(providedKey: string, db: any): Promise<boolean> {
   }
 
   try {
-    // Read from Firestore apiKeys collection
-    // Expected structure: apiKeys/{docId} with field: key (string)
-    const apiKeysSnapshot = await db.collection('apiKeys').limit(10).get();
-    
-    let validKey: string | null = null;
-    apiKeysSnapshot.forEach((doc: any) => {
-      const data = doc.data();
-      if (data.key && typeof data.key === 'string') {
-        // Use the first valid key found, or check all if multiple
-        if (!validKey) {
-          validKey = data.key;
-        }
-        // If provided key matches any stored key, it's valid
-        if (providedKey === data.key) {
-          validKey = data.key;
-        }
-      }
-    });
-
-    if (validKey) {
-      // Update cache
-      apiKeyCache = {
-        key: validKey,
-        timestamp: Date.now()
-      };
-      return providedKey === validKey;
+    if (envKey) {
+      const valid = providedKey === envKey;
+      if (valid) apiKeyCache = { key: envKey, timestamp: Date.now() };
+      return valid;
     }
-
-    // No valid key found in Firestore
     return false;
   } catch (error) {
-    console.error('Error validating API key from Firestore:', error);
-    // Fallback to environment variable if Firestore read fails
-    return envKey ? providedKey === envKey : false;
+    console.error('Error validating API key:', error);
+    return false;
   }
 }
 
@@ -245,25 +221,15 @@ interface CalendarEventResponse {
 /**
  * Look up store by name using AI for fuzzy matching
  */
-async function lookupStoreByName(storeName: string, db: any): Promise<string | null> {
+async function lookupStoreByName(storeName: string, prisma: PrismaClient): Promise<string | null> {
   console.log(`[lookupStoreByName] Looking up store: "${storeName}"`);
-  
   try {
-    // First try exact match (case-insensitive)
-    console.log('[lookupStoreByName] Querying stores collection...');
-    const storesSnapshot = await Promise.race([
-      db.collection('stores').get(),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Store query timeout after 5 seconds')), 5000)
-      )
-    ]) as any;
-    
-    console.log(`[lookupStoreByName] Found ${storesSnapshot.size} stores`);
-    const stores: Array<{ id: string; name: string }> = [];
-    
-    storesSnapshot.forEach((doc: any) => {
-      stores.push({ id: doc.id, name: doc.data().name || '' });
-    });
+    const rows = await prisma.store.findMany({ select: { id: true, name: true } });
+    const stores: Array<{ id: string; name: string }> = rows.map((r) => ({
+      id: String(r.id),
+      name: r.name || '',
+    }));
+    console.log(`[lookupStoreByName] Found ${stores.length} stores`);
 
     // Exact match (case-insensitive)
     const exactMatch = stores.find(s => s.name.toLowerCase() === storeName.toLowerCase());
@@ -373,218 +339,99 @@ export default async function handler(
 
   try {
     console.log('[get-calendar-events] Starting request processing');
-    
-    // Initialize Firebase Admin (needed for API key validation and store lookup)
-    let app: App;
-    let db: Firestore;
-    try {
-      console.log('[get-calendar-events] Initializing Firebase Admin...');
-      app = getAdminApp();
-      db = getFirestore(app);
-      console.log('[get-calendar-events] Firebase Admin initialized');
-    } catch (firebaseError: any) {
-      console.error('[get-calendar-events] Firebase Admin initialization failed:', firebaseError);
-      return res.status(500).json({ 
-        error: `Firebase initialization failed: ${firebaseError.message || 'Unknown error'}`,
-        details: process.env.NODE_ENV === 'development' ? firebaseError.stack : undefined
-      });
-    }
-
-    // API key validation disabled during testing
-    // TODO: Re-enable for production
-    // if (apiKey) {
-    //   const isValid = await validateApiKey(apiKey, db);
-    //   if (!isValid) {
-    //     return res.status(401).json({ error: 'Invalid API key' });
-    //   }
-    // }
-
-    // Look up store by name if provided
-    // TEMPORARILY DISABLED: Skip store lookup to avoid hanging - will re-enable after fixing
     let finalStoreId: string | null = null;
     if (storeName) {
-      console.log(`[get-calendar-events] Store lookup temporarily disabled for testing. Using storeName: ${storeName}`);
-      // TODO: Re-enable store lookup after fixing hanging issue
-      // try {
-      //   finalStoreId = await lookupStoreByName(storeName, db);
-      //   if (!finalStoreId) {
-      //     return res.status(400).json({ 
-      //       error: `Store "${storeName}" not found. Please check the store name.` 
-      //     });
-      //   }
-      // } catch (storeError: any) {
-      //   console.error('[get-calendar-events] Store lookup failed:', storeError);
-      //   return res.status(500).json({ 
-      //     error: `Store lookup failed: ${storeError.message || 'Unknown error'}` 
-      //   });
-      // }
+      try {
+        finalStoreId = await lookupStoreByName(storeName, prisma);
+        if (!finalStoreId) {
+          return res.status(400).json({ error: `Store "${storeName}" not found. Please check the store name.` });
+        }
+      } catch (storeError: any) {
+        console.error('[get-calendar-events] Store lookup failed:', storeError);
+        return res.status(500).json({ error: `Store lookup failed: ${storeError.message || 'Unknown error'}` });
+      }
     }
 
-    // Parse and normalize date
     console.log(`[get-calendar-events] Parsing date: ${date}`);
     let targetDate: Date;
     if (typeof date === 'string') {
-      // Parse ISO date string (YYYY-MM-DD)
       const [year, month, day] = date.split('-').map(Number);
       if (!year || !month || !day) {
         return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD' });
       }
-      targetDate = new Date(year, month - 1, day); // month is 0-indexed
+      targetDate = new Date(year, month - 1, day);
     } else {
       targetDate = new Date(date);
     }
 
-    // Normalize to local midnight for comparison
     const normalizedDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
-    const startOfDay = Timestamp.fromDate(new Date(normalizedDate.getFullYear(), normalizedDate.getMonth(), normalizedDate.getDate(), 0, 0, 0, 0));
-    const endOfDay = Timestamp.fromDate(new Date(normalizedDate.getFullYear(), normalizedDate.getMonth(), normalizedDate.getDate(), 23, 59, 59, 999));
+    const startIso = new Date(normalizedDate.getFullYear(), normalizedDate.getMonth(), normalizedDate.getDate(), 0, 0, 0, 0).toISOString();
+    const endIso = new Date(normalizedDate.getFullYear(), normalizedDate.getMonth(), normalizedDate.getDate(), 23, 59, 59, 999).toISOString();
 
     console.log(`[get-calendar-events] Querying events for date: ${normalizedDate.toISOString()}, storeId: ${finalStoreId || 'all'}`);
 
-    // Build query - Simplified: always query all events and filter in memory to avoid index issues
-    let eventsSnapshot;
-    try {
-      // Query all calendar events (we'll filter by date and store in memory)
-      console.log('[get-calendar-events] Executing Firestore query...');
-      const allEventsQuery = db.collection('calendarEvents');
-      eventsSnapshot = await Promise.race([
-        allEventsQuery.get(),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Firestore query timeout after 10 seconds')), 10000)
-        )
-      ]) as any;
-      console.log(`[get-calendar-events] Query completed, got ${eventsSnapshot.size} total events`);
-    } catch (error: any) {
-      console.error('[get-calendar-events] Firestore query failed:', error);
-      if (error.message?.includes('timeout')) {
-        return res.status(504).json({ 
-          error: 'Query timeout - Firestore took too long to respond' 
+    const startDate = new Date(startIso);
+    const endDate = new Date(endIso);
+    const rows = await prisma.calendarEvent.findMany({
+      where: finalStoreId
+        ? { store_id: finalStoreId, date: { gte: startDate, lt: endDate } }
+        : { date: { gte: startDate, lt: endDate } },
+      orderBy: [{ date: 'asc' }, { start_time: 'asc' }],
+    });
+
+    const events: CalendarEventResponse[] = rows.map((r) => ({
+      id: String(r.id),
+      storeId: String(r.store_id),
+      title: r.title || 'Untitled Event',
+      description: r.description ?? null,
+      date: (r.date instanceof Date ? r.date : new Date(r.date)).toISOString().split('T')[0],
+      startTime: r.start_time ?? null,
+      endTime: r.end_time ?? null,
+      type: (r.type || 'other') as CalendarEventResponse['type'],
+      contactId: r.contact_id ? String(r.contact_id) : null,
+      businessId: r.business_id ? String(r.business_id) : null,
+      priority: (r.priority ?? null) as CalendarEventResponse['priority'],
+      status: (r.status ?? 'scheduled') as CalendarEventResponse['status'],
+      location: null,
+      notes: null,
+      createdBy: r.created_by || '',
+      createdAt: (r.created_at instanceof Date ? r.created_at : new Date(r.created_at)).toISOString(),
+      updatedAt: null,
+      completedAt: r.completed_at ? (r.completed_at instanceof Date ? r.completed_at : new Date(r.completed_at)).toISOString() : null,
+      cancelledAt: null,
+      contact: null,
+      business: null,
+    }));
+
+    const contactIds = [...new Set(events.map((e) => e.contactId).filter(Boolean))] as string[];
+    const businessIds = [...new Set(events.map((e) => e.businessId).filter(Boolean))] as string[];
+
+    const contactsMap = new Map<string, any>();
+    if (contactIds.length > 0) {
+      const contactRows = await prisma.contact.findMany({
+        where: { id: { in: contactIds } },
+        select: { id: true, first_name: true, last_name: true, email: true, phone: true },
+      });
+      contactRows.forEach((r) => {
+        contactsMap.set(String(r.id), {
+          id: String(r.id),
+          firstName: r.first_name ?? null,
+          lastName: r.last_name ?? null,
+          email: r.email ?? null,
+          phone: r.phone ?? null,
         });
-      }
-      return res.status(500).json({ 
-        error: `Failed to query calendar events: ${error.message || 'Unknown error'}` 
       });
     }
 
-    // Process events
-    console.log('[get-calendar-events] Processing events...');
-    const events: CalendarEventResponse[] = [];
-    const contactIds = new Set<string>();
-    const businessIds = new Set<string>();
-
-    eventsSnapshot.forEach((docSnap) => {
-      try {
-        const data = docSnap.data();
-        
-        // Filter by storeId if provided (store lookup temporarily disabled, so this won't filter for now)
-        // if (finalStoreId && data.storeId !== finalStoreId) {
-        //   return;
-        // }
-
-        // Convert Firestore Timestamp to Date
-        const eventDate = data.date?.toDate() || new Date();
-        const normalizedEventDate = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
-        
-        // Check if event date matches target date (normalized to midnight)
-        if (normalizedEventDate.getTime() !== normalizedDate.getTime()) {
-          return;
-        }
-
-      const event: CalendarEventResponse = {
-        id: docSnap.id,
-        storeId: data.storeId || '',
-        title: data.title || 'Untitled Event',
-        description: data.description || null,
-        date: eventDate.toISOString().split('T')[0], // YYYY-MM-DD format
-        startTime: data.startTime || null,
-        endTime: data.endTime || null,
-        type: data.type || 'other',
-        contactId: data.contactId || null,
-        businessId: data.businessId || null,
-        priority: data.priority || null,
-        status: data.status || 'scheduled',
-        location: data.location || null,
-        notes: data.notes || null,
-        createdBy: data.createdBy || '',
-        createdAt: data.createdAt?.toDate()?.toISOString() || new Date().toISOString(),
-        updatedAt: data.updatedAt?.toDate()?.toISOString() || null,
-        completedAt: data.completedAt?.toDate()?.toISOString() || null,
-        cancelledAt: data.cancelledAt?.toDate()?.toISOString() || null,
-        contact: null,
-        business: null,
-      };
-
-      if (data.contactId) {
-        contactIds.add(data.contactId);
-      }
-      if (data.businessId) {
-        businessIds.add(data.businessId);
-      }
-
-        events.push(event);
-      } catch (eventError) {
-        console.error(`[get-calendar-events] Error processing event ${docSnap.id}:`, eventError);
-        // Continue processing other events
-      }
-    });
-
-    console.log(`[get-calendar-events] Filtered to ${events.length} events for target date`);
-
-    // Load related contacts
-    const contactsMap = new Map<string, any>();
-    if (contactIds.size > 0) {
-      console.log(`[get-calendar-events] Loading ${contactIds.size} contacts...`);
-      try {
-        const contactPromises = Array.from(contactIds).map(async (contactId) => {
-          try {
-            const contactDoc = await db.collection('contacts').doc(contactId).get();
-            if (contactDoc.exists) {
-              const contactData = contactDoc.data();
-              contactsMap.set(contactId, {
-                id: contactId,
-                firstName: contactData?.firstName || null,
-                lastName: contactData?.lastName || null,
-                email: contactData?.email || null,
-                phone: contactData?.phone || null,
-              });
-            }
-          } catch (error) {
-            console.error(`[get-calendar-events] Error loading contact ${contactId}:`, error);
-          }
-        });
-        await Promise.all(contactPromises);
-        console.log(`[get-calendar-events] Loaded ${contactsMap.size} contacts`);
-      } catch (error) {
-        console.error('[get-calendar-events] Error loading contacts:', error);
-        // Continue without contact data
-      }
-    }
-
-    // Load related businesses
     const businessesMap = new Map<string, any>();
-    if (businessIds.size > 0) {
-      console.log(`[get-calendar-events] Loading ${businessIds.size} businesses...`);
-      try {
-        const businessPromises = Array.from(businessIds).map(async (businessId) => {
-          try {
-            const businessDoc = await db.collection('businesses').doc(businessId).get();
-            if (businessDoc.exists) {
-              const businessData = businessDoc.data();
-              businessesMap.set(businessId, {
-                id: businessId,
-                name: businessData?.name || 'Unknown Business',
-              });
-            }
-          } catch (error) {
-            console.error(`[get-calendar-events] Error loading business ${businessId}:`, error);
-          }
-        });
-        await Promise.all(businessPromises);
-        console.log(`[get-calendar-events] Loaded ${businessesMap.size} businesses`);
-      } catch (error) {
-        console.error('[get-calendar-events] Error loading businesses:', error);
-        // Continue without business data
-      }
+    if (businessIds.length > 0) {
+      const businessRows = await prisma.business.findMany({
+        where: { id: { in: businessIds } },
+        select: { id: true, name: true },
+      });
+      businessRows.forEach((r) => {
+        businessesMap.set(String(r.id), { id: String(r.id), name: r.name || 'Unknown Business' });
+      });
     }
 
     // Attach related data to events

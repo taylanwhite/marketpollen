@@ -26,7 +26,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #f5f7fa;
+  background-color: var(--brand-bg);
   overflow-x: hidden;
   width: 100%;
   position: relative;

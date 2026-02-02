@@ -44,16 +44,19 @@ export function Login() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        bgcolor: '#f8f8f8',
         p: 2,
       }}
     >
-      <Card sx={{ maxWidth: 450, width: '100%' }}>
+      <Card sx={{ maxWidth: 450, width: '100%', boxShadow: 4 }}>
         <CardContent sx={{ p: 4 }}>
           <Box sx={{ textAlign: 'center', mb: 4 }}>
-            <Typography variant="h4" sx={{ fontWeight: 700, color: 'primary.main', mb: 1 }}>
-              🎂 Bundt Marketer
-            </Typography>
+            <Box
+              component="img"
+              src="/assets/nav-title-220x40.png"
+              alt="MarketPollen"
+              sx={{ height: 48, width: 'auto', maxWidth: 280, objectFit: 'contain', mx: 'auto', mb: 1 }}
+            />
             <Typography variant="body2" color="text.secondary">
               Sign in to your account
             </Typography>

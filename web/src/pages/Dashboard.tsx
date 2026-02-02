@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
+import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
 import { ContactForm } from '../components/ContactForm';
@@ -154,68 +153,27 @@ export function Dashboard() {
         return;
       }
 
-      // Load businesses for current store (filtered for everyone)
-      const { query, where } = await import('firebase/firestore');
-      const businessQuery = query(
-        collection(db, 'businesses'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
-      
-      const businessSnapshot = await getDocs(businessQuery);
+      const businessList = await api.get<{ id: string; name: string }[]>(`/businesses?storeId=${permissions.currentStoreId}`);
       const businessMap = new Map<string, string>();
-      businessSnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Double-check storeId to ensure we only show businesses for this store
-        if (data.storeId === permissions.currentStoreId) {
-          businessMap.set(doc.id, data.name);
-        }
-      });
+      businessList.forEach((b) => businessMap.set(b.id, b.name));
       setBusinesses(businessMap);
 
-      // Load contacts for current store (filtered for everyone)
-      const contactsQuery = query(
-        collection(db, 'contacts'),
-        where('storeId', '==', permissions.currentStoreId)
-      );
-
-      const querySnapshot = await getDocs(contactsQuery);
-      const contactsData: Contact[] = [];
-      
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Double-check storeId to ensure we only show contacts for this store
-        if (data.storeId !== permissions.currentStoreId) {
-          return; // Skip this contact if it doesn't match the current store
+      const contactsData = await api.get<Contact[]>(`/contacts?storeId=${permissions.currentStoreId}`);
+      contactsData.forEach((c) => {
+        if (c.reachouts) {
+          c.reachouts = c.reachouts.map((r) => ({
+            ...r,
+            date: r.date instanceof Date ? r.date : new Date(r.date),
+          }));
         }
-        
-        const reachouts = (data.reachouts || []).map((r: any) => ({
-          ...r,
-          date: r.date?.toDate() || new Date()
-        }));
-        
-        const files = (data.files || []).map((f: any) => ({
-          ...f,
-          uploadedAt: f.uploadedAt?.toDate() || new Date(),
-        }));
-        
-        contactsData.push({
-          id: doc.id,
-          ...data,
-          reachouts,
-          files,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          lastReachoutDate: data.lastReachoutDate?.toDate(),
-          suggestedFollowUpDate: data.suggestedFollowUpDate?.toDate() || null,
-          suggestedFollowUpMethod: data.suggestedFollowUpMethod || null,
-          suggestedFollowUpNote: data.suggestedFollowUpNote || null,
-          suggestedFollowUpPriority: data.suggestedFollowUpPriority || null,
-        } as Contact);
+        if (c.createdAt && !(c.createdAt instanceof Date)) c.createdAt = new Date(c.createdAt);
+        if (c.lastReachoutDate && !(c.lastReachoutDate instanceof Date)) c.lastReachoutDate = new Date(c.lastReachoutDate);
+        if (c.suggestedFollowUpDate && !(c.suggestedFollowUpDate instanceof Date)) c.suggestedFollowUpDate = new Date(c.suggestedFollowUpDate);
       });
-      
       contactsData.sort((a, b) => {
         const aDate = a.lastReachoutDate || a.createdAt;
         const bDate = b.lastReachoutDate || b.createdAt;
-        return bDate.getTime() - aDate.getTime();
+        return (bDate?.getTime() ?? 0) - (aDate?.getTime() ?? 0);
       });
       setContacts(contactsData);
     } catch (error) {
@@ -285,8 +243,7 @@ export function Dashboard() {
       const normalizedDate = new Date(suggestedDate);
       normalizedDate.setHours(0, 0, 0, 0);
 
-      // Update contact in Firestore
-      await updateDoc(doc(db, 'contacts', followUpDialogContact.id), {
+      await api.patch(`/contacts/${followUpDialogContact.id}`, {
         suggestedFollowUpDate: normalizedDate,
         suggestedFollowUpMethod: aiSuggestion.suggestedMethod || null,
         suggestedFollowUpNote: aiSuggestion.message || null,
@@ -447,9 +404,9 @@ export function Dashboard() {
 
       const updatedReachouts = [...quickReachoutContact.reachouts, reachout];
 
-      await updateDoc(doc(db, 'contacts', quickReachoutContact.id), {
+      await api.patch(`/contacts/${quickReachoutContact.id}`, {
         reachouts: updatedReachouts,
-        lastReachoutDate: new Date()
+        lastReachoutDate: new Date(),
       });
 
       // Trigger donation tracker refresh with celebration if donation was included

@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebase/config';
 import { usePermissions } from '../contexts/PermissionContext';
 import { Store } from '../types';
+import { api } from '../api/client';
 
 export function StoreSelector() {
   const { permissions, setCurrentStore, isAdmin } = usePermissions();
@@ -15,11 +14,7 @@ export function StoreSelector() {
 
   const loadStores = async () => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'stores'));
-      const storeList: Store[] = [];
-      querySnapshot.forEach((doc) => {
-        storeList.push({ id: doc.id, ...doc.data() } as Store);
-      });
+      const storeList = await api.get<Store[]>('/stores');
       storeList.sort((a, b) => a.name.localeCompare(b.name));
       setStores(storeList);
     } catch (error) {

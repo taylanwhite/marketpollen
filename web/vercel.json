@@ -3,9 +3,18 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "installCommand": "npm install",
+  "ignore": ["api/**/*.ts"],
+  "builds": [
+    { "src": "dist-api/**/*.js", "use": "@vercel/node" },
+    { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
+  ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/api/:path*",
+      "destination": "/dist-api/:path*"
+    },
+    {
+      "source": "/((?!api|assets|src|node_modules|@|\\.).*)",
       "destination": "/index.html"
     }
   ]

@@ -7,6 +7,7 @@ import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
 import { Dashboard } from './pages/Dashboard';
 import { Businesses } from './pages/Businesses';
+import { Opportunities } from './pages/Opportunities';
 import { Donations } from './pages/Donations';
 import { Calendar } from './pages/Calendar';
 import { Stores } from './pages/Stores';
@@ -46,6 +47,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Businesses />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/opportunities"
+              element={
+                <ProtectedRoute>
+                  <Opportunities />
                 </ProtectedRoute>
               }
             />
