@@ -50,9 +50,27 @@ This project uses **Prisma** with **migrations** for production and optional `db
 - Migrations are in `prisma/migrations/` (versioned SQL).
 - All app queries use the Prisma client (parameterized; no raw SQL in app code).
 
+## Baselining an existing production DB (P3005)
+
+If production was set up with `db push` (or manual SQL) and has no `_prisma_migrations` table, Prisma will error: **P3005 – database schema is not empty**. Baseline once, then deploys can run migrations.
+
+**One-time baseline (run locally with production `DATABASE_URL`):**
+
+```bash
+cd web
+# Use production DATABASE_URL in .env (or: export DATABASE_URL="postgresql://...")
+npx prisma migrate resolve --applied 20250201000000_baseline
+```
+
+That creates `_prisma_migrations` and marks the baseline as applied **without** running any SQL. After that, `npm run db:migrate` (and Vercel’s build) will run pending migrations (e.g. `20250202120000_add_business_place_id_and_opportunities`).
+
+Then push; Vercel build will run `db:migrate` and apply the real migration.
+
+---
+
 ## Fixing production (e.g. missing `businesses.place_id`)
 
-1. Ensure the migration that adds the column (and any new tables) exists under `prisma/migrations/`.
+1. If you hit P3005, do the **baseline** step above first.
 2. With `DATABASE_URL` set to the **production** DB, run:
 
    ```bash
@@ -61,10 +79,30 @@ This project uses **Prisma** with **migrations** for production and optional `db
 
 3. Redeploy the app so it uses the updated schema.
 
-npm**If you already ran `db push`** and the `opportunities` table (or `businesses.place_id`) already exists, mark this migration as applied without running it:
+**If you already ran `db push`** and the `opportunities` table (and `businesses.place_id`) already exist, mark that migration as applied so Prisma doesn’t run it again:
 
 ```bash
 npx prisma migrate resolve --applied 20250202120000_add_business_place_id_and_opportunities
 ```
 
-Then run `npm run db:migrate` as usual for future migrations.
+Then run `npm run db:migrate` (or push) as usual for future migrations.
+
+---
+
+## Recovering from a failed migration (P3018)
+
+If a migration failed (e.g. **relation "opportunities" already exists**) because the schema was already applied via `db push`, clear the failure and mark the migration as applied so Prisma stops trying to run it.
+
+**Run against production (with production `DATABASE_URL`):**
+
+```bash
+cd web
+
+# 1. Mark the failed migration as rolled back (clears the failure)
+npx prisma migrate resolve --rolled-back 20250202120000_add_business_place_id_and_opportunities
+
+# 2. Mark it as applied (schema already exists; Prisma will not run it again)
+npx prisma migrate resolve --applied 20250202120000_add_business_place_id_and_opportunities
+```
+
+After that, `npm run db:migrate` (and Vercel builds) will succeed and future migrations will run as normal.
