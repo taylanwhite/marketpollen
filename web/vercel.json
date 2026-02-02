@@ -3,11 +3,10 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "builds": [
-    { "src": "dist-api/**/*.js", "use": "@vercel/node" },
+    { "src": "api/**/*.js", "use": "@vercel/node" },
     { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
   ],
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/dist-api/$1" },
     { "source": "/((?!api|assets|src|node_modules|@|\\.).*)", "destination": "/index.html" }
   ]
 }

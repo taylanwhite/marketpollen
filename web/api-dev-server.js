@@ -1,5 +1,5 @@
 /**
- * Local dev only: runs compiled dist-api/*.js on port 3001 so Vite's proxy has a target.
+ * Local dev only: runs compiled api/*.js on port 3001 so Vite's proxy has a target.
  * Start with: npm run build:api && node api-dev-server.js
  * Then run Vite in another terminal; Vite proxies /api -> 3001.
  */
@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const API_DIR = join(__dirname, 'dist-api');
+const API_DIR = join(__dirname, 'api');
 
 function resolveRoute(pathname, queryFromUrl = {}) {
   const path = pathname.replace(/^\/api\/?/, '') || '';
@@ -87,6 +87,6 @@ app.all('/api/*', async (req, res) => {
 
 const PORT = 3001;
 app.listen(PORT, () => {
-  console.log(`API dev server (dist-api/*.js) on http://localhost:${PORT}`);
+  console.log(`API dev server (api/*.js) on http://localhost:${PORT}`);
   console.log('Start Vite or vercel dev in another terminal; they proxy /api here.');
 });
