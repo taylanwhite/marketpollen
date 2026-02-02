@@ -291,37 +291,33 @@ primary="Change Store"
           borderBottom: '1px solid rgba(245, 200, 66, 0.4)',
         }}
       >
-        <Toolbar sx={{ px: { xs: 1, sm: 2 }, minHeight: { xs: 56, sm: 64 }, position: 'relative' }}>
+        <Toolbar sx={{ px: { xs: 1, sm: 2 }, minHeight: { xs: 56, sm: 64 }, position: 'relative', display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 }, minWidth: 0 }}>
           <IconButton
             color="inherit"
             aria-label="open drawer"
             edge="start"
             onClick={handleDrawerToggle}
-            sx={{ mr: { xs: 1, sm: 2 }, display: { sm: 'none' } }}
+            sx={{ mr: { xs: 0, sm: 0 }, flexShrink: 0, display: { sm: 'none' } }}
             size="small"
           >
             <MenuIcon />
           </IconButton>
-          
-          <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 }, minWidth: 0, overflow: 'hidden' }}>
-            {currentStore && (
-              <Chip
-                icon={<LocationIcon sx={{ color: '#2d2d2d !important', fontSize: { xs: 16, sm: 20 } }} />}
-                label={currentStore.name}
-                sx={{
-                  bgcolor: 'rgba(245, 200, 66, 0.15)',
-                  color: '#2d2d2d',
-                  border: '1px solid rgba(245, 200, 66, 0.5)',
-                  fontWeight: 500,
-                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                  height: { xs: 28, sm: 32 },
-                  transition: 'background-color 0.2s ease, border-color 0.2s ease',
-                  '& .MuiChip-icon': { color: '#2d2d2d' },
-                }}
-              />
-            )}
-          </Box>
 
+          {/* Logo: inline on mobile to avoid overlap, centered on desktop */}
+          <Box
+            component="img"
+            src="/assets/nav-title-220x40.png"
+            srcSet="/assets/nav-title-440x80@2x.png 2x"
+            alt="Market Pollen"
+            sx={{
+              height: { xs: 28, sm: 36 },
+              width: 'auto',
+              maxWidth: { xs: 120, sm: 200 },
+              objectFit: 'contain',
+              flexShrink: 0,
+              display: { xs: 'block', sm: 'none' },
+            }}
+          />
           <Box
             component="img"
             src="/assets/nav-title-220x40.png"
@@ -336,8 +332,31 @@ primary="Change Store"
               maxWidth: 200,
               objectFit: 'contain',
               pointerEvents: 'none',
+              display: { xs: 'none', sm: 'block' },
             }}
           />
+
+          {/* Store chip: flex 1 so it takes remaining space; ellipsis on mobile */}
+          <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', overflow: 'hidden' }}>
+            {currentStore && (
+              <Chip
+                icon={<LocationIcon sx={{ color: '#2d2d2d !important', fontSize: { xs: 16, sm: 20 } }} />}
+                label={currentStore.name}
+                sx={{
+                  bgcolor: 'rgba(245, 200, 66, 0.15)',
+                  color: '#2d2d2d',
+                  border: '1px solid rgba(245, 200, 66, 0.5)',
+                  fontWeight: 500,
+                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                  height: { xs: 28, sm: 32 },
+                  maxWidth: '100%',
+                  '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
+                  transition: 'background-color 0.2s ease, border-color 0.2s ease',
+                  '& .MuiChip-icon': { color: '#2d2d2d' },
+                }}
+              />
+            )}
+          </Box>
 
           {hasMultipleStores && (
             <Button
