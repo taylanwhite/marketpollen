@@ -83,7 +83,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     });
 
-    // Send email notification (fire-and-forget)
+    const eventStatus = body.status ?? 'scheduled';
+    const skipEmailTypes = ['reachout'];
+    const isAlreadyCompleted = eventStatus === 'completed';
+    if (!isAlreadyCompleted && !skipEmailTypes.includes(body.type || 'other'))
     (async () => {
       try {
         const [store, contact, business] = await Promise.all([

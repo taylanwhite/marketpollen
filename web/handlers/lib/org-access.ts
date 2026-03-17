@@ -23,5 +23,13 @@ export async function isOrgMember(uid: string, orgId: string): Promise<boolean> 
   const member = await prisma.organizationMember.findUnique({
     where: { user_id_org_id: { user_id: uid, org_id: orgId } },
   });
-  return !!member;
+  if (member) return true;
+
+  const storeAccess = await prisma.storePermission.findFirst({
+    where: {
+      user_id: uid,
+      store: { organization_id: orgId },
+    },
+  });
+  return !!storeAccess;
 }
