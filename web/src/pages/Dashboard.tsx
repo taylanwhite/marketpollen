@@ -446,7 +446,6 @@ export function Dashboard() {
         rawNotes: quickReachoutData.rawNotes || null,
         createdBy: userId || '',
         type: quickReachoutData.type,
-        storeId: permissions.currentStoreId || undefined,
         donation: includeDonation ? donationData : undefined,
       };
 

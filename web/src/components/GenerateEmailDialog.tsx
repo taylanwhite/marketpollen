@@ -139,7 +139,7 @@ export function GenerateEmailDialog({ open, onClose, contactId, contactName, onR
           {!draft && !loading && (
             <Button
               variant="contained"
-              onClick={generate}
+              onClick={() => generate()}
               startIcon={<EmailIcon />}
               fullWidth
             >

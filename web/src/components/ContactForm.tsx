@@ -10,7 +10,7 @@ import { useCampaign } from '../contexts/CampaignContext';
 import { useDonation } from '../contexts/DonationContext';
 import { DonationProductFields } from './DonationProductFields';
 import { Box, Button, Switch, FormControlLabel, Typography, Divider, Collapse, TextField, Checkbox, Chip } from '@mui/material';
-import { AddressPicker, AddressData } from './AddressPicker';
+import { type AddressData } from './AddressPicker';
 import { PlaceMatchPicker, type PlaceResult } from './PlaceMatchPicker';
 import { Cake as CakeIcon } from '@mui/icons-material';
 

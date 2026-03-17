@@ -178,7 +178,6 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           const updated: Reachout = {
             ...r,
             note: editingReachoutNote,
-            storeId: permissions.currentStoreId || r.storeId || undefined,
             donation: editingIncludeDonation && editingReachoutDonation ? editingReachoutDonation : undefined
           };
           return updated;
