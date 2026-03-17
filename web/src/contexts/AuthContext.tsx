@@ -1,15 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut
-} from 'firebase/auth';
-import { auth } from '../firebase/config';
-import { api } from '../api/client';
+import { useUser, useAuth as useClerkAuth } from '@clerk/react';
+import { api, setTokenGetter } from '../api/client';
 import type { StorePermission } from '../types';
-
-type FirebaseUser = Awaited<ReturnType<typeof createUserWithEmailAndPassword>>['user'];
 
 interface UserData {
   uid: string;
@@ -21,12 +13,11 @@ interface UserData {
 }
 
 interface AuthContextType {
-  currentUser: FirebaseUser | null;
+  userId: string | null;
+  userEmail: string | null;
   userData: UserData | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
+  isSignedIn: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -40,74 +31,83 @@ export function useAuth() {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const { isSignedIn, userId, getToken } = useClerkAuth();
+  const { user } = useUser();
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-      if (user) {
-        try {
-          const me = await api.get<{ user: { uid: string; email: string; displayName?: string; createdAt: string; isGlobalAdmin: boolean }; storePermissions: { storeId: string; canEdit: boolean }[] }>('/me');
-          if (me.user) {
-            setUserData({
-              uid: me.user.uid,
-              email: me.user.email,
-              displayName: me.user.displayName,
-              createdAt: new Date(me.user.createdAt),
-              isGlobalAdmin: me.user.isGlobalAdmin,
-              storePermissions: me.storePermissions || [],
-            });
-          } else {
-            await api.post('/users/sync', { email: user.email || '', displayName: user.displayName || undefined });
-            const me2 = await api.get<{ user: { uid: string; email: string; displayName?: string; createdAt: string; isGlobalAdmin: boolean }; storePermissions: { storeId: string; canEdit: boolean }[] }>('/me');
-            if (me2.user) {
-              setUserData({
-                uid: me2.user.uid,
-                email: me2.user.email,
-                displayName: me2.user.displayName,
-                createdAt: new Date(me2.user.createdAt),
-                isGlobalAdmin: me2.user.isGlobalAdmin,
-                storePermissions: me2.storePermissions || [],
-              });
-            } else {
-              setUserData(null);
-            }
-          }
-        } catch (err) {
-          console.error('Error loading user from API:', err);
+    setTokenGetter(() => getToken());
+  }, [getToken]);
+
+  useEffect(() => {
+    if (isSignedIn === undefined) {
+      // Clerk hasn't loaded yet — stay in loading state
+      return;
+    }
+
+    if (!isSignedIn || !userId) {
+      setUserData(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    loadUserData();
+  }, [isSignedIn, userId]);
+
+  async function loadUserData() {
+    try {
+      const me = await api.get<{
+        user: { uid: string; email: string; displayName?: string; createdAt: string; isGlobalAdmin: boolean } | null;
+        storePermissions: { storeId: string; canEdit: boolean }[];
+      }>('/me');
+
+      if (me.user) {
+        setUserData({
+          uid: me.user.uid,
+          email: me.user.email,
+          displayName: me.user.displayName,
+          createdAt: new Date(me.user.createdAt),
+          isGlobalAdmin: me.user.isGlobalAdmin,
+          storePermissions: me.storePermissions || [],
+        });
+      } else {
+        await api.post('/users/sync', {
+          email: user?.primaryEmailAddress?.emailAddress || '',
+          displayName: user?.fullName || undefined,
+        });
+        const me2 = await api.get<{
+          user: { uid: string; email: string; displayName?: string; createdAt: string; isGlobalAdmin: boolean } | null;
+          storePermissions: { storeId: string; canEdit: boolean }[];
+        }>('/me');
+        if (me2.user) {
+          setUserData({
+            uid: me2.user.uid,
+            email: me2.user.email,
+            displayName: me2.user.displayName,
+            createdAt: new Date(me2.user.createdAt),
+            isGlobalAdmin: me2.user.isGlobalAdmin,
+            storePermissions: me2.storePermissions || [],
+          });
+        } else {
           setUserData(null);
         }
-      } else {
-        setUserData(null);
       }
+    } catch (err) {
+      console.error('Error loading user from API:', err);
+      setUserData(null);
+    } finally {
       setLoading(false);
-    });
-
-    return unsubscribe;
-  }, []);
-
-  async function signup(email: string, password: string) {
-    const { user } = await createUserWithEmailAndPassword(auth, email, password);
-    await api.post('/users/sync', { email: user.email || '', displayName: user.displayName || undefined });
-  }
-
-  async function login(email: string, password: string) {
-    await signInWithEmailAndPassword(auth, email, password);
-  }
-
-  async function logout() {
-    await signOut(auth);
+    }
   }
 
   const value: AuthContextType = {
-    currentUser,
+    userId: userId ?? null,
+    userEmail: user?.primaryEmailAddress?.emailAddress ?? null,
     userData,
-    loading,
-    login,
-    signup,
-    logout
+    loading: loading || isSignedIn === undefined,
+    isSignedIn: !!isSignedIn,
   };
 
   return (

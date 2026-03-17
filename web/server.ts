@@ -26,11 +26,19 @@ import sendInviteEmailHandler from './dist-handlers/send-invite-email.js';
 import placesAutocompleteHandler from './dist-handlers/places-autocomplete.js';
 import placesDetailsHandler from './dist-handlers/places-details.js';
 import placesNearbyHandler from './dist-handlers/places-nearby.js';
+import placesLookupHandler from './dist-handlers/places-lookup.js';
 import usersIndexHandler from './dist-handlers/users/index.js';
 import usersUidHandler from './dist-handlers/users/[uid].js';
 import usersSyncHandler from './dist-handlers/users/sync.js';
 import discoverySearchHandler from './dist-handlers/discovery/search.js';
 import discoveredPlacesHandler from './dist-handlers/discovered-places.js';
+import organizationsHandler from './dist-handlers/organizations.js';
+import organizationsIdHandler from './dist-handlers/organizations/[id].js';
+import orgProductsHandler from './dist-handlers/organizations/[id]/products.js';
+import orgProductIdHandler from './dist-handlers/organizations/[id]/products/[pid].js';
+import generateEmailHandler from './dist-handlers/generate-email.js';
+import storeProgressHandler from './dist-handlers/store-progress.js';
+
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -49,12 +57,18 @@ const withUid = (handler: Handler): express.RequestHandler => (req, res) => {
   return handler(req, res);
 };
 
+const withIdPid = (handler: Handler): express.RequestHandler => (req, res) => {
+  (req as express.Request & { query: Record<string, string> }).query = { ...req.query, id: req.params.id, pid: req.params.pid };
+  return handler(req, res);
+};
+
 // Me
 app.get('/api/me', route(meHandler));
 
 // Stores
 app.get('/api/stores', route(storesHandler));
 app.post('/api/stores', route(storesHandler));
+app.get('/api/store-progress', route(storeProgressHandler));
 app.all('/api/stores/:id', withId(storesIdHandler));
 
 // Businesses
@@ -87,6 +101,7 @@ app.get('/api/day-planner', route(dayPlannerHandler));
 
 // AI / integrations
 app.post('/api/chat-completion', route(chatCompletionHandler));
+app.post('/api/generate-email', route(generateEmailHandler));
 app.post('/api/create-contact-from-call', route(createContactFromCallHandler));
 app.post('/api/send-invite-email', route(sendInviteEmailHandler));
 
@@ -94,15 +109,25 @@ app.post('/api/send-invite-email', route(sendInviteEmailHandler));
 app.post('/api/places-autocomplete', route(placesAutocompleteHandler));
 app.post('/api/places-details', route(placesDetailsHandler));
 app.post('/api/places-nearby', route(placesNearbyHandler));
+app.post('/api/places-lookup', route(placesLookupHandler));
 
 // Users
 app.get('/api/users', route(usersIndexHandler));
 app.post('/api/users', route(usersIndexHandler));
-app.all('/api/users/:uid', withUid(usersUidHandler));
 app.post('/api/users/sync', route(usersSyncHandler));
+app.all('/api/users/:uid', withUid(usersUidHandler));
 
 // Discovery
 app.post('/api/discovery/search', route(discoverySearchHandler));
 app.get('/api/discovered-places', route(discoveredPlacesHandler));
+
+// Organizations
+app.get('/api/organizations', route(organizationsHandler));
+app.post('/api/organizations', route(organizationsHandler));
+app.all('/api/organizations/:id/products/:pid', withIdPid(orgProductIdHandler));
+app.get('/api/organizations/:id/products', withId(orgProductsHandler));
+app.post('/api/organizations/:id/products', withId(orgProductsHandler));
+
+app.all('/api/organizations/:id', withId(organizationsIdHandler));
 
 export default app;

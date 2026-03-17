@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore } from './lib/store-access.js';
+import { sendCalendarEventEmail } from './send-calendar-email.js';
 
 function toEventJson(r: { id: string; store_id: string; title: string; description: string | null; date: Date; start_time: string | null; end_time: string | null; type: string; contact_id: string | null; business_id: string | null; priority: string | null; status: string | null; created_by: string; created_at: Date; completed_at: Date | null }) {
   return {
@@ -81,6 +82,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         created_by: uid,
       },
     });
+
+    // Send email notification (fire-and-forget)
+    (async () => {
+      try {
+        const [store, contact, business] = await Promise.all([
+          prisma.store.findUnique({ where: { id: storeId }, select: { name: true } }),
+          body.contactId
+            ? prisma.contact.findUnique({ where: { id: body.contactId }, select: { first_name: true, last_name: true } })
+            : null,
+          body.businessId
+            ? prisma.business.findUnique({ where: { id: body.businessId }, select: { name: true } })
+            : null,
+        ]);
+
+        const contactName = contact
+          ? [contact.first_name, contact.last_name].filter(Boolean).join(' ').trim() || undefined
+          : undefined;
+
+        await sendCalendarEventEmail(uid, {
+          title: body.title,
+          description: body.description,
+          date: eventDate,
+          startTime: body.startTime,
+          endTime: body.endTime,
+          type: body.type || 'other',
+          priority: body.priority,
+          contactName,
+          businessName: business?.name,
+          storeName: store?.name,
+        });
+      } catch (emailErr) {
+        console.error('Failed to send calendar event email:', emailErr);
+      }
+    })();
+
     return res.status(201).json(toEventJson(row));
   }
 

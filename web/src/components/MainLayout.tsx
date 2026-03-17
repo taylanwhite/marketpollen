@@ -1,8 +1,9 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useClerk } from '@clerk/react';
 import { usePermissions } from '../contexts/PermissionContext';
 import { BundtiniTracker } from './BundtiniTracker';
+// import { ElevenLabsConvAI } from './ElevenLabsConvAI';
 import { Store } from '../types';
 import { api } from '../api/client';
 import {
@@ -32,6 +33,7 @@ import {
   Logout as LogoutIcon,
   SwapHoriz as SwapIcon,
   Cake as CakeIcon,
+  Settings as SettingsIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -43,8 +45,8 @@ interface MainLayoutProps {
 export function MainLayout({ children }: MainLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { logout } = useAuth();
-  const { permissions, isAdmin } = usePermissions();
+  const { signOut } = useClerk();
+  const { permissions, isAdmin, isOrgAdminFn } = usePermissions();
   
   const [mobileOpen, setMobileOpen] = useState(false);
   const [currentStore, setCurrentStore] = useState<Store | null>(null);
@@ -71,18 +73,13 @@ export function MainLayout({ children }: MainLayoutProps) {
       setHasMultipleStores(availableStores.length > 1);
       const current = storeList.find(store => store.id === permissions.currentStoreId);
       
-      // If store not found, it might have been deleted - don't clear it immediately
-      // Let PermissionContext handle validation
       if (current) {
         setCurrentStore(current);
       } else {
-        // Store not found - might be deleted or user lost access
-        // Keep showing it for now, PermissionContext will handle cleanup
         setCurrentStore(null);
       }
     } catch (error) {
       console.error('Error loading store:', error);
-      // Don't clear store on error - might be temporary network issue
     }
   };
 
@@ -93,13 +90,14 @@ export function MainLayout({ children }: MainLayoutProps) {
   const handleLogout = async () => {
     try {
       localStorage.removeItem('selectedStoreId');
-      await logout();
+      await signOut();
       navigate('/login');
     } catch (error) {
       console.error('Error logging out:', error);
     }
   };
 
+  const isStorePicker = location.pathname === '/select-store';
   const isActive = (path: string) => location.pathname === path;
 
   const mainNavItems = [
@@ -117,7 +115,29 @@ export function MainLayout({ children }: MainLayoutProps) {
 
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', bgcolor: '#f5f5f5', background: '#f5f5f5' }}>
-      <Toolbar sx={{ justifyContent: 'center', py: 2, flexShrink: 0 }}>
+      {currentStore && (
+        <Box sx={{ px: 2, pt: 2, pb: 1, flexShrink: 0, textAlign: 'center' }}>
+          <Chip
+            icon={<LocationIcon sx={{ color: '#2d2d2d !important', fontSize: 18 }} />}
+            label={currentStore.name}
+            onClick={hasMultipleStores ? () => navigate('/select-store') : undefined}
+            sx={{
+              bgcolor: 'rgba(245, 200, 66, 0.15)',
+              color: '#2d2d2d',
+              border: '1px solid rgba(245, 200, 66, 0.5)',
+              fontWeight: 500,
+              fontSize: '0.8rem',
+              height: 32,
+              maxWidth: '100%',
+              cursor: hasMultipleStores ? 'pointer' : 'default',
+              '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
+              '& .MuiChip-icon': { color: '#2d2d2d' },
+              '&:hover': hasMultipleStores ? { bgcolor: 'rgba(245, 200, 66, 0.3)' } : {},
+            }}
+          />
+        </Box>
+      )}
+      <Toolbar sx={{ justifyContent: 'center', py: 1, flexShrink: 0 }}>
         <Box
           component="img"
           src="/assets/sidemenu-logo-48.png"
@@ -201,7 +221,7 @@ primary="Change Store"
           </ListItem>
         ))}
 
-        {isAdmin() && (
+        {(isAdmin() || isOrgAdminFn()) && (
           <>
             <Divider sx={{ my: 2, borderColor: 'rgba(0, 0, 0, 0.08)' }} />
             <Typography 
@@ -216,6 +236,38 @@ primary="Change Store"
             >
               Admin
             </Typography>
+            {(isOrgAdminFn() || isAdmin()) && (
+              <ListItem disablePadding>
+                <ListItemButton
+                  onClick={() => {
+                    navigate('/org-settings');
+                    setMobileOpen(false);
+                  }}
+                  sx={{
+                    mx: 1,
+                    borderRadius: 2,
+                    mb: 0.5,
+                    bgcolor: isActive('/org-settings') ? 'rgba(245, 200, 66, 0.2)' : 'transparent',
+                    '&:hover': {
+                      bgcolor: isActive('/org-settings') ? 'rgba(245, 200, 66, 0.25)' : 'rgba(0, 0, 0, 0.04)',
+                    },
+                  }}
+                >
+                  <ListItemIcon sx={{ color: '#2d2d2d', minWidth: 40 }}>
+                    <SettingsIcon />
+                  </ListItemIcon>
+                  <ListItemText 
+                    primary="Org Settings" 
+                    sx={{ 
+                      '& .MuiListItemText-primary': { 
+                        color: '#2d2d2d',
+                        fontWeight: isActive('/org-settings') ? 600 : 400,
+                      } 
+                    }} 
+                  />
+                </ListItemButton>
+              </ListItem>
+            )}
             {adminNavItems.map((item) => (
               <ListItem key={item.text} disablePadding>
                 <ListItemButton
@@ -278,6 +330,14 @@ primary="Change Store"
     </Box>
   );
 
+  if (isStorePicker) {
+    return (
+      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+        {children}
+      </Box>
+    );
+  }
+
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <AppBar
@@ -336,47 +396,29 @@ primary="Change Store"
             }}
           />
 
-          {/* Store chip: flex 1 so it takes remaining space; ellipsis on mobile */}
-          <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', overflow: 'hidden' }}>
+          {/* Store chip: mobile only (desktop shows it in sidebar) */}
+          <Box sx={{ flex: 1, minWidth: 0, display: { xs: 'flex', sm: 'none' }, alignItems: 'center', overflow: 'hidden' }}>
             {currentStore && (
               <Chip
-                icon={<LocationIcon sx={{ color: '#2d2d2d !important', fontSize: { xs: 16, sm: 20 } }} />}
+                icon={<LocationIcon sx={{ color: '#2d2d2d !important', fontSize: 16 }} />}
                 label={currentStore.name}
                 sx={{
                   bgcolor: 'rgba(245, 200, 66, 0.15)',
                   color: '#2d2d2d',
                   border: '1px solid rgba(245, 200, 66, 0.5)',
                   fontWeight: 500,
-                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                  height: { xs: 28, sm: 32 },
+                  fontSize: '0.75rem',
+                  height: 28,
                   maxWidth: '100%',
                   '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
-                  transition: 'background-color 0.2s ease, border-color 0.2s ease',
                   '& .MuiChip-icon': { color: '#2d2d2d' },
                 }}
               />
             )}
           </Box>
+          <Box sx={{ flex: 1, display: { xs: 'none', sm: 'block' } }} />
 
-          {hasMultipleStores && (
-            <Button
-              variant="contained"
-              color="primary"
-              startIcon={<SwapIcon />}
-              onClick={() => navigate('/select-store')}
-              sx={{
-                fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                px: { xs: 1, sm: 2 },
-                minWidth: { xs: 'auto', sm: 140 },
-                display: { xs: 'none', sm: 'flex' },
-                '& .MuiButton-startIcon': {
-                  marginRight: { xs: 0.5, sm: 1 },
-                },
-              }}
-            >
-              Change Store
-            </Button>
-          )}
+          {/* Change Store button removed — use sidebar link instead */}
         </Toolbar>
       </AppBar>
 
@@ -438,6 +480,7 @@ primary="Change Store"
         <Toolbar /> {/* Spacer for AppBar */}
         {children}
       </Box>
+      {/* <ElevenLabsConvAI /> */}
     </Box>
   );
 }

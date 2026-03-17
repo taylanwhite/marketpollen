@@ -1,18 +1,32 @@
 import { VercelRequest } from '@vercel/node';
-import { verifyIdToken } from './firebase-admin.js';
+import { verifyToken } from '@clerk/backend';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
-/**
- * Get current user UID from request. Expects Authorization: Bearer <firebase_id_token>.
- * Returns uid or null if missing/invalid.
- */
-export async function getAuthUid(req: VercelRequest): Promise<string | null> {
-  const authHeader = req.headers.authorization;
-  return verifyIdToken(authHeader);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: join(__dirname, '..', '..', '.env') });
+
+async function verifyClerkToken(bearerToken: string | undefined): Promise<string | null> {
+  if (!bearerToken || !bearerToken.startsWith('Bearer ')) return null;
+  const token = bearerToken.slice(7).trim();
+  if (!token) return null;
+  try {
+    const payload = await verifyToken(token, {
+      secretKey: process.env.CLERK_SECRET_KEY!,
+    });
+    return payload.sub ?? null;
+  } catch {
+    return null;
+  }
 }
 
-/**
- * Require auth: returns uid or throws (caller should return 401).
- */
+export async function getAuthUid(req: VercelRequest): Promise<string | null> {
+  const authHeader = req.headers.authorization;
+  return verifyClerkToken(authHeader);
+}
+
 export async function requireAuth(req: VercelRequest): Promise<string> {
   const uid = await getAuthUid(req);
   if (!uid) throw new Error('UNAUTHORIZED');

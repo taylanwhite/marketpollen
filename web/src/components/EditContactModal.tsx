@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
-import { Contact, Reachout, DonationData, MOUTH_VALUES } from '../types';
+import { Contact, Reachout, DonationData } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
+import { useCampaign } from '../contexts/CampaignContext';
+import { DonationProductFields } from './DonationProductFields';
 import { AddressPicker, AddressData } from './AddressPicker';
+import { PlaceMatchPicker, type PlaceResult } from './PlaceMatchPicker';
 import {
   Dialog,
   DialogTitle,
@@ -50,7 +53,9 @@ import {
   Settings as SettingsIcon,
   Business as BusinessIcon,
   Warning as WarningIcon,
+  AutoAwesome as AIIcon,
 } from '@mui/icons-material';
+import { GenerateEmailDialog } from './GenerateEmailDialog';
 
 interface EditContactModalProps {
   contact: Contact;
@@ -82,6 +87,7 @@ const reachoutTypeIcons: Record<string, React.ReactElement> = {
 export function EditContactModal({ contact, onClose, onSuccess }: EditContactModalProps) {
   const { permissions } = usePermissions();
   const { triggerRefresh, setLastDonationMouths } = useDonation();
+  const { products } = useCampaign();
   // Note: useVoiceInput removed - it was part of the "Add Reachout" tab that was removed
   
   const [tabValue, setTabValue] = useState(0);
@@ -102,6 +108,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>(contact.businessId);
   const [deleting, setDeleting] = useState(false);
@@ -115,6 +122,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     zipCode: '',
   });
   const [creatingBusiness, setCreatingBusiness] = useState(false);
+  const [showPlacePicker, setShowPlacePicker] = useState(false);
 
   useEffect(() => {
     const loadBusinesses = async () => {
@@ -143,7 +151,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
       setEditingReachoutDonation({ ...reachout.donation });
       setEditingIncludeDonation(true);
     } else {
-      setEditingReachoutDonation(createEmptyDonation());
+      setEditingReachoutDonation(createEmptyDonation(products));
       setEditingIncludeDonation(false);
     }
   };
@@ -160,8 +168,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     try {
       const originalReachout = contact.reachouts.find(r => r.id === reachoutId);
       const hadDonation = !!originalReachout?.donation;
-      const originalMouths = originalReachout?.donation ? calculateMouths(originalReachout.donation) : 0;
-      const newMouths = editingIncludeDonation && editingReachoutDonation ? calculateMouths(editingReachoutDonation) : 0;
+      const originalMouths = originalReachout?.donation ? calculateMouths(originalReachout.donation, products) : 0;
+      const newMouths = editingIncludeDonation && editingReachoutDonation ? calculateMouths(editingReachoutDonation, products) : 0;
       const mouthsDiff = newMouths - originalMouths;
       const donationChanged = hadDonation !== editingIncludeDonation || originalMouths !== newMouths;
 
@@ -274,17 +282,19 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     }
   };
 
-  const handleCreateBusiness = async () => {
+  const handleCreateBusiness = () => {
     if (!newBusinessName.trim()) {
       setError('Business name is required');
       return;
     }
-
     if (!permissions.currentStoreId) {
       setError('Please select a store first');
       return;
     }
+    setShowPlacePicker(true);
+  };
 
+  const finishCreateBusiness = async (placeId?: string) => {
     setCreatingBusiness(true);
     setError('');
     setSuccess('');
@@ -296,6 +306,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         city: newBusinessAddress.city || undefined,
         state: newBusinessAddress.state || undefined,
         zipCode: newBusinessAddress.zipCode || undefined,
+        placeId: placeId || undefined,
       });
       const list = await api.get<Array<{ id: string; name: string }>>(`/businesses?storeId=${permissions.currentStoreId}`);
       const businessMap = new Map<string, string>();
@@ -305,6 +316,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
       setShowNewBusiness(false);
+      setShowPlacePicker(false);
       setSuccess('Business created successfully!');
     } catch (err: any) {
       console.error('Error creating business:', err);
@@ -352,9 +364,19 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   return (
     <Dialog open onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}>
-        <Typography component="span" variant="h5" sx={{ fontWeight: 600 }}>
-          {getContactName()}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography component="span" variant="h5" sx={{ fontWeight: 600 }}>
+            {getContactName()}
+          </Typography>
+          <Button
+            size="small"
+            startIcon={<AIIcon />}
+            onClick={() => setEmailDialogOpen(true)}
+            sx={{ ml: 1 }}
+          >
+            Generate Email
+          </Button>
+        </Box>
         <IconButton onClick={onClose} size="small">
           <CloseIcon />
         </IconButton>
@@ -532,7 +554,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                       {reachout.donation && (
                         <Chip
                           icon={<CakeIcon sx={{ fontSize: 14 }} />}
-                          label={`${calculateMouths(reachout.donation)} mouths`}
+                          label={`${calculateMouths(reachout.donation, products)} mouths`}
                           size="small"
                           color="primary"
                           sx={{ ml: 'auto' }}
@@ -564,11 +586,11 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                                 const isChecked = e.target.checked;
                                 setEditingIncludeDonation(isChecked);
                                 if (!isChecked) {
-                                  setEditingReachoutDonation(createEmptyDonation());
+                                  setEditingReachoutDonation(createEmptyDonation(products));
                                 } else {
                                   // Ensure donation object exists when toggling on
                                   if (!editingReachoutDonation) {
-                                    setEditingReachoutDonation(createEmptyDonation());
+                                    setEditingReachoutDonation(createEmptyDonation(products));
                                   }
                                 }
                               }}
@@ -591,100 +613,25 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                                 <CakeIcon fontSize="small" color="primary" />
                                 Product Donations
                                 <Chip 
-                                  label={`${editingReachoutDonation ? calculateMouths(editingReachoutDonation) : 0} mouths`} 
+                                  label={`${editingReachoutDonation ? calculateMouths(editingReachoutDonation, products) : 0} mouths`} 
                                   size="small" 
                                   color="primary" 
                                   sx={{ ml: 'auto' }}
                                 />
                               </Typography>
 
-                              <Grid container spacing={2}>
-                                <Grid size={{ xs: 6, sm: 4 }}>
-                                  <TextField
-                                    label="FREE Bundtlet Card"
-                                    type="number"
-                                    size="small"
-                                    fullWidth
-                                    value={editingReachoutDonation?.freeBundletCard || ''}
-                                    onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, freeBundletCard: parseInt(e.target.value) || 0 } : createEmptyDonation())}
-                                    helperText={`${MOUTH_VALUES.freeBundletCard} mouth each`}
-                                    disabled={loading}
-                                    slotProps={{ htmlInput: { min: 0 } }}
-                                  />
-                                </Grid>
-                                <Grid size={{ xs: 6, sm: 4 }}>
-                                  <TextField
-                                    label="Dozen Bundtinis"
-                                    type="number"
-                                    size="small"
-                                    fullWidth
-                                    value={editingReachoutDonation?.dozenBundtinis || ''}
-                                    onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, dozenBundtinis: parseInt(e.target.value) || 0 } : createEmptyDonation())}
-                                    helperText={`${MOUTH_VALUES.dozenBundtinis} mouths each`}
-                                    disabled={loading}
-                                    slotProps={{ htmlInput: { min: 0 } }}
-                                  />
-                                </Grid>
-                                <Grid size={{ xs: 6, sm: 4 }}>
-                                  <TextField
-                                    label="8&quot; Cake"
-                                    type="number"
-                                    size="small"
-                                    fullWidth
-                                    value={editingReachoutDonation?.cake8inch || ''}
-                                    onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, cake8inch: parseInt(e.target.value) || 0 } : createEmptyDonation())}
-                                    helperText={`${MOUTH_VALUES.cake8inch} mouths each`}
-                                    disabled={loading}
-                                    slotProps={{ htmlInput: { min: 0 } }}
-                                  />
-                                </Grid>
-                                <Grid size={{ xs: 6, sm: 4 }}>
-                                  <TextField
-                                    label="10&quot; Cake"
-                                    type="number"
-                                    size="small"
-                                    fullWidth
-                                    value={editingReachoutDonation?.cake10inch || ''}
-                                    onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, cake10inch: parseInt(e.target.value) || 0 } : createEmptyDonation())}
-                                    helperText={`${MOUTH_VALUES.cake10inch} mouths each`}
-                                    disabled={loading}
-                                    slotProps={{ htmlInput: { min: 0 } }}
-                                  />
-                                </Grid>
-                                <Grid size={{ xs: 6, sm: 4 }}>
-                                  <TextField
-                                    label="Sample Tray"
-                                    type="number"
-                                    size="small"
-                                    fullWidth
-                                    value={editingReachoutDonation?.sampleTray || ''}
-                                    onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, sampleTray: parseInt(e.target.value) || 0 } : createEmptyDonation())}
-                                    helperText={`${MOUTH_VALUES.sampleTray} mouths each`}
-                                    disabled={loading}
-                                    slotProps={{ htmlInput: { min: 0 } }}
-                                  />
-                                </Grid>
-                                <Grid size={{ xs: 6, sm: 4 }}>
-                                  <TextField
-                                    label="Bundtlet/Tower"
-                                    type="number"
-                                    size="small"
-                                    fullWidth
-                                    value={editingReachoutDonation?.bundtletTower || ''}
-                                    onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, bundtletTower: parseInt(e.target.value) || 0 } : createEmptyDonation())}
-                                    helperText={`${MOUTH_VALUES.bundtletTower} mouth each`}
-                                    disabled={loading}
-                                    slotProps={{ htmlInput: { min: 0 } }}
-                                  />
-                                </Grid>
-                              </Grid>
+                              <DonationProductFields
+                                products={products}
+                                donationData={editingReachoutDonation || createEmptyDonation(products)}
+                                onChange={setEditingReachoutDonation}
+                              />
 
                               <TextField
-                                label="Cakes Donated Notes"
+                                label="Donation Notes"
                                 size="small"
                                 fullWidth
                                 value={editingReachoutDonation?.cakesDonatedNotes || ''}
-                                onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, cakesDonatedNotes: e.target.value } : createEmptyDonation())}
+                                onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, cakesDonatedNotes: e.target.value } : createEmptyDonation(products))}
                                 placeholder="Any notes about the donation..."
                                 disabled={loading}
                               />
@@ -694,7 +641,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                                   control={
                                     <Checkbox
                                       checked={editingReachoutDonation?.orderedFromUs || false}
-                                      onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, orderedFromUs: e.target.checked } : createEmptyDonation())}
+                                      onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, orderedFromUs: e.target.checked } : createEmptyDonation(products))}
                                       disabled={loading}
                                     />
                                   }
@@ -704,7 +651,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                                   control={
                                     <Checkbox
                                       checked={editingReachoutDonation?.followedUp || false}
-                                      onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, followedUp: e.target.checked } : createEmptyDonation())}
+                                      onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, followedUp: e.target.checked } : createEmptyDonation(products))}
                                       disabled={loading}
                                     />
                                   }
@@ -772,7 +719,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           {(() => {
             const donationReachouts = contact.reachouts.filter(r => r.donation);
             const totalMouths = donationReachouts.reduce(
-              (sum, r) => sum + (r.donation ? calculateMouths(r.donation) : 0),
+              (sum, r) => sum + (r.donation ? calculateMouths(r.donation, products) : 0),
               0
             );
 
@@ -820,7 +767,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                             {reachout.date.toLocaleDateString()}
                           </Typography>
                           <Chip
-                            label={`${calculateMouths(reachout.donation!)} mouths`}
+                            label={`${calculateMouths(reachout.donation!, products)} mouths`}
                             size="small"
                             color="primary"
                           />
@@ -1051,6 +998,24 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
 
+      <PlaceMatchPicker
+        open={showPlacePicker}
+        businessName={newBusinessName}
+        businessAddress={newBusinessAddress.address}
+        businessCity={newBusinessAddress.city}
+        businessState={newBusinessAddress.state}
+        businessZipCode={newBusinessAddress.zipCode}
+        onSelect={(place: PlaceResult) => finishCreateBusiness(place.placeId)}
+        onSkip={() => finishCreateBusiness()}
+        onClose={() => setShowPlacePicker(false)}
+      />
+      <GenerateEmailDialog
+        open={emailDialogOpen}
+        onClose={() => setEmailDialogOpen(false)}
+        contactId={contact.id}
+        contactName={getContactName()}
+        onReachoutAdded={onSuccess}
+      />
     </Dialog>
   );
 }

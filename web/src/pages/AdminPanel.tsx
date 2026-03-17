@@ -59,8 +59,8 @@ interface PendingInvite {
 }
 
 export function AdminPanel() {
-  const { currentUser } = useAuth();
-  const { isAdmin } = usePermissions();
+  const { userId, userEmail } = useAuth();
+  const { isAdmin, isOrgAdminFn, currentOrg } = usePermissions();
   const navigate = useNavigate();
   
   const [stores, setStores] = useState<Store[]>([]);
@@ -76,31 +76,36 @@ export function AdminPanel() {
   // Edit user modal
   const [editingUser, setEditingUser] = useState<UserWithPermissions | null>(null);
   const [editAccessLevels, setEditAccessLevels] = useState<Map<string, AccessLevel>>(new Map());
-  const [editIsAdmin, setEditIsAdmin] = useState(false);
+  const [editIsOrgAdmin, setEditIsOrgAdmin] = useState(false);
   
-  // New user invitation form
+  // New user invitation
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState('');
-  const [inviteAsAdmin, setInviteAsAdmin] = useState(false);
   const [inviteAccessLevels, setInviteAccessLevels] = useState<Map<string, AccessLevel>>(new Map());
   const [inviteLoading, setInviteLoading] = useState(false);
-  
+
 
   useEffect(() => {
-    if (!isAdmin()) {
+    if (!isAdmin() && !isOrgAdminFn()) {
       navigate('/dashboard');
       return;
     }
     loadData();
   }, [isAdmin, navigate]);
 
-  // Initialize invite access levels when stores load
-  useEffect(() => {
-    if (stores.length > 0 && inviteAccessLevels.size === 0) {
-      const defaultMap = new Map<string, AccessLevel>();
-      stores.forEach(store => defaultMap.set(store.id, 'full'));
-      setInviteAccessLevels(defaultMap);
-    }
-  }, [stores]);
+  const openInviteDialog = () => {
+    setNewUserEmail('');
+    const defaultMap = new Map<string, AccessLevel>();
+    stores.forEach(store => defaultMap.set(store.id, 'full'));
+    setInviteAccessLevels(defaultMap);
+    setInviteDialogOpen(true);
+  };
+
+  const closeInviteDialog = () => {
+    setInviteDialogOpen(false);
+    setNewUserEmail('');
+    setInviteAccessLevels(new Map());
+  };
 
   useEffect(() => {
     const term = userSearchTerm.toLowerCase().trim();
@@ -230,13 +235,7 @@ export function AdminPanel() {
         }
       });
 
-      if (inviteAsAdmin && permissions.length === 0) {
-        setError('Global admin must have at least one store, or create a store first.');
-        setInviteLoading(false);
-        return;
-      }
-
-      if (!inviteAsAdmin && permissions.length === 0) {
+      if (permissions.length === 0) {
         setError('Select at least one store with access.');
         setInviteLoading(false);
         return;
@@ -247,7 +246,6 @@ export function AdminPanel() {
           email,
           storeId: p.storeId,
           canEdit: p.canEdit,
-          isGlobalAdmin: inviteAsAdmin,
         });
       }
       
@@ -256,40 +254,20 @@ export function AdminPanel() {
       
       // Send invitation email
       try {
-        if (!currentUser) {
+        if (!userId) {
           throw new Error('User not authenticated');
         }
-        const idToken = await currentUser.getIdToken();
-        const emailResponse = await fetch('/api/send-invite-email', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${idToken}`,
-          },
-          body: JSON.stringify({
-            email: newUserEmail.toLowerCase().trim(),
-        isGlobalAdmin: inviteAsAdmin,
-            invitedByEmail: currentUser?.email || '',
-          }),
+        await api.post('/send-invite-email', {
+          email: newUserEmail.toLowerCase().trim(),
+          invitedByEmail: userEmail || '',
         });
-
-        if (!emailResponse.ok) {
-          const errorData = await emailResponse.json();
-          console.warn('Email sending failed:', errorData);
-          // Still show success since invite was created, but note email issue
-          setSuccess(`Invitation created for ${newUserEmail}, but email sending failed. They can still sign up manually.`);
-        } else {
-          setSuccess(`Invitation email sent to ${newUserEmail}.`);
-        }
+        setSuccess(`Invitation email sent to ${newUserEmail}.`);
       } catch (emailError: any) {
         console.error('Error sending email:', emailError);
-        // Still show success since invite was created
         setSuccess(`Invitation created for ${newUserEmail}, but email sending failed. They can still sign up manually.`);
       }
       
-      setNewUserEmail('');
-      setInviteAsAdmin(false);
-      setInviteAccessLevels(new Map());
+      closeInviteDialog();
     } catch (err: any) {
       console.error('Error sending invitation:', err);
       setError(err.message || 'Failed to send invitation. Check console for details.');
@@ -322,9 +300,7 @@ export function AdminPanel() {
 
   const openEditModal = (user: UserWithPermissions) => {
     setEditingUser(user);
-    setEditIsAdmin(user.isGlobalAdmin);
     
-    // Build access levels map from permissions
     const accessMap = new Map<string, AccessLevel>();
     stores.forEach(store => {
       const perm = user.storePermissions.find(p => p.storeId === store.id);
@@ -336,7 +312,7 @@ export function AdminPanel() {
   const closeEditModal = () => {
     setEditingUser(null);
     setEditAccessLevels(new Map());
-    setEditIsAdmin(false);
+    setEditIsOrgAdmin(false);
   };
 
   const handleAccessLevelChange = (storeId: string, level: AccessLevel) => {
@@ -381,9 +357,11 @@ export function AdminPanel() {
         }
       });
 
+      const orgId = currentOrg?.id;
       await api.patch(`/users/${editingUser.uid}`, {
-        isGlobalAdmin: editIsAdmin,
-        storePermissions: editIsAdmin ? [] : permissions
+        storePermissions: permissions,
+        isOrgAdmin: editIsOrgAdmin,
+        orgId,
       });
 
       await loadUsers();
@@ -402,16 +380,16 @@ export function AdminPanel() {
     
     if (accessCount === 0) return 'No access';
     if (accessCount === stores.length && fullAccessCount === stores.length) {
-      return 'All stores (full access)';
+      return 'All stores (edit)';
     }
     if (accessCount === stores.length && fullAccessCount === 0) {
-      return 'All stores (view only)';
+      return 'All stores (view)';
     }
     if (accessCount === stores.length) {
-      return `All stores (${fullAccessCount} with edit)`;
+      return `All stores (${fullAccessCount} edit, ${accessCount - fullAccessCount} view)`;
     }
     
-    return `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} with edit)`;
+    return `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} edit)`;
   };
 
 
@@ -446,142 +424,17 @@ export function AdminPanel() {
 
   return (
     <Box sx={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-      <Typography variant="h4" sx={{ mb: { xs: 2, sm: 3 }, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-        <AdminIcon sx={{ fontSize: { xs: '1.5rem', sm: '2rem' } }} /> User Management
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: { xs: 2, sm: 3 } }}>
+        <Typography variant="h4" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
+          <AdminIcon sx={{ fontSize: { xs: '1.5rem', sm: '2rem' } }} /> User Management
+        </Typography>
+        <Button variant="contained" startIcon={<SendIcon />} onClick={openInviteDialog}>
+          Invite User
+        </Button>
+      </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
-
-      {/* Invite New User */}
-      <Paper sx={{ p: { xs: 2, sm: 3 }, mb: { xs: 2, sm: 3 }, width: '100%', maxWidth: '100%' }}>
-        <Typography variant="h6" sx={{ mb: 2, fontWeight: 600, fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
-          Invite New User
-        </Typography>
-        <Box component="form" onSubmit={handleInviteUser} sx={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
-          <TextField
-            label="Email Address"
-            type="email"
-            value={newUserEmail}
-            onChange={(e) => setNewUserEmail(e.target.value)}
-            placeholder="user@example.com"
-            required
-            fullWidth
-          />
-          
-          <Box sx={{ mb: 2 }}>
-          <FormControlLabel
-            control={
-                <Switch
-                checked={inviteAsAdmin}
-                onChange={(e) => setInviteAsAdmin(e.target.checked)}
-                  color="secondary"
-                />
-              }
-              label={
-                <Box>
-                  <Typography variant="body1" sx={{ fontWeight: 500 }}>Global Administrator</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Full access to all locations and user management
-                  </Typography>
-                </Box>
-              }
-            />
-          </Box>
-
-          {!inviteAsAdmin && stores.length > 0 && (
-            <>
-              <Divider sx={{ my: 1 }} />
-              
-              <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-                <Button size="small" variant="outlined" onClick={() => {
-                  const newMap = new Map<string, AccessLevel>();
-                  stores.forEach(store => newMap.set(store.id, 'full'));
-                  setInviteAccessLevels(newMap);
-                }}>
-                  Full Access All
-                </Button>
-                <Button size="small" variant="outlined" onClick={() => {
-                  const newMap = new Map<string, AccessLevel>();
-                  stores.forEach(store => newMap.set(store.id, 'view'));
-                  setInviteAccessLevels(newMap);
-                }}>
-                  View Only All
-                </Button>
-                <Button size="small" variant="outlined" color="error" onClick={() => {
-                  const newMap = new Map<string, AccessLevel>();
-                  stores.forEach(store => newMap.set(store.id, 'none'));
-                  setInviteAccessLevels(newMap);
-                }}>
-                  Revoke All
-                </Button>
-              </Box>
-
-              <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
-                Store Permissions
-              </Typography>
-
-              <List sx={{ bgcolor: 'grey.50', borderRadius: 1, mb: 2, width: '100%', maxWidth: '100%' }}>
-                {stores.map((store, index) => {
-                  const level = inviteAccessLevels.get(store.id) || 'full';
-                  return (
-                    <React.Fragment key={store.id}>
-                      {index > 0 && <Divider />}
-                      <ListItem sx={{ py: 1.5, flexDirection: 'column', alignItems: 'stretch' }}>
-                        <Typography variant="body1" sx={{ fontWeight: 500, mb: 1 }}>
-                          {store.name}
-                        </Typography>
-                        <ToggleButtonGroup
-                          value={level}
-                          exclusive
-                          onChange={(_, newLevel) => {
-                            if (newLevel !== null) {
-                              setInviteAccessLevels(prev => {
-                                const next = new Map(prev);
-                                next.set(store.id, newLevel);
-                                return next;
-                              });
-                            }
-                          }}
-                          size="small"
-                          fullWidth
-                          sx={{ width: '100%' }}
-                        >
-                          <ToggleButton value="none" sx={{ flex: 1, fontSize: { xs: '0.75rem', sm: '0.875rem' }, px: { xs: 0.5, sm: 1 } }}>
-                            <BlockIcon sx={{ mr: { xs: 0.25, sm: 0.5 }, fontSize: { xs: 16, sm: 18 } }} />
-                            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>No Access</Box>
-                            <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>None</Box>
-                          </ToggleButton>
-                          <ToggleButton value="view" sx={{ flex: 1, fontSize: { xs: '0.75rem', sm: '0.875rem' }, px: { xs: 0.5, sm: 1 } }}>
-                            <ViewIcon sx={{ mr: { xs: 0.25, sm: 0.5 }, fontSize: { xs: 16, sm: 18 } }} />
-                            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>View Only</Box>
-                            <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>View</Box>
-                          </ToggleButton>
-                          <ToggleButton value="full" sx={{ flex: 1, fontSize: { xs: '0.75rem', sm: '0.875rem' }, px: { xs: 0.5, sm: 1 } }}>
-                            <EditNoteIcon sx={{ mr: { xs: 0.25, sm: 0.5 }, fontSize: { xs: 16, sm: 18 } }} />
-                            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Full Access</Box>
-                            <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Full</Box>
-                          </ToggleButton>
-                        </ToggleButtonGroup>
-                      </ListItem>
-                    </React.Fragment>
-                  );
-                })}
-              </List>
-            </>
-          )}
-          
-          <Button
-            type="submit"
-            variant="contained"
-            startIcon={inviteLoading ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
-            sx={{ alignSelf: 'flex-start' }}
-            disabled={inviteLoading || !newUserEmail.trim()}
-          >
-            {inviteLoading ? 'Sending...' : 'Send Invitation'}
-          </Button>
-        </Box>
-      </Paper>
 
       {/* User Management List */}
       <Paper sx={{ p: { xs: 2, sm: 3 }, width: '100%', maxWidth: '100%' }}>
@@ -627,7 +480,7 @@ export function AdminPanel() {
                     primary={
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: { xs: 0.5, sm: 0 } }}>
                         <Typography variant="body1" sx={{ wordBreak: 'break-word' }}>{user.email}</Typography>
-                        {user.uid === currentUser?.uid && (
+                        {user.uid === userId && (
                           <Chip label="You" size="small" color="primary" variant="outlined" />
                         )}
                         {user.isGlobalAdmin && (
@@ -645,7 +498,7 @@ export function AdminPanel() {
                     <IconButton
                       edge="end"
                       onClick={() => openEditModal(user)}
-                      disabled={user.uid === currentUser?.uid}
+                      disabled={user.uid === userId}
                       size="small"
                     >
                       <EditIcon />
@@ -704,6 +557,98 @@ export function AdminPanel() {
         )}
       </Paper>
 
+      {/* Invite User Dialog */}
+      <Dialog open={inviteDialogOpen} onClose={closeInviteDialog} maxWidth="sm" fullWidth>
+        <DialogTitle>Invite New User</DialogTitle>
+        <DialogContent>
+          <Box component="form" id="invite-form" onSubmit={handleInviteUser} sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField
+              label="Email Address"
+              type="email"
+              value={newUserEmail}
+              onChange={(e) => setNewUserEmail(e.target.value)}
+              placeholder="user@example.com"
+              required
+              fullWidth
+              autoFocus
+            />
+
+            {stores.length > 0 && (
+              <>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Store Permissions</Typography>
+                  <Box sx={{ display: 'flex', gap: 0.5 }}>
+                    <Button size="small" onClick={() => {
+                      const m = new Map<string, AccessLevel>();
+                      stores.forEach(s => m.set(s.id, 'full'));
+                      setInviteAccessLevels(m);
+                    }}>All Edit</Button>
+                    <Button size="small" onClick={() => {
+                      const m = new Map<string, AccessLevel>();
+                      stores.forEach(s => m.set(s.id, 'view'));
+                      setInviteAccessLevels(m);
+                    }}>All View</Button>
+                    <Button size="small" color="error" onClick={() => {
+                      const m = new Map<string, AccessLevel>();
+                      stores.forEach(s => m.set(s.id, 'none'));
+                      setInviteAccessLevels(m);
+                    }}>None</Button>
+                  </Box>
+                </Box>
+
+                {stores.map((store) => {
+                  const level = inviteAccessLevels.get(store.id) || 'full';
+                  return (
+                    <Box key={store.id}>
+                      <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
+                        {store.name}
+                      </Typography>
+                      <ToggleButtonGroup
+                        value={level}
+                        exclusive
+                        onChange={(_, v) => {
+                          if (v !== null) {
+                            setInviteAccessLevels(prev => {
+                              const next = new Map(prev);
+                              next.set(store.id, v);
+                              return next;
+                            });
+                          }
+                        }}
+                        size="small"
+                        fullWidth
+                      >
+                        <ToggleButton value="none" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
+                          <BlockIcon sx={{ fontSize: 14, mr: 0.5 }} /> None
+                        </ToggleButton>
+                        <ToggleButton value="view" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
+                          <ViewIcon sx={{ fontSize: 14, mr: 0.5 }} /> View
+                        </ToggleButton>
+                        <ToggleButton value="full" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
+                          <EditNoteIcon sx={{ fontSize: 14, mr: 0.5 }} /> Edit
+                        </ToggleButton>
+                      </ToggleButtonGroup>
+                    </Box>
+                  );
+                })}
+              </>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={closeInviteDialog}>Cancel</Button>
+          <Button
+            type="submit"
+            form="invite-form"
+            variant="contained"
+            startIcon={inviteLoading ? <CircularProgress size={16} color="inherit" /> : <SendIcon />}
+            disabled={inviteLoading || !newUserEmail.trim()}
+          >
+            {inviteLoading ? 'Sending...' : 'Send Invitation'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Edit User Dialog */}
       <Dialog open={!!editingUser} onClose={closeEditModal} maxWidth="sm" fullWidth>
         <DialogTitle>
@@ -718,39 +663,37 @@ export function AdminPanel() {
                 </Typography>
               </Paper>
 
-              <Box sx={{ mb: 3 }}>
+              <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={editIsAdmin}
-                      onChange={(e) => setEditIsAdmin(e.target.checked)}
-                      color="secondary"
+                      checked={editIsOrgAdmin}
+                      onChange={(e) => setEditIsOrgAdmin(e.target.checked)}
+                      color="primary"
                     />
                   }
                   label={
                     <Box>
-                      <Typography variant="body1" sx={{ fontWeight: 500 }}>Global Administrator</Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 500 }}>Organization Admin</Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Full access to all stores and user management
+                        Manage campaign settings, products, and store allocations
                       </Typography>
                     </Box>
                   }
                 />
               </Box>
 
-              {!editIsAdmin && (
-                <>
                   <Divider sx={{ my: 2 }} />
                   
                   <Box sx={{ display: 'flex', gap: 1, mb: 3, flexWrap: 'wrap' }}>
                     <Button size="small" variant="outlined" onClick={handleGrantAllAccess}>
-                      Full Access All
+                      All Edit
                     </Button>
                     <Button size="small" variant="outlined" onClick={handleViewOnlyAll}>
-                      View Only All
+                      All View
                     </Button>
                     <Button size="small" variant="outlined" color="error" onClick={handleRevokeAllAccess}>
-                      Revoke All
+                      None
                     </Button>
                   </Box>
 
@@ -781,15 +724,15 @@ export function AdminPanel() {
                             >
                               <ToggleButton value="none" sx={{ flex: 1 }}>
                                 <BlockIcon sx={{ mr: 0.5, fontSize: 18 }} />
-                                No Access
+                                None
                               </ToggleButton>
                               <ToggleButton value="view" sx={{ flex: 1 }}>
                                 <ViewIcon sx={{ mr: 0.5, fontSize: 18 }} />
-                                View Only
+                                View
                               </ToggleButton>
                               <ToggleButton value="full" sx={{ flex: 1 }}>
                                 <EditNoteIcon sx={{ mr: 0.5, fontSize: 18 }} />
-                                Full Access
+                                Edit
                               </ToggleButton>
                             </ToggleButtonGroup>
                           </ListItem>
@@ -797,8 +740,6 @@ export function AdminPanel() {
                       );
                     })}
                   </List>
-                </>
-              )}
             </Box>
           )}
         </DialogContent>

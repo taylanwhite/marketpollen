@@ -4,23 +4,30 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
-import { Contact, Reachout, DonationData, MOUTH_VALUES, Business } from '../types';
+import { Contact, Reachout, DonationData, Business, SLUG_TO_FIELD } from '../types';
 import { createEmptyDonation, calculateMouths } from '../utils/donationCalculations';
-import { Box, Switch, FormControlLabel, Typography, Divider, Collapse, TextField, Grid, Checkbox, Chip } from '@mui/material';
+import { useCampaign } from '../contexts/CampaignContext';
+import { useDonation } from '../contexts/DonationContext';
+import { DonationProductFields } from './DonationProductFields';
+import { Box, Button, Switch, FormControlLabel, Typography, Divider, Collapse, TextField, Checkbox, Chip } from '@mui/material';
 import { AddressPicker, AddressData } from './AddressPicker';
+import { PlaceMatchPicker, type PlaceResult } from './PlaceMatchPicker';
 import { Cake as CakeIcon } from '@mui/icons-material';
 
 interface ContactFormProps {
   onSuccess?: () => void;
+  defaultBusinessId?: string;
 }
 
-export function ContactForm({ onSuccess }: ContactFormProps) {
-  const { currentUser } = useAuth();
+export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) {
+  const { userId } = useAuth();
+  const { products } = useCampaign();
   const { permissions } = usePermissions();
+  const { triggerRefresh, setLastDonationMouths } = useDonation();
   const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
   
   const [businesses, setBusinesses] = useState<Business[]>([]);
-  const [selectedBusinessId, setSelectedBusinessId] = useState('');
+  const [selectedBusinessId, setSelectedBusinessId] = useState(defaultBusinessId || '');
   const [newBusinessName, setNewBusinessName] = useState('');
   const [showNewBusiness, setShowNewBusiness] = useState(false);
   const [newBusinessAddress, setNewBusinessAddress] = useState<AddressData>({
@@ -29,6 +36,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
     state: '',
     zipCode: '',
   });
+  const [showPlacePicker, setShowPlacePicker] = useState(false);
   
   const [formData, setFormData] = useState({
     firstName: '',
@@ -43,7 +51,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
 
   const [rawNotes, setRawNotes] = useState(''); // Editable raw meeting notes
   const [includeDonation, setIncludeDonation] = useState(false);
-  const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation());
+  const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation(products));
   
   const [loading, setLoading] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
@@ -91,7 +99,11 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
     setError('');
     
     try {
-      const extracted = await extractContactInfo(rawNotes);
+      const extracted = await extractContactInfo(rawNotes, products.filter(p => p.isActive).map(p => ({
+        slug: p.slug,
+        name: p.name,
+        mouthValue: p.mouthValue,
+      })));
       
       // Update form fields (does NOT create a contact - just fills the form)
       setFormData(prev => ({
@@ -102,8 +114,32 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         phone: extracted.phone || prev.phone,
         personalDetails: extracted.personalDetails || prev.personalDetails,
         reachoutNote: extracted.reachoutNote || prev.reachoutNote,
+        reachoutType: extracted.reachoutType || prev.reachoutType,
         suggestedFollowUpDays: extracted.suggestedFollowUpDays || prev.suggestedFollowUpDays
       }));
+
+      // Auto-match or pre-fill business
+      if (extracted.businessName && businesses.length > 0) {
+        const extractedLower = extracted.businessName.toLowerCase();
+        const match = businesses.find(b => {
+          const nameLower = b.name.toLowerCase();
+          return nameLower === extractedLower
+            || nameLower.includes(extractedLower)
+            || extractedLower.includes(nameLower);
+        });
+        if (match) {
+          setSelectedBusinessId(match.id);
+          setShowNewBusiness(false);
+        } else {
+          setShowNewBusiness(true);
+          setNewBusinessName(extracted.businessName);
+          setSelectedBusinessId('');
+        }
+      } else if (extracted.businessName) {
+        setShowNewBusiness(true);
+        setNewBusinessName(extracted.businessName);
+        setSelectedBusinessId('');
+      }
 
       // Auto-fill donation data if detected
       // Check if AI detected donation OR if notes contain donation keywords
@@ -115,16 +151,24 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         setIncludeDonation(true);
         // If AI extracted donation data, use it directly; otherwise use fallback logic
         if (extracted.donation) {
+          const d = extracted.donation;
+          const customItems: Record<string, number> = {};
+          for (const product of products.filter(p => p.isActive)) {
+            if (!SLUG_TO_FIELD[product.slug] && typeof d[product.slug] === 'number' && (d[product.slug] as number) > 0) {
+              customItems[product.id] = d[product.slug] as number;
+            }
+          }
           setDonationData({
-            freeBundletCard: extracted.donation.freeBundletCard ?? 0,
-            dozenBundtinis: extracted.donation.dozenBundtinis ?? 0,
-            cake8inch: extracted.donation.cake8inch ?? 0,
-            cake10inch: extracted.donation.cake10inch ?? 0,
-            sampleTray: extracted.donation.sampleTray ?? 0,
-            bundtletTower: extracted.donation.bundtletTower ?? 0,
-            cakesDonatedNotes: extracted.donation.cakesDonatedNotes || '',
-            orderedFromUs: extracted.donation.orderedFromUs ?? false,
-            followedUp: extracted.donation.followedUp ?? false,
+            freeBundletCard: (d.freeBundletCard as number) ?? 0,
+            dozenBundtinis: (d.dozenBundtinis as number) ?? 0,
+            cake8inch: (d.cake8inch as number) ?? 0,
+            cake10inch: (d.cake10inch as number) ?? 0,
+            sampleTray: (d.sampleTray as number) ?? 0,
+            bundtletTower: (d.bundtletTower as number) ?? 0,
+            customItems: Object.keys(customItems).length > 0 ? customItems : undefined,
+            cakesDonatedNotes: (d.cakesDonatedNotes as string) || '',
+            orderedFromUs: (d.orderedFromUs as boolean) ?? false,
+            followedUp: (d.followedUp as boolean) ?? false,
           });
         } else if (hasDonationKeywords) {
           // Fallback: enable donation toggle but keep existing data
@@ -160,17 +204,19 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
     return `CONT-${timestamp}-${random}`;
   };
 
-  const handleCreateBusiness = async () => {
+  const handleCreateBusiness = () => {
     if (!newBusinessName.trim()) {
       setError('Business name is required');
       return;
     }
-
     if (!permissions.currentStoreId) {
       setError('Please select a store first');
       return;
     }
+    setShowPlacePicker(true);
+  };
 
+  const finishCreateBusiness = async (placeId?: string) => {
     try {
       const created = await api.post<Business>(`/businesses?storeId=${permissions.currentStoreId}`, {
         name: newBusinessName.trim(),
@@ -178,12 +224,14 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         city: newBusinessAddress.city || undefined,
         state: newBusinessAddress.state || undefined,
         zipCode: newBusinessAddress.zipCode || undefined,
+        placeId: placeId || undefined,
       });
       await loadBusinesses();
       setSelectedBusinessId(created.id);
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
       setShowNewBusiness(false);
+      setShowPlacePicker(false);
     } catch (err: any) {
       setError(err.message || 'Failed to create business');
     }
@@ -194,7 +242,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
     setError('');
     setSuccess(false);
 
-    if (!currentUser) {
+    if (!userId) {
       setError('You must be logged in to create a contact');
       return;
     }
@@ -220,9 +268,8 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         date: now,
         note: formData.reachoutNote || 'Initial contact created',
         rawNotes: rawNotes || null,
-        createdBy: currentUser.uid,
+        createdBy: userId,
         type: formData.reachoutType,
-        storeId: permissions.currentStoreId,
         donation: includeDonation ? donationData : undefined,
       };
 
@@ -300,7 +347,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
             businessId: selectedBusinessId,
             priority: 'medium',
             status: 'completed',
-            createdBy: currentUser.uid,
+            createdBy: userId,
           });
         } catch (eventError) {
           console.error('Failed to create calendar event:', eventError);
@@ -321,13 +368,19 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
             businessId: selectedBusinessId,
             priority: suggestedFollowUpPriority || 'medium',
             status: 'scheduled',
-            createdBy: currentUser.uid,
+            createdBy: userId,
           });
         } catch (eventError) {
           console.error('Failed to create follow-up calendar event:', eventError);
         }
       }
       
+      if (includeDonation) {
+        const mouths = calculateMouths(donationData, products);
+        setLastDonationMouths(mouths);
+        triggerRefresh();
+      }
+
       setSuccess(true);
       setFormData({
         firstName: '',
@@ -341,7 +394,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
       });
       setRawNotes('');
       setIncludeDonation(false);
-      setDonationData(createEmptyDonation());
+      setDonationData(createEmptyDonation(products));
       clearTranscript();
       
       if (onSuccess) {
@@ -424,9 +477,9 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
         {success && <div className="success-message">Contact created successfully!</div>}
 
         {/* Business Selection */}
-        <div className="form-group">
-          <label htmlFor="business">Business *</label>
-          {!showNewBusiness ? (
+        {!showNewBusiness ? (
+          <div className="form-group">
+            <label htmlFor="business">Business *</label>
             <div className="business-select-container">
               <select
                 id="business"
@@ -450,47 +503,39 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
                 + New Business
               </button>
             </div>
-          ) : (
-            <div className="new-business-container">
-              <input
-                type="text"
-                value={newBusinessName}
-                onChange={(e) => setNewBusinessName(e.target.value)}
-                placeholder="Enter business name"
-                className="new-business-input"
-                style={{ marginBottom: '8px', width: '100%' }}
-              />
-              <Box sx={{ mb: 2 }}>
-                <AddressPicker
-                  value={newBusinessAddress}
-                  onChange={setNewBusinessAddress}
-                  label="Business Address"
-                  fullWidth
-                />
-              </Box>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  type="button"
-                  onClick={handleCreateBusiness}
-                  className="btn-primary"
-                >
-                  Create
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowNewBusiness(false);
-                    setNewBusinessName('');
-                    setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
-                  }}
-                  className="btn-secondary"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, p: 2, bgcolor: 'grey.50', borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>New Business</Typography>
+            <TextField
+              label="Business Name"
+              size="small"
+              fullWidth
+              value={newBusinessName}
+              onChange={(e) => setNewBusinessName(e.target.value)}
+              autoFocus
+            />
+            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+              <Button
+                size="small"
+                onClick={() => {
+                  setShowNewBusiness(false);
+                  setNewBusinessName('');
+                  setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                onClick={handleCreateBusiness}
+              >
+                Create
+              </Button>
+            </Box>
+          </Box>
+        )}
 
         <div className="form-row">
           <div className="form-group">
@@ -602,7 +647,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
                 onChange={(e) => {
                   setIncludeDonation(e.target.checked);
                   if (!e.target.checked) {
-                    setDonationData(createEmptyDonation());
+                    setDonationData(createEmptyDonation(products));
                   }
                 }}
                 disabled={loading || aiProcessing}
@@ -624,7 +669,7 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
               Product Donations
               {includeDonation && (
                 <Chip 
-                  label={`${calculateMouths(donationData)} mouths`} 
+                  label={`${calculateMouths(donationData, products)} mouths`} 
                   size="small" 
                   color="primary" 
                   sx={{ ml: 'auto' }}
@@ -632,97 +677,23 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
               )}
             </Typography>
 
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 6, sm: 4 }}>
-                <TextField
-                  label="FREE Bundtlet Card"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={donationData.freeBundletCard || ''}
-                  onChange={(e) => setDonationData(prev => ({ ...prev, freeBundletCard: parseInt(e.target.value) || 0 }))}
-                  helperText={`${MOUTH_VALUES.freeBundletCard} mouth each`}
-                  disabled={loading || aiProcessing}
-                  slotProps={{ htmlInput: { min: 0 } }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 4 }}>
-                <TextField
-                  label="Dozen Bundtinis"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={donationData.dozenBundtinis || ''}
-                  onChange={(e) => setDonationData(prev => ({ ...prev, dozenBundtinis: parseInt(e.target.value) || 0 }))}
-                  helperText={`${MOUTH_VALUES.dozenBundtinis} mouths each`}
-                  disabled={loading || aiProcessing}
-                  slotProps={{ htmlInput: { min: 0 } }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 4 }}>
-                <TextField
-                  label="8&quot; Cake"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={donationData.cake8inch || ''}
-                  onChange={(e) => setDonationData(prev => ({ ...prev, cake8inch: parseInt(e.target.value) || 0 }))}
-                  helperText={`${MOUTH_VALUES.cake8inch} mouths each`}
-                  disabled={loading || aiProcessing}
-                  slotProps={{ htmlInput: { min: 0 } }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 4 }}>
-                <TextField
-                  label="10&quot; Cake"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={donationData.cake10inch || ''}
-                  onChange={(e) => setDonationData(prev => ({ ...prev, cake10inch: parseInt(e.target.value) || 0 }))}
-                  helperText={`${MOUTH_VALUES.cake10inch} mouths each`}
-                  disabled={loading || aiProcessing}
-                  slotProps={{ htmlInput: { min: 0 } }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 4 }}>
-                <TextField
-                  label="Sample Tray"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={donationData.sampleTray || ''}
-                  onChange={(e) => setDonationData(prev => ({ ...prev, sampleTray: parseInt(e.target.value) || 0 }))}
-                  helperText={`${MOUTH_VALUES.sampleTray} mouths each`}
-                  disabled={loading || aiProcessing}
-                  slotProps={{ htmlInput: { min: 0 } }}
-                />
-              </Grid>
-              <Grid size={{ xs: 6, sm: 4 }}>
-                <TextField
-                  label="Bundtlet/Tower"
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={donationData.bundtletTower || ''}
-                  onChange={(e) => setDonationData(prev => ({ ...prev, bundtletTower: parseInt(e.target.value) || 0 }))}
-                  helperText={`${MOUTH_VALUES.bundtletTower} mouth each`}
-                  disabled={loading || aiProcessing}
-                  slotProps={{ htmlInput: { min: 0 } }}
-                />
-              </Grid>
-            </Grid>
+            <DonationProductFields
+              products={products}
+              donationData={donationData}
+              onChange={setDonationData}
+            />
 
             <TextField
-              label="Cakes Donated Notes"
+              label="Donation Notes"
               size="small"
               fullWidth
               value={donationData.cakesDonatedNotes || ''}
               onChange={(e) => setDonationData(prev => ({ ...prev, cakesDonatedNotes: e.target.value }))}
-              placeholder="Any notes about the donation..."
+              placeholder="e.g. Gave 2 boxes of bundtinis for employee birthday program"
               disabled={loading || aiProcessing}
               multiline
               rows={2}
+              variant="outlined"
             />
 
             <Box sx={{ display: 'flex', gap: 2 }}>
@@ -760,6 +731,18 @@ export function ContactForm({ onSuccess }: ContactFormProps) {
           {loading ? 'Saving...' : aiProcessing ? 'Processing...' : 'Save Contact'}
         </button>
       </form>
+
+      <PlaceMatchPicker
+        open={showPlacePicker}
+        businessName={newBusinessName}
+        businessAddress={newBusinessAddress.address}
+        businessCity={newBusinessAddress.city}
+        businessState={newBusinessAddress.state}
+        businessZipCode={newBusinessAddress.zipCode}
+        onSelect={(place: PlaceResult) => finishCreateBusiness(place.placeId)}
+        onSkip={() => finishCreateBusiness()}
+        onClose={() => setShowPlacePicker(false)}
+      />
     </div>
   );
 }

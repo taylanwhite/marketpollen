@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { TextField, Box, CircularProgress, Autocomplete, ListItem, ListItemText, SxProps, Theme } from '@mui/material';
+import { TextField, CircularProgress, Autocomplete, SxProps, Theme } from '@mui/material';
 import { autocompletePlaces, getPlaceDetails } from '../utils/placesApi';
 
 export interface AddressData {
@@ -18,6 +18,7 @@ interface AddressPickerProps {
   required?: boolean;
   error?: boolean;
   helperText?: string;
+  size?: 'small' | 'medium';
   sx?: SxProps<Theme>;
 }
 
@@ -35,6 +36,7 @@ export function AddressPicker({
   required = false,
   error = false,
   helperText,
+  size = 'small',
   sx,
 }: AddressPickerProps) {
   const [inputValue, setInputValue] = useState(value.address);
@@ -43,17 +45,14 @@ export function AddressPicker({
   const [sessionToken, setSessionToken] = useState<string | undefined>();
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  // Generate session token for billing optimization
   const generateSessionToken = useCallback(() => {
     return `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   }, []);
 
-  // Initialize session token
   useEffect(() => {
     setSessionToken(generateSessionToken());
   }, [generateSessionToken]);
 
-  // Debounced autocomplete search
   useEffect(() => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
@@ -61,6 +60,7 @@ export function AddressPicker({
 
     if (!inputValue || inputValue.trim().length < 3) {
       setOptions([]);
+      setLoading(false);
       return;
     }
 
@@ -68,13 +68,11 @@ export function AddressPicker({
     debounceTimerRef.current = setTimeout(async () => {
       try {
         const response = await autocompletePlaces(inputValue, sessionToken);
-        
-        // Parse response from Places API (New)
-        // Response format: { suggestions: [{ placePrediction: { placeId, text: { text } } }] }
+
         const predictions: PlacePrediction[] = (response.suggestions || []).map((suggestion: any) => {
           const prediction = suggestion.placePrediction || suggestion;
           return {
-            placeId: prediction.placeId || prediction.place_id,
+            placeId: prediction.placeId || prediction.place_id || '',
             description: prediction.text?.text || prediction.description || prediction.formatted_address || '',
           };
         }).filter((p: PlacePrediction) => p.placeId && p.description);
@@ -86,7 +84,7 @@ export function AddressPicker({
       } finally {
         setLoading(false);
       }
-    }, 300); // 300ms debounce
+    }, 300);
 
     return () => {
       if (debounceTimerRef.current) {
@@ -95,15 +93,13 @@ export function AddressPicker({
     };
   }, [inputValue, sessionToken]);
 
-  // Handle place selection
   const handlePlaceSelect = async (placeId: string) => {
     try {
       setLoading(true);
       const placeDetails = await getPlaceDetails(placeId, sessionToken);
 
-      // Parse address components from Places API (New) response
       const addressComponents = placeDetails.addressComponents || [];
-      
+
       let streetNumber = '';
       let route = '';
       let city = '';
@@ -112,7 +108,6 @@ export function AddressPicker({
 
       addressComponents.forEach((component: any) => {
         const types = component.types || [];
-
         if (types.includes('street_number')) {
           streetNumber = component.longText || component.long_name || '';
         } else if (types.includes('route')) {
@@ -126,18 +121,11 @@ export function AddressPicker({
         }
       });
 
-      const address = [streetNumber, route].filter(Boolean).join(' ').trim() || placeDetails.formattedAddress || placeDetails.formatted_address || '';
+      const address = [streetNumber, route].filter(Boolean).join(' ').trim()
+        || placeDetails.formattedAddress || placeDetails.formatted_address || '';
 
-      onChange({
-        address,
-        city,
-        state,
-        zipCode,
-      });
-
+      onChange({ address, city, state, zipCode });
       setInputValue(address);
-      
-      // Generate new session token for next search
       setSessionToken(generateSessionToken());
     } catch (err: any) {
       console.error('Error getting place details:', err);
@@ -146,7 +134,6 @@ export function AddressPicker({
     }
   };
 
-  // Sync input value with external value
   useEffect(() => {
     if (value.address !== inputValue) {
       setInputValue(value.address);
@@ -154,55 +141,49 @@ export function AddressPicker({
   }, [value.address]);
 
   return (
-    <Box sx={{ position: 'relative', ...sx }}>
-      <Autocomplete
-        freeSolo
-        options={options}
-        getOptionLabel={(option) => {
-          if (typeof option === 'string') return option;
-          return option.description || '';
-        }}
-        inputValue={inputValue}
-        onInputChange={(_, newInputValue) => {
-          setInputValue(newInputValue);
-          // Allow manual editing
-          onChange({
-            ...value,
-            address: newInputValue,
-          });
-        }}
-        onChange={(_, newValue) => {
-          if (newValue && typeof newValue !== 'string') {
-            handlePlaceSelect(newValue.placeId);
-          }
-        }}
-        loading={loading}
-        disabled={disabled}
-        renderInput={(params) => (
-          <TextField
-            {...params}
-            label={label}
-            fullWidth={fullWidth}
-            required={required}
-            error={error}
-            helperText={helperText || 'Start typing an address...'}
-            InputProps={{
+    <Autocomplete
+      freeSolo
+      options={options}
+      getOptionLabel={(option) =>
+        typeof option === 'string' ? option : option.description || ''
+      }
+      isOptionEqualToValue={(option, val) => option.placeId === val.placeId}
+      filterOptions={(x) => x}
+      inputValue={inputValue}
+      onInputChange={(_, newInputValue) => {
+        setInputValue(newInputValue);
+        onChange({ ...value, address: newInputValue });
+      }}
+      onChange={(_, newValue) => {
+        if (newValue && typeof newValue !== 'string') {
+          handlePlaceSelect(newValue.placeId);
+        }
+      }}
+      loading={loading}
+      disabled={disabled}
+      sx={sx}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label={label}
+          fullWidth={fullWidth}
+          required={required}
+          error={error}
+          size={size}
+          helperText={helperText}
+          slotProps={{
+            input: {
               ...params.InputProps,
               endAdornment: (
                 <>
-                  {loading ? <CircularProgress size={20} /> : null}
+                  {loading ? <CircularProgress size={18} /> : null}
                   {params.InputProps.endAdornment}
                 </>
               ),
-            }}
-          />
-        )}
-        renderOption={(props, option) => (
-          <ListItem {...props} key={option.placeId}>
-            <ListItemText primary={option.description} />
-          </ListItem>
-        )}
-      />
-    </Box>
+            },
+          }}
+        />
+      )}
+    />
   );
 }

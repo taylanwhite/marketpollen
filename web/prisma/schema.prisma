@@ -26,20 +26,67 @@ model User {
   calendar_events_created CalendarEvent[] @relation("CalendarEventCreatedBy")
   invites_sent   Invite[]               @relation("InviteSentBy")
   opportunities_created Opportunity[]   @relation("OpportunityCreatedBy")
+  organizations_created Organization[]  @relation("OrgCreatedBy")
+  organization_memberships OrganizationMember[]
 
   @@map("users")
 }
 
-model Store {
-  id         String   @id @default(uuid()) @db.Uuid
-  name       String
-  address    String?
-  city       String?
-  state      String?
-  zip_code   String?
-  created_at DateTime @default(now())
-  created_by String
+model Organization {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String
+  quarterly_goal Int      @default(10000)
+  created_at     DateTime @default(now())
+  created_by     String
 
+  creator  User                 @relation("OrgCreatedBy", fields: [created_by], references: [id])
+  stores   Store[]
+  members  OrganizationMember[]
+  products CampaignProduct[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  user_id  String
+  org_id   String  @db.Uuid
+  is_admin Boolean @default(false)
+
+  user User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  org  Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, org_id])
+  @@map("organization_members")
+}
+
+model CampaignProduct {
+  id              String  @id @default(uuid()) @db.Uuid
+  org_id          String  @db.Uuid
+  name            String
+  slug            String
+  mouth_value     Int
+  display_order   Int     @default(0)
+  is_active       Boolean @default(true)
+  reachout_column String?
+
+  organization Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+
+  @@unique([org_id, slug])
+  @@map("campaign_products")
+}
+
+model Store {
+  id              String   @id @default(uuid()) @db.Uuid
+  name            String
+  address         String?
+  city            String?
+  state           String?
+  zip_code        String?
+  organization_id String?  @db.Uuid
+  created_at      DateTime @default(now())
+  created_by      String
+
+  organization Organization? @relation(fields: [organization_id], references: [id])
   creator    User     @relation("StoreCreatedBy", fields: [created_by], references: [id])
   permissions StorePermission[]
   businesses  Business[]
@@ -47,7 +94,6 @@ model Store {
   calendar_events CalendarEvent[]
   invites    Invite[]
   opportunities Opportunity[]
-  reachouts  Reachout[]
 
   @@map("stores")
 }
@@ -153,7 +199,6 @@ model Reachout {
   raw_notes          String?
   created_by         String
   type               String   @default("other")
-  store_id           String?  @db.Uuid
   free_bundlet_card  Int      @default(0)
   dozen_bundtinis    Int      @default(0)
   cake_8inch         Int      @default(0)
@@ -163,9 +208,9 @@ model Reachout {
   cakes_donated_notes String?
   ordered_from_us    Boolean  @default(false)
   followed_up        Boolean  @default(false)
+  custom_donations   Json?
 
   contact Contact @relation(fields: [contact_id], references: [id], onDelete: Cascade)
-  store   Store?  @relation(fields: [store_id], references: [id])
   creator User    @relation("ReachoutCreatedBy", fields: [created_by], references: [id])
 
   @@index([contact_id])

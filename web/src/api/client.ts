@@ -1,15 +1,16 @@
 /**
- * API client for Neon-backed endpoints. Sends Firebase ID token with each request.
+ * API client for Neon-backed endpoints. Sends Clerk session token with each request.
  */
 
-import { auth } from '../firebase/config';
+let tokenGetter: (() => Promise<string | null>) | null = null;
 
-const BASE = ''; // same origin; use Vercel dev or proxy /api in dev
+export function setTokenGetter(getter: () => Promise<string | null>) {
+  tokenGetter = getter;
+}
 
 async function getToken(): Promise<string | null> {
-  const user = auth.currentUser;
-  if (!user) return null;
-  return user.getIdToken();
+  if (!tokenGetter) return null;
+  return tokenGetter();
 }
 
 async function request<T = unknown>(
@@ -23,7 +24,7 @@ async function request<T = unknown>(
   };
   if (token) (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
 
-  const url = path.startsWith('http') ? path : `${BASE}/api${path}`;
+  const url = path.startsWith('http') ? path : `/api${path}`;
   const body = options.body !== undefined ? JSON.stringify(options.body) : undefined;
   const res = await fetch(url, {
     method: options.method ?? 'GET',

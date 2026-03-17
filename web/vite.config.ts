@@ -11,9 +11,6 @@ export default defineConfig({
       '@': '/src',
     },
   },
-  optimizeDeps: {
-    include: ['firebase/app', 'firebase/auth'],
-  },
   // Explicitly set app type to SPA
   appType: 'spa',
   server: {

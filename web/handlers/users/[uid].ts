@@ -16,11 +16,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!targetUid) return res.status(400).json({ error: 'User uid required' });
 
   if (req.method === 'PATCH') {
-    const body = req.body as { isGlobalAdmin?: boolean; storePermissions?: { storeId: string; canEdit: boolean }[] };
-    if (body.isGlobalAdmin !== undefined) {
-      await prisma.user.update({
-        where: { id: targetUid },
-        data: { is_global_admin: body.isGlobalAdmin },
+    const body = req.body as { isOrgAdmin?: boolean; orgId?: string; storePermissions?: { storeId: string; canEdit: boolean }[] };
+    if (body.isOrgAdmin !== undefined && body.orgId) {
+      await prisma.organizationMember.upsert({
+        where: { user_id_org_id: { user_id: targetUid, org_id: body.orgId } },
+        create: { user_id: targetUid, org_id: body.orgId, is_admin: body.isOrgAdmin },
+        update: { is_admin: body.isOrgAdmin },
       });
     }
     if (Array.isArray(body.storePermissions)) {

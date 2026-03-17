@@ -3,8 +3,10 @@ import { prisma } from '../lib/db.js';
 import { requireAuth } from '../lib/auth.js';
 
 /**
- * Sync current Firebase user to DB. Call after signup or login.
+ * Sync current Clerk user to DB. Call after signup or login.
  * Body: { email, displayName? }. Creates user if not exists.
+ * If a user with the same email exists under an old auth provider ID,
+ * migrates that record to the new Clerk user ID (preserving admin status and permissions).
  * If user signed up via invite, marks matching pending invites as accepted and copies permissions.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -23,27 +25,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       where: { id: uid },
       data: { email, display_name: body.displayName ?? null },
     });
-    const user = await prisma.user.findUnique({
-      where: { id: uid },
-      select: { id: true, email: true, display_name: true, created_at: true, is_global_admin: true },
-    });
-    if (!user) return res.status(500).json({ error: 'Update failed' });
-    const perms = await prisma.storePermission.findMany({
-      where: { user_id: uid },
-      select: { store_id: true, can_edit: true },
-    });
-    return res.status(200).json({
-      user: {
-        uid: user.id,
-        email: user.email,
-        displayName: user.display_name ?? undefined,
-        createdAt: user.created_at,
-        isGlobalAdmin: user.is_global_admin,
-      },
-      storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
-    });
+    return respondWithUser(res, uid, 200);
   }
 
+  // Check if a user with this email exists under an old ID (Firebase → Clerk migration)
+  const legacyUser = await prisma.user.findFirst({ where: { email: email.toLowerCase() } });
+  if (legacyUser && legacyUser.id !== uid) {
+    const oldId = legacyUser.id;
+    const wasAdmin = legacyUser.is_global_admin;
+
+    // Use raw SQL to update the primary key directly — this cascades to all FK references
+    // because Postgres handles it in a single statement
+    await prisma.$executeRawUnsafe(
+      `UPDATE users SET id = $1, display_name = $2 WHERE id = $3`,
+      uid,
+      body.displayName ?? legacyUser.display_name,
+      oldId,
+    );
+
+    // Update all foreign key references from old ID to new ID
+    await prisma.$executeRawUnsafe(`UPDATE store_permissions SET user_id = $1 WHERE user_id = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE stores SET created_by = $1 WHERE created_by = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE businesses SET created_by = $1 WHERE created_by = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE contacts SET created_by = $1 WHERE created_by = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE reachouts SET created_by = $1 WHERE created_by = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE calendar_events SET created_by = $1 WHERE created_by = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE invites SET invited_by = $1 WHERE invited_by = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE opportunities SET created_by = $1 WHERE created_by = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE contact_files SET uploaded_by = $1 WHERE uploaded_by = $2`, uid, oldId);
+
+    return respondWithUser(res, uid, 200);
+  }
+
+  // Brand new user — check for pending invites
   const invites = await prisma.invite.findMany({
     where: { email: email.toLowerCase(), status: 'pending' },
     select: { id: true, store_id: true, can_edit: true, is_global_admin: true },
@@ -80,17 +94,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
+  return respondWithUser(res, uid, 201);
+}
+
+async function respondWithUser(res: VercelRequest extends never ? never : any, uid: string, status: number) {
   const user = await prisma.user.findUnique({
     where: { id: uid },
     select: { id: true, email: true, display_name: true, created_at: true, is_global_admin: true },
   });
-  if (!user) return res.status(500).json({ error: 'Create failed' });
+  if (!user) return res.status(500).json({ error: 'User not found after sync' });
+
   const perms = await prisma.storePermission.findMany({
     where: { user_id: uid },
     select: { store_id: true, can_edit: true },
   });
 
-  return res.status(201).json({
+  return res.status(status).json({
     user: {
       uid: user.id,
       email: user.email,

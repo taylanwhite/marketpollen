@@ -31,8 +31,29 @@ export interface Store {
   city?: string;
   state?: string;
   zipCode?: string;
+  organizationId?: string;
   createdAt: Date;
   createdBy: string; // user uid
+}
+
+// Organization types
+export interface Organization {
+  id: string;
+  name: string;
+  quarterlyGoal: number;
+  isAdmin: boolean;
+  stores: Array<{ id: string; name: string }>;
+  products: CampaignProduct[];
+}
+
+export interface CampaignProduct {
+  id: string;
+  slug: string;
+  name: string;
+  mouthValue: number;
+  displayOrder: number;
+  isActive: boolean;
+  reachoutColumn: string | null;
 }
 
 // Business types
@@ -70,18 +91,19 @@ export interface Opportunity {
 
 // Donation data embedded in a reachout
 export interface DonationData {
-  freeBundletCard: number;   // 1 mouth each
-  dozenBundtinis: number;    // 12 mouths each
-  cake8inch: number;         // 10 mouths each
-  cake10inch: number;        // 20 mouths each
-  sampleTray: number;        // 40 mouths each
-  bundtletTower: number;     // 1 mouth per bundtlet
+  freeBundletCard: number;
+  dozenBundtinis: number;
+  cake8inch: number;
+  cake10inch: number;
+  sampleTray: number;
+  bundtletTower: number;
+  customItems?: Record<string, number>;
   cakesDonatedNotes?: string;
   orderedFromUs: boolean;
   followedUp: boolean;
 }
 
-// Mouth values for calculating bundtini equivalents
+/** @deprecated Use CampaignProduct from org config instead */
 export const MOUTH_VALUES = {
   freeBundletCard: 1,
   dozenBundtinis: 12,
@@ -91,8 +113,19 @@ export const MOUTH_VALUES = {
   bundtletTower: 1,
 } as const;
 
-// Quarterly goal for bundtinis per store
+/** @deprecated Use org quarterlyGoal / storeCount instead */
 export const QUARTERLY_GOAL = 10000;
+
+const SLUG_TO_FIELD: Record<string, keyof DonationData> = {
+  freeBundletCard: 'freeBundletCard',
+  dozenBundtinis: 'dozenBundtinis',
+  cake8inch: 'cake8inch',
+  cake10inch: 'cake10inch',
+  sampleTray: 'sampleTray',
+  bundtletTower: 'bundtletTower',
+};
+
+export { SLUG_TO_FIELD };
 
 // Reachout/Note entry
 export interface Reachout {
@@ -102,7 +135,6 @@ export interface Reachout {
   rawNotes?: string | null; // Original unprocessed meeting notes
   createdBy: string; // user uid
   type?: 'call' | 'email' | 'meeting' | 'other';
-  storeId?: string; // Which store made this reachout
   donation?: DonationData; // Optional donation data
 }
 

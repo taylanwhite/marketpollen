@@ -51,6 +51,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         created_by: uid,
       },
     });
+
+    if (body.placeId) {
+      const matchingOpps = await prisma.opportunity.findMany({
+        where: { store_id: storeId, place_id: body.placeId, status: 'new' },
+      });
+      if (matchingOpps.length > 0) {
+        await prisma.opportunity.updateMany({
+          where: { id: { in: matchingOpps.map(o => o.id) } },
+          data: { status: 'converted', business_id: row.id, converted_at: new Date() },
+        });
+      }
+    }
+
     return res.status(201).json(toBusinessJson(row));
   }
 

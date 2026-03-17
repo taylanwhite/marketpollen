@@ -309,9 +309,9 @@ export function Stores() {
       ) : (
         <Grid container spacing={2}>
           {filteredStores.map((store) => (
-            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={store.id}>
-              <Card>
-                <CardContent>
+            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={store.id} sx={{ display: 'flex' }}>
+              <Card sx={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+                <CardContent sx={{ flex: 1 }}>
                   <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
                     {store.name}
                   </Typography>

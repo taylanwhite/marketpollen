@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useClerk } from '@clerk/react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useNavigate } from 'react-router-dom';
@@ -12,7 +13,8 @@ import {
 import { Logout as LogoutIcon, Lock as LockIcon } from '@mui/icons-material';
 
 export function NoAccess() {
-  const { logout, currentUser } = useAuth();
+  const { signOut } = useClerk();
+  const { userEmail } = useAuth();
   const { hasAnyAccess, loading } = usePermissions();
   const navigate = useNavigate();
 
@@ -24,7 +26,7 @@ export function NoAccess() {
 
   const handleLogout = async () => {
     try {
-      await logout();
+      await signOut();
       navigate('/login');
     } catch (error) {
       console.error('Error logging out:', error);
@@ -53,7 +55,7 @@ export function NoAccess() {
           </Typography>
           
           <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
-            Your account ({currentUser?.email}) does not have permission to access this application.
+            Your account ({userEmail}) does not have permission to access this application.
           </Typography>
           
           <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>

@@ -23,7 +23,7 @@ export default async function handler(
   }
 
   // Verify user is authenticated (token presence check)
-  // For production, you may want to verify the token with Firebase Admin SDK
+  // Token is verified by Clerk in the auth middleware
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized - Authentication required' });

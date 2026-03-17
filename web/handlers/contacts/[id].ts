@@ -3,7 +3,9 @@ import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { canAccessStore } from '../lib/store-access.js';
 
-function reachoutToJson(r: { id: string; date: Date; note: string; raw_notes: string | null; created_by: string; type: string; store_id: string | null; free_bundlet_card: number; dozen_bundtinis: number; cake_8inch: number; cake_10inch: number; sample_tray: number; bundtlet_tower: number; cakes_donated_notes: string | null; ordered_from_us: boolean; followed_up: boolean }) {
+function reachoutToJson(r: any) {
+  const customDonations = r.custom_donations as Record<string, number> | null;
+  const hasDonation = r.free_bundlet_card || r.dozen_bundtinis || r.cake_8inch || r.cake_10inch || r.sample_tray || r.bundtlet_tower || r.cakes_donated_notes || (customDonations && Object.keys(customDonations).length > 0);
   return {
     id: r.id,
     date: r.date,
@@ -11,8 +13,7 @@ function reachoutToJson(r: { id: string; date: Date; note: string; raw_notes: st
     rawNotes: r.raw_notes ?? null,
     createdBy: r.created_by,
     type: r.type || 'other',
-    storeId: r.store_id ?? undefined,
-    donation: (r.free_bundlet_card || r.dozen_bundtinis || r.cake_8inch || r.cake_10inch || r.sample_tray || r.bundtlet_tower || r.cakes_donated_notes
+    donation: hasDonation
       ? {
           freeBundletCard: r.free_bundlet_card ?? 0,
           dozenBundtinis: r.dozen_bundtinis ?? 0,
@@ -20,15 +21,16 @@ function reachoutToJson(r: { id: string; date: Date; note: string; raw_notes: st
           cake10inch: r.cake_10inch ?? 0,
           sampleTray: r.sample_tray ?? 0,
           bundtletTower: r.bundtlet_tower ?? 0,
+          customItems: customDonations ?? undefined,
           cakesDonatedNotes: r.cakes_donated_notes ?? undefined,
           orderedFromUs: r.ordered_from_us ?? false,
           followedUp: r.followed_up ?? false,
         }
-      : undefined),
+      : undefined,
   };
 }
 
-function contactToJson(c: { id: string; business_id: string; store_id: string; contact_id: string; first_name: string | null; last_name: string | null; email: string | null; phone: string | null; employee_count: number | null; personal_details: string | null; suggested_follow_up_date: Date | null; suggested_follow_up_method: string | null; suggested_follow_up_note: string | null; suggested_follow_up_priority: string | null; last_reachout_date: Date | null; status: string | null; created_at: Date; created_by: string; reachouts?: Array<{ id: string; date: Date; note: string; raw_notes: string | null; created_by: string; type: string; store_id: string | null; free_bundlet_card: number; dozen_bundtinis: number; cake_8inch: number; cake_10inch: number; sample_tray: number; bundtlet_tower: number; cakes_donated_notes: string | null; ordered_from_us: boolean; followed_up: boolean }> }) {
+function contactToJson(c: any) {
   return {
     id: c.id,
     businessId: c.business_id,
@@ -85,7 +87,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastReachoutDate?: string | Date | null;
       status?: string | null;
       businessId?: string;
-      reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean } }>;
+      reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; customItems?: Record<string, number>; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean } }>;
     };
 
     const updateData: Parameters<typeof prisma.contact.update>[0]['data'] = {};
@@ -108,6 +110,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (Array.isArray(body.reachouts)) {
+      const existingCount = await prisma.reachout.count({ where: { contact_id: id } });
+      const isNewReachout = body.reachouts.length > existingCount;
+
       await prisma.reachout.deleteMany({ where: { contact_id: id } });
       for (const r of body.reachouts) {
         const d = r.donation || {};
@@ -120,7 +125,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             raw_notes: r.rawNotes ?? null,
             created_by: r.createdBy || uid,
             type: (r.type as 'call' | 'email' | 'meeting' | 'other') || 'other',
-            store_id: contact.store_id,
             free_bundlet_card: d.freeBundletCard ?? 0,
             dozen_bundtinis: d.dozenBundtinis ?? 0,
             cake_8inch: d.cake8inch ?? 0,
@@ -130,6 +134,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             cakes_donated_notes: d.cakesDonatedNotes ?? null,
             ordered_from_us: d.orderedFromUs === true,
             followed_up: d.followedUp === true,
+            custom_donations: d.customItems && Object.keys(d.customItems).length > 0 ? d.customItems : undefined,
+          },
+        });
+      }
+
+      if (isNewReachout) {
+        await prisma.calendarEvent.updateMany({
+          where: {
+            contact_id: id,
+            status: 'scheduled',
+          },
+          data: {
+            status: 'completed',
+            completed_at: new Date(),
           },
         });
       }

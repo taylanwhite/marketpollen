@@ -40,6 +40,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await requireAuth(req);
     const body = req.body as { name: string; address?: string; city?: string; state?: string; zipCode?: string };
     if (!body?.name || typeof body.name !== 'string') return res.status(400).json({ error: 'name is required' });
+
+    const membership = await prisma.organizationMember.findFirst({
+      where: { user_id: uid },
+      select: { org_id: true },
+    });
+
     const row = await prisma.store.create({
       data: {
         name: body.name,
@@ -48,8 +54,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         state: body.state ?? null,
         zip_code: body.zipCode ?? null,
         created_by: uid,
+        organization_id: membership?.org_id ?? null,
       },
     });
+
     return res.status(201).json(toStoreJson(row));
   }
 

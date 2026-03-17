@@ -43,7 +43,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...(body?.city !== undefined && { city: body.city }),
         ...(body?.state !== undefined && { state: body.state }),
         ...(body?.zipCode !== undefined && { zip_code: body.zipCode }),
-        ...(body?.placeId !== undefined && { place_id: body.placeId }),
+        ...(body?.placeId !== undefined && { place_id: body.placeId || null }),
       },
     });
     return res.status(200).json(toBusinessJson(updated));

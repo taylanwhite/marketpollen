@@ -1,12 +1,14 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
-import { StorePermission, Store } from '../types';
+import { StorePermission, Store, Organization } from '../types';
 import { api } from '../api/client';
 
 interface UserPermissions {
   isGlobalAdmin: boolean;
+  isOrgAdmin: boolean;
   storePermissions: StorePermission[];
   currentStoreId: string | null;
+  organizations: Organization[];
 }
 
 interface PermissionContextType {
@@ -15,7 +17,9 @@ interface PermissionContextType {
   canView: (storeId?: string) => boolean;
   canEdit: (storeId?: string) => boolean;
   isAdmin: () => boolean;
+  isOrgAdminFn: () => boolean;
   hasAnyAccess: () => boolean;
+  currentOrg: Organization | null;
   loading: boolean;
 }
 
@@ -34,33 +38,46 @@ interface PermissionProviderProps {
 }
 
 export function PermissionProvider({ children }: PermissionProviderProps) {
-  const { currentUser } = useAuth();
+  const { isSignedIn, userId, userData, loading: authLoading } = useAuth();
   const savedStoreId = typeof window !== 'undefined' ? localStorage.getItem('selectedStoreId') : null;
 
   const [permissions, setPermissions] = useState<UserPermissions>({
     isGlobalAdmin: false,
+    isOrgAdmin: false,
     storePermissions: [],
-    currentStoreId: savedStoreId
+    currentStoreId: savedStoreId,
+    organizations: [],
   });
   const [loading, setLoading] = useState(true);
 
+  // Wait for AuthContext to finish loading (which sets the token getter and syncs the user)
+  // before attempting to load permissions
   useEffect(() => {
-    if (!currentUser) {
+    if (authLoading) return;
+
+    if (!isSignedIn) {
       setPermissions({
         isGlobalAdmin: false,
+        isOrgAdmin: false,
         storePermissions: [],
-        currentStoreId: null
+        currentStoreId: null,
+        organizations: [],
       });
       setLoading(false);
       return;
     }
 
+    if (!userId || !userData) {
+      setLoading(true);
+      return;
+    }
+
     setLoading(true);
     loadUserPermissions();
-  }, [currentUser]);
+  }, [authLoading, isSignedIn, userId, userData]);
 
   const loadUserPermissions = async () => {
-    if (!currentUser) return;
+    if (!isSignedIn || !userId) return;
 
     const previousStoreId = permissions.currentStoreId || localStorage.getItem('selectedStoreId');
 
@@ -69,6 +86,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         user: { uid: string; isGlobalAdmin: boolean } | null;
         storePermissions: { storeId: string; canEdit: boolean }[];
         stores: { id: string; name: string }[];
+        organizations?: Organization[];
       }>('/me');
 
       const storePerms: StorePermission[] = (me.storePermissions || []).map(p => ({
@@ -101,17 +119,24 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         }
       }
 
+      const orgs = (me.organizations || []) as Organization[];
+      const orgAdmin = isGlobalAdmin || orgs.some(o => o.isAdmin);
+
       setPermissions({
         isGlobalAdmin,
+        isOrgAdmin: orgAdmin,
         storePermissions: storePerms,
-        currentStoreId
+        currentStoreId,
+        organizations: orgs,
       });
     } catch (error) {
       console.error('Error loading permissions:', error);
       setPermissions({
         isGlobalAdmin: false,
+        isOrgAdmin: false,
         storePermissions: [],
-        currentStoreId: previousStoreId
+        currentStoreId: previousStoreId,
+        organizations: [],
       });
     } finally {
       setLoading(false);
@@ -142,7 +167,16 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   };
 
   const isAdmin = (): boolean => permissions.isGlobalAdmin;
+  const isOrgAdminFn = (): boolean => permissions.isOrgAdmin;
   const hasAnyAccess = (): boolean => permissions.isGlobalAdmin || permissions.storePermissions.length > 0;
+
+  const currentOrg: Organization | null = (() => {
+    if (permissions.organizations.length === 0) return null;
+    if (!permissions.currentStoreId) return permissions.organizations[0] || null;
+    return permissions.organizations.find(o =>
+      o.stores.some(s => s.id === permissions.currentStoreId)
+    ) || permissions.organizations[0] || null;
+  })();
 
   return (
     <PermissionContext.Provider
@@ -152,7 +186,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         canView,
         canEdit,
         isAdmin,
+        isOrgAdminFn,
         hasAnyAccess,
+        currentOrg,
         loading
       }}
     >

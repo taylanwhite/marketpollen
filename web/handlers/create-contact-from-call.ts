@@ -1,149 +1,15 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import OpenAI from 'openai';
-import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
 import { prisma } from './lib/db.js';
 import type { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { readFileSync, existsSync } from 'fs';
 
-// Load environment variables from .env file (for local development)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const envPath = join(__dirname, '..', '.env');
 dotenv.config({ path: envPath });
-
-// Initialize Firebase Admin SDK
-let adminApp: App | null = null;
-
-function getAdminApp(): App {
-  if (adminApp) {
-    return adminApp;
-  }
-
-  if (!getApps().length) {
-    try {
-      // Try to use service account from environment variable (JSON string)
-      // Note: .env files may have issues with multi-line JSON, so we'll try reading from file directly if env var is too short
-      let serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
-      console.log('[Firebase Admin] Checking FIREBASE_SERVICE_ACCOUNT...', serviceAccountJson ? `Found (${serviceAccountJson.length} chars)` : 'Not set');
-      
-      // If the value is suspiciously short (less than 100 chars), it might be a multi-line issue
-      // Try reading from .env file directly
-      if (!serviceAccountJson || serviceAccountJson.length < 100) {
-        console.log('[Firebase Admin] Service account seems too short, trying to read from .env file directly...');
-        try {
-          const envFile = join(__dirname, '..', '.env');
-          if (existsSync(envFile)) {
-            const envContent = readFileSync(envFile, 'utf-8');
-            // Match FIREBASE_SERVICE_ACCOUNT=... (handles single quotes, double quotes, or no quotes)
-            // Use multiline regex to capture multi-line JSON
-            const match = envContent.match(/FIREBASE_SERVICE_ACCOUNT\s*=\s*['"]?([^'"]*\{.*?\}[^'"]*)['"]?/s);
-            if (match && match[1]) {
-              let rawValue = match[1].trim();
-              // Remove surrounding quotes if still present
-              if ((rawValue.startsWith("'") && rawValue.endsWith("'")) || 
-                  (rawValue.startsWith('"') && rawValue.endsWith('"'))) {
-                rawValue = rawValue.slice(1, -1);
-              }
-              // Extract complete JSON object (handle multi-line)
-              if (rawValue.startsWith('{')) {
-                // Find the matching closing brace
-                let braceCount = 0;
-                let endIndex = -1;
-                for (let i = 0; i < rawValue.length; i++) {
-                  if (rawValue[i] === '{') braceCount++;
-                  if (rawValue[i] === '}') {
-                    braceCount--;
-                    if (braceCount === 0) {
-                      endIndex = i + 1;
-                      break;
-                    }
-                  }
-                }
-                if (endIndex > 0) {
-                  serviceAccountJson = rawValue.substring(0, endIndex);
-                  console.log('[Firebase Admin] Extracted JSON from .env file:', serviceAccountJson.length, 'chars');
-                } else {
-                  serviceAccountJson = rawValue;
-                }
-              } else {
-                serviceAccountJson = rawValue;
-              }
-            }
-          }
-        } catch (fileError: any) {
-          console.error('[Firebase Admin] Could not read .env file:', fileError.message || fileError);
-        }
-      }
-      
-      if (serviceAccountJson && serviceAccountJson.length > 50) {
-        try {
-          // Remove surrounding quotes if present (sometimes .env files add extra quotes)
-          let cleanedJson = serviceAccountJson.trim();
-          if ((cleanedJson.startsWith("'") && cleanedJson.endsWith("'")) || 
-              (cleanedJson.startsWith('"') && cleanedJson.endsWith('"'))) {
-            cleanedJson = cleanedJson.slice(1, -1);
-          }
-          
-          console.log('[Firebase Admin] Parsing service account JSON (', cleanedJson.length, 'chars)...');
-          const serviceAccount = JSON.parse(cleanedJson);
-          
-          // Validate required fields
-          if (!serviceAccount.project_id || !serviceAccount.private_key || !serviceAccount.client_email) {
-            throw new Error('Service account JSON missing required fields (project_id, private_key, client_email)');
-          }
-          
-          console.log('[Firebase Admin] Service account has required fields, initializing...');
-          adminApp = initializeApp({
-            credential: cert(serviceAccount),
-            projectId: serviceAccount.project_id,
-          });
-          console.log('[Firebase Admin] ✅ Initialized with service account for project:', serviceAccount.project_id);
-          return adminApp;
-        } catch (parseError: any) {
-          console.error('[Firebase Admin] ❌ Failed to parse FIREBASE_SERVICE_ACCOUNT:', parseError.message || parseError);
-          console.error('[Firebase Admin] First 200 chars of value:', serviceAccountJson.substring(0, 200));
-          console.error('[Firebase Admin] Full error:', parseError);
-        }
-      } else {
-        console.log('[Firebase Admin] FIREBASE_SERVICE_ACCOUNT not set or too short, trying other methods...');
-      }
-      
-      // Try to use project ID (for Vercel with Firebase integration or Application Default Credentials)
-      const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID;
-      if (projectId) {
-        try {
-          adminApp = initializeApp({
-            projectId: projectId,
-          });
-          console.log('[Firebase Admin] Initialized with project ID:', projectId);
-          return adminApp;
-        } catch (projectError) {
-          console.error('[Firebase Admin] Failed to initialize with project ID:', projectError);
-        }
-      }
-      
-      // Last resort: try to initialize without explicit config (uses Application Default Credentials)
-      try {
-        adminApp = initializeApp();
-        console.log('[Firebase Admin] Initialized with Application Default Credentials');
-        return adminApp;
-      } catch (defaultError) {
-        console.error('[Firebase Admin] All initialization methods failed');
-        throw new Error(`Firebase Admin initialization failed. Please set FIREBASE_SERVICE_ACCOUNT (JSON string) or FIREBASE_PROJECT_ID. Error: ${defaultError instanceof Error ? defaultError.message : 'Unknown error'}`);
-      }
-    } catch (error) {
-      console.error('[Firebase Admin] Initialization error:', error);
-      throw error;
-    }
-  } else {
-    adminApp = getApps()[0];
-  }
-
-  return adminApp;
-}
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -556,19 +422,6 @@ export default async function handler(
   // TODO: Re-enable authentication for production
   // const authHeader = req.headers.authorization;
   // const { apiKey } = req.body as RequestBody;
-  // const hasAuth = (authHeader && authHeader.startsWith('Bearer ')) || apiKey;
-  // if (!hasAuth) {
-  //   return res.status(401).json({ error: 'Unauthorized - Authentication required (Bearer token or apiKey in body)' });
-  // }
-  // if (apiKey) {
-  //   const app = getAdminApp();
-  //   const db = getFirestore(app);
-  //   const isValid = await validateApiKey(apiKey);
-  //   if (!isValid) {
-  //     return res.status(401).json({ error: 'Invalid API key' });
-  //   }
-  // }
-
   const { notes, storeName, businessName } = req.body as RequestBody;
 
   // Validate required fields
@@ -691,7 +544,6 @@ export default async function handler(
         raw_notes: initialReachout.rawNotes ?? null,
         created_by: 'ai-phone-system',
         type: 'call',
-        store_id: finalStoreId,
         free_bundlet_card: d.freeBundletCard ?? 0,
         dozen_bundtinis: d.dozenBundtinis ?? 0,
         cake_8inch: d.cake8inch ?? 0,

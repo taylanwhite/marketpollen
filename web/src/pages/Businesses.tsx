@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { Business, Contact } from '../types';
 import { AddressPicker } from '../components/AddressPicker';
+import { PlaceMatchPicker, type PlaceResult } from '../components/PlaceMatchPicker';
 import {
   Box,
   Typography,
@@ -30,6 +31,9 @@ import {
   People as PeopleIcon,
   CalendarMonth as CalendarIcon,
   Edit as EditIcon,
+  Place as PlaceIcon,
+  Link as LinkIcon,
+  LinkOff as LinkOffIcon,
 } from '@mui/icons-material';
 
 interface BusinessWithStats extends Business {
@@ -55,6 +59,8 @@ export function Businesses() {
   const [editLoading, setEditLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showPlacePicker, setShowPlacePicker] = useState(false);
+  const [placePickerBusiness, setPlacePickerBusiness] = useState<BusinessWithStats | null>(null);
 
   useEffect(() => {
     loadBusinesses();
@@ -141,6 +147,34 @@ export function Businesses() {
     });
     setError('');
     setSuccess('');
+  };
+
+  const openPlacePicker = (business: BusinessWithStats) => {
+    setPlacePickerBusiness(business);
+    setShowPlacePicker(true);
+  };
+
+  const handleLinkPlace = async (place: PlaceResult) => {
+    if (!placePickerBusiness) return;
+    try {
+      await api.patch(`/businesses/${placePickerBusiness.id}`, { placeId: place.placeId });
+      setShowPlacePicker(false);
+      setPlacePickerBusiness(null);
+      setSuccess('Business linked to Google Place!');
+      await loadBusinesses();
+    } catch (err: any) {
+      setError(err.message || 'Failed to link place');
+    }
+  };
+
+  const handleUnlinkPlace = async (business: BusinessWithStats) => {
+    try {
+      await api.patch(`/businesses/${business.id}`, { placeId: '' });
+      setSuccess('Google Place link removed.');
+      await loadBusinesses();
+    } catch (err: any) {
+      setError(err.message || 'Failed to unlink place');
+    }
   };
 
   const handleEditSubmit = async () => {
@@ -275,13 +309,30 @@ export function Businesses() {
                         )}
                       </Box>
 
-                      <Box sx={{ mt: 2 }}>
+                      <Box sx={{ mt: 2, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                         <Chip 
                           label="View Contacts →" 
                           size="small" 
                           color="primary" 
                           variant="outlined"
                         />
+                        {business.placeId ? (
+                          <Chip
+                            icon={<PlaceIcon sx={{ fontSize: 14 }} />}
+                            label="Linked"
+                            size="small"
+                            color="success"
+                            variant="outlined"
+                          />
+                        ) : (
+                          <Chip
+                            icon={<LinkOffIcon sx={{ fontSize: 14 }} />}
+                            label="Not linked"
+                            size="small"
+                            variant="outlined"
+                            sx={{ color: 'text.disabled', borderColor: 'divider' }}
+                          />
+                        )}
                       </Box>
                     </CardContent>
                   </CardActionArea>
@@ -355,6 +406,45 @@ export function Businesses() {
               </Box>
             </Box>
           </Box>
+
+            {/* Google Place Link Section */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+                Google Place
+              </Typography>
+              {editingBusiness?.placeId ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Chip
+                    icon={<PlaceIcon />}
+                    label="Linked to Google Place"
+                    color="success"
+                    size="small"
+                  />
+                  <Button
+                    size="small"
+                    color="error"
+                    startIcon={<LinkOffIcon />}
+                    onClick={() => { if (editingBusiness) handleUnlinkPlace(editingBusiness); closeEditModal(); }}
+                  >
+                    Unlink
+                  </Button>
+                </Box>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    Not linked — this business may appear as an opportunity.
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<LinkIcon />}
+                    onClick={() => { if (editingBusiness) openPlacePicker(editingBusiness); }}
+                  >
+                    Link
+                  </Button>
+                </Box>
+              )}
+            </Box>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
           <Button onClick={closeEditModal} disabled={editLoading}>
@@ -369,6 +459,19 @@ export function Businesses() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Place Match Picker for linking existing businesses */}
+      <PlaceMatchPicker
+        open={showPlacePicker}
+        businessName={placePickerBusiness?.name || ''}
+        businessAddress={placePickerBusiness?.address || undefined}
+        businessCity={placePickerBusiness?.city || undefined}
+        businessState={placePickerBusiness?.state || undefined}
+        businessZipCode={placePickerBusiness?.zipCode || undefined}
+        onSelect={handleLinkPlace}
+        onSkip={() => { setShowPlacePicker(false); setPlacePickerBusiness(null); }}
+        onClose={() => { setShowPlacePicker(false); setPlacePickerBusiness(null); }}
+      />
     </Box>
   );
 }

@@ -8,8 +8,10 @@ import { ContactForm } from '../components/ContactForm';
 import { EditContactModal } from '../components/EditContactModal';
 import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
 import { useVoiceInput } from '../hooks/useVoiceInput';
-import { Contact, FollowUpSuggestion, Reachout, DonationData, MOUTH_VALUES } from '../types';
+import { Contact, FollowUpSuggestion, Reachout, DonationData, SLUG_TO_FIELD } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
+import { useCampaign } from '../contexts/CampaignContext';
+import { DonationProductFields } from '../components/DonationProductFields';
 import {
   Box,
   Typography,
@@ -53,12 +55,15 @@ import {
   MicOff as MicOffIcon,
   AutoAwesome as AIIcon,
   Cake as CakeIcon,
+  EventAvailable as EventAvailableIcon,
+  Check as CheckIcon,
 } from '@mui/icons-material';
 
 export function Dashboard() {
-  const { currentUser } = useAuth();
+  const { userId } = useAuth();
   const { permissions, canEdit, loading: permissionsLoading } = usePermissions();
   const { triggerRefresh, setLastDonationMouths } = useDonation();
+  const { products } = useCampaign();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const businessFilter = searchParams.get('business');
@@ -85,7 +90,7 @@ export function Dashboard() {
   
   // Donation fields for quick reachout
   const [includeDonation, setIncludeDonation] = useState(false);
-  const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation());
+  const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation(products));
   
   const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
 
@@ -216,12 +221,14 @@ export function Dashboard() {
     setFollowUpDialogContact(null);
     setFollowUpSuggestions([]);
     setFollowUpLoading(false);
+    setAddedToCalendar(false);
   };
 
   const handleRegenerateFollowUp = async () => {
     if (!followUpDialogContact) return;
 
     setFollowUpLoading(true);
+    setAddedToCalendar(false);
     try {
       const aiSuggestion = await generateFollowUpSuggestion({
         firstName: followUpDialogContact.firstName || undefined,
@@ -282,10 +289,42 @@ export function Dashboard() {
     }
   };
 
-  const handleCopySuggestion = async (suggestion: FollowUpSuggestion) => {
-    const textToCopy = suggestion.message;
+  const [addingToCalendar, setAddingToCalendar] = useState(false);
+  const [addedToCalendar, setAddedToCalendar] = useState(false);
+
+  const handleAddSuggestionToCalendar = async (suggestion: FollowUpSuggestion) => {
+    if (!followUpDialogContact || !permissions.currentStoreId) return;
+    setAddingToCalendar(true);
     try {
-      await navigator.clipboard.writeText(textToCopy);
+      const contactName = `${followUpDialogContact.firstName || ''} ${followUpDialogContact.lastName || ''}`.trim() || followUpDialogContact.email || 'Contact';
+      const suggestedDate = suggestion.suggestedDate instanceof Date
+        ? suggestion.suggestedDate
+        : new Date(suggestion.suggestedDate);
+      const normalizedDate = new Date(suggestedDate);
+      normalizedDate.setHours(0, 0, 0, 0);
+
+      await api.post(`/calendar-events?storeId=${permissions.currentStoreId}`, {
+        title: `Follow-up: ${contactName}`,
+        description: suggestion.message,
+        date: normalizedDate,
+        type: 'followup',
+        contactId: followUpDialogContact.id,
+        businessId: followUpDialogContact.businessId,
+        priority: suggestion.priority || 'medium',
+        status: 'scheduled',
+      });
+
+      setAddedToCalendar(true);
+    } catch (err) {
+      console.error('Failed to add to calendar:', err);
+    } finally {
+      setAddingToCalendar(false);
+    }
+  };
+
+  const handleCopySuggestion = async (suggestion: FollowUpSuggestion) => {
+    try {
+      await navigator.clipboard.writeText(suggestion.message);
       setCopyToastOpen(true);
     } catch (err) {
       console.error('Failed to copy text:', err);
@@ -313,7 +352,7 @@ export function Dashboard() {
     setQuickReachoutData({ note: '', type: 'call', rawNotes: '' });
     setQuickReachoutError('');
     setIncludeDonation(false);
-    setDonationData(createEmptyDonation());
+    setDonationData(createEmptyDonation(products));
     clearTranscript();
   };
 
@@ -322,7 +361,7 @@ export function Dashboard() {
     setQuickReachoutData({ note: '', type: 'call', rawNotes: '' });
     setQuickReachoutError('');
     setIncludeDonation(false);
-    setDonationData(createEmptyDonation());
+    setDonationData(createEmptyDonation(products));
     if (isListening) stopListening();
     clearTranscript();
   };
@@ -337,35 +376,44 @@ export function Dashboard() {
     setQuickReachoutError('');
 
     try {
-      const extracted = await extractContactInfo(quickReachoutData.rawNotes);
+      const extracted = await extractContactInfo(quickReachoutData.rawNotes, products.filter(p => p.isActive).map(p => ({
+        slug: p.slug,
+        name: p.name,
+        mouthValue: p.mouthValue,
+      })));
       setQuickReachoutData(prev => ({
         ...prev,
-        note: extracted.reachoutNote || quickReachoutData.rawNotes
+        note: extracted.reachoutNote || quickReachoutData.rawNotes,
+        type: extracted.reachoutType || prev.type,
       }));
 
-      // Auto-fill donation data if detected
-      // Check if AI detected donation OR if notes contain donation keywords
       const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'cake'];
       const notesLower = quickReachoutData.rawNotes.toLowerCase();
       const hasDonationKeywords = donationKeywords.some(keyword => notesLower.includes(keyword));
       
       if (extracted.donation || hasDonationKeywords) {
         setIncludeDonation(true);
-        // If AI extracted donation data, use it directly; otherwise use fallback logic
         if (extracted.donation) {
+          const d = extracted.donation;
+          const customItems: Record<string, number> = {};
+          for (const product of products.filter(p => p.isActive)) {
+            if (!SLUG_TO_FIELD[product.slug] && typeof d[product.slug] === 'number' && (d[product.slug] as number) > 0) {
+              customItems[product.id] = d[product.slug] as number;
+            }
+          }
           setDonationData({
-            freeBundletCard: extracted.donation.freeBundletCard ?? 0,
-            dozenBundtinis: extracted.donation.dozenBundtinis ?? 0,
-            cake8inch: extracted.donation.cake8inch ?? 0,
-            cake10inch: extracted.donation.cake10inch ?? 0,
-            sampleTray: extracted.donation.sampleTray ?? 0,
-            bundtletTower: extracted.donation.bundtletTower ?? 0,
-            cakesDonatedNotes: extracted.donation.cakesDonatedNotes || '',
-            orderedFromUs: extracted.donation.orderedFromUs ?? false,
-            followedUp: extracted.donation.followedUp ?? false,
+            freeBundletCard: (d.freeBundletCard as number) ?? 0,
+            dozenBundtinis: (d.dozenBundtinis as number) ?? 0,
+            cake8inch: (d.cake8inch as number) ?? 0,
+            cake10inch: (d.cake10inch as number) ?? 0,
+            sampleTray: (d.sampleTray as number) ?? 0,
+            bundtletTower: (d.bundtletTower as number) ?? 0,
+            customItems: Object.keys(customItems).length > 0 ? customItems : undefined,
+            cakesDonatedNotes: (d.cakesDonatedNotes as string) || '',
+            orderedFromUs: (d.orderedFromUs as boolean) ?? false,
+            followedUp: (d.followedUp as boolean) ?? false,
           });
         } else if (hasDonationKeywords) {
-          // Fallback: enable donation toggle but keep existing data
           setDonationData(prev => ({
             ...prev,
             cakesDonatedNotes: prev.cakesDonatedNotes || quickReachoutData.rawNotes,
@@ -396,7 +444,7 @@ export function Dashboard() {
         date: new Date(),
         note: quickReachoutData.note,
         rawNotes: quickReachoutData.rawNotes || null,
-        createdBy: currentUser?.uid || '',
+        createdBy: userId || '',
         type: quickReachoutData.type,
         storeId: permissions.currentStoreId || undefined,
         donation: includeDonation ? donationData : undefined,
@@ -411,7 +459,7 @@ export function Dashboard() {
 
       // Trigger donation tracker refresh with celebration if donation was included
       if (includeDonation && donationData) {
-        const mouths = calculateMouths(donationData);
+        const mouths = calculateMouths(donationData, products);
         setLastDonationMouths(mouths);
         triggerRefresh();
       }
@@ -477,7 +525,7 @@ export function Dashboard() {
       {/* Contact Form */}
       <Collapse in={showForm && canEdit()}>
         <Paper sx={{ p: 3, mb: 3 }}>
-          <ContactForm onSuccess={() => { loadData(); setShowForm(false); }} />
+          <ContactForm onSuccess={() => { loadData(); setShowForm(false); }} defaultBusinessId={businessFilter || undefined} />
         </Paper>
       </Collapse>
 
@@ -597,7 +645,7 @@ export function Dashboard() {
                   Product Donations
                   {includeDonation && (
                     <Chip 
-                      label={`${calculateMouths(donationData)} mouths`} 
+                      label={`${calculateMouths(donationData, products)} mouths`} 
                       size="small" 
                       color="primary" 
                       sx={{ ml: 'auto' }}
@@ -605,89 +653,14 @@ export function Dashboard() {
                   )}
                 </Typography>
 
-                <Grid container spacing={2}>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="FREE Bundtlet Card"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.freeBundletCard || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, freeBundletCard: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.freeBundletCard} mouth each`}
-                      disabled={quickReachoutLoading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="Dozen Bundtinis"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.dozenBundtinis || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, dozenBundtinis: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.dozenBundtinis} mouths each`}
-                      disabled={quickReachoutLoading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="8&quot; Cake"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.cake8inch || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, cake8inch: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.cake8inch} mouths each`}
-                      disabled={quickReachoutLoading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="10&quot; Cake"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.cake10inch || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, cake10inch: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.cake10inch} mouths each`}
-                      disabled={quickReachoutLoading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="Sample Tray"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.sampleTray || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, sampleTray: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.sampleTray} mouths each`}
-                      disabled={quickReachoutLoading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 6, sm: 4 }}>
-                    <TextField
-                      label="Bundtlet/Tower"
-                      type="number"
-                      size="small"
-                      fullWidth
-                      value={donationData.bundtletTower || ''}
-                      onChange={(e) => setDonationData(prev => ({ ...prev, bundtletTower: parseInt(e.target.value) || 0 }))}
-                      helperText={`${MOUTH_VALUES.bundtletTower} mouth each`}
-                      disabled={quickReachoutLoading}
-                      slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                  </Grid>
-                </Grid>
+                <DonationProductFields
+                  products={products}
+                  donationData={donationData}
+                  onChange={setDonationData}
+                />
 
                 <TextField
-                  label="Cakes Donated Notes"
+                  label="Donation Notes"
                   size="small"
                   fullWidth
                   value={donationData.cakesDonatedNotes || ''}
@@ -896,41 +869,52 @@ export function Dashboard() {
               </Typography>
             ) : (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {followUpSuggestions.map((suggestion, index) => (
-                  <Card 
-                    key={index} 
-                    variant="outlined"
-                    sx={{ 
-                      cursor: 'pointer',
-                      '&:hover': {
-                        bgcolor: 'action.hover',
-                        boxShadow: 2,
-                      },
-                      transition: 'all 0.2s ease-in-out',
-                    }}
-                    onClick={() => handleCopySuggestion(suggestion)}
-                  >
-                    <CardContent sx={{ pb: '12px !important' }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                          <Chip label={suggestion.type} size="small" />
-                          <Chip 
-                            label={suggestion.priority} 
-                            size="small" 
-                            color={suggestion.priority === 'high' ? 'error' : suggestion.priority === 'medium' ? 'warning' : 'default'}
-                          />
+                {followUpSuggestions.map((suggestion, index) => {
+                  const sugDate = suggestion.suggestedDate instanceof Date
+                    ? suggestion.suggestedDate
+                    : new Date(suggestion.suggestedDate);
+                  return (
+                    <Card key={index} variant="outlined">
+                      <CardContent sx={{ pb: 1 }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                            <Chip label={suggestion.type} size="small" />
+                            <Chip
+                              label={suggestion.priority}
+                              size="small"
+                              color={suggestion.priority === 'high' ? 'error' : suggestion.priority === 'medium' ? 'warning' : 'default'}
+                            />
+                          </Box>
+                          <IconButton size="small" onClick={() => handleCopySuggestion(suggestion)} title="Copy message">
+                            <ContentCopyIcon fontSize="small" />
+                          </IconButton>
                         </Box>
-                        <ContentCopyIcon fontSize="small" color="action" sx={{ mt: 0.5 }} />
-                      </Box>
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                        📅 {suggestion.suggestedDate.toLocaleDateString()}
-                      </Typography>
-                      <Typography variant="body2">
-                        {suggestion.message}
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                ))}
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          📅 {sugDate.toLocaleDateString()}
+                        </Typography>
+                        <Typography variant="body2" sx={{ mb: 1.5 }}>
+                          {suggestion.message}
+                        </Typography>
+                        {addedToCalendar ? (
+                          <Alert severity="success" sx={{ py: 0.5 }} icon={<CheckIcon fontSize="small" />}>
+                            Added to calendar for {sugDate.toLocaleDateString()}
+                          </Alert>
+                        ) : (
+                          <Button
+                            variant="contained"
+                            size="small"
+                            fullWidth
+                            startIcon={addingToCalendar ? <CircularProgress size={16} color="inherit" /> : <EventAvailableIcon />}
+                            onClick={() => handleAddSuggestionToCalendar(suggestion)}
+                            disabled={addingToCalendar}
+                          >
+                            {addingToCalendar ? 'Adding...' : 'Add to Calendar'}
+                          </Button>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </Box>
             )}
           </DialogContent>

@@ -28,18 +28,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const state = body?.state !== undefined ? body.state : opportunity.state;
   const zipCode = body?.zipCode !== undefined ? body.zipCode : opportunity.zip_code;
 
-  const business = await prisma.business.create({
-    data: {
-      store_id: opportunity.store_id,
-      name,
-      address: address ?? null,
-      city: city ?? null,
-      state: state ?? null,
-      zip_code: zipCode ?? null,
-      place_id: opportunity.place_id,
-      created_by: uid,
-    },
+  let business = await prisma.business.findFirst({
+    where: { store_id: opportunity.store_id, place_id: opportunity.place_id },
   });
+
+  if (!business) {
+    business = await prisma.business.create({
+      data: {
+        store_id: opportunity.store_id,
+        name,
+        address: address ?? null,
+        city: city ?? null,
+        state: state ?? null,
+        zip_code: zipCode ?? null,
+        place_id: opportunity.place_id,
+        created_by: uid,
+      },
+    });
+  }
 
   const updatedOpp = await prisma.opportunity.update({
     where: { id },

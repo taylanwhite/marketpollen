@@ -4,7 +4,9 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore } from './lib/store-access.js';
 
-function reachoutToJson(r: { id: string; date: Date; note: string; raw_notes: string | null; created_by: string; type: string; store_id: string | null; free_bundlet_card: number; dozen_bundtinis: number; cake_8inch: number; cake_10inch: number; sample_tray: number; bundtlet_tower: number; cakes_donated_notes: string | null; ordered_from_us: boolean; followed_up: boolean }) {
+function reachoutToJson(r: any) {
+  const customDonations = r.custom_donations as Record<string, number> | null;
+  const hasDonation = r.free_bundlet_card || r.dozen_bundtinis || r.cake_8inch || r.cake_10inch || r.sample_tray || r.bundtlet_tower || r.cakes_donated_notes || (customDonations && Object.keys(customDonations).length > 0);
   return {
     id: r.id,
     date: r.date,
@@ -12,8 +14,7 @@ function reachoutToJson(r: { id: string; date: Date; note: string; raw_notes: st
     rawNotes: r.raw_notes ?? null,
     createdBy: r.created_by,
     type: r.type || 'other',
-    storeId: r.store_id ?? undefined,
-    donation: (r.free_bundlet_card || r.dozen_bundtinis || r.cake_8inch || r.cake_10inch || r.sample_tray || r.bundtlet_tower || r.cakes_donated_notes
+    donation: hasDonation
       ? {
           freeBundletCard: r.free_bundlet_card ?? 0,
           dozenBundtinis: r.dozen_bundtinis ?? 0,
@@ -21,15 +22,16 @@ function reachoutToJson(r: { id: string; date: Date; note: string; raw_notes: st
           cake10inch: r.cake_10inch ?? 0,
           sampleTray: r.sample_tray ?? 0,
           bundtletTower: r.bundtlet_tower ?? 0,
+          customItems: customDonations ?? undefined,
           cakesDonatedNotes: r.cakes_donated_notes ?? undefined,
           orderedFromUs: r.ordered_from_us ?? false,
           followedUp: r.followed_up ?? false,
         }
-      : undefined),
+      : undefined,
   };
 }
 
-function contactToJson(c: { id: string; business_id: string; store_id: string; contact_id: string; first_name: string | null; last_name: string | null; email: string | null; phone: string | null; employee_count: number | null; personal_details: string | null; suggested_follow_up_date: Date | null; suggested_follow_up_method: string | null; suggested_follow_up_note: string | null; suggested_follow_up_priority: string | null; last_reachout_date: Date | null; status: string | null; created_at: Date; created_by: string; reachouts?: Array<{ id: string; date: Date; note: string; raw_notes: string | null; created_by: string; type: string; store_id: string | null; free_bundlet_card: number; dozen_bundtinis: number; cake_8inch: number; cake_10inch: number; sample_tray: number; bundtlet_tower: number; cakes_donated_notes: string | null; ordered_from_us: boolean; followed_up: boolean }> }) {
+function contactToJson(c: any) {
   return {
     id: c.id,
     businessId: c.business_id,

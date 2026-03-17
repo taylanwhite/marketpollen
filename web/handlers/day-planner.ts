@@ -136,7 +136,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         where: {
           store_id: storeId,
           date: { gte: dayStart, lt: dayEnd },
-          status: { not: 'cancelled' },
+          status: { notIn: ['cancelled', 'completed'] },
         },
         orderBy: [{ date: 'asc' }, { start_time: 'asc' }],
       }),
@@ -162,6 +162,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       message: string;
       draftEmail?: string;
       eventTitle?: string;
+      eventId?: string;
     }
     const followUpTasks: FollowUpTask[] = [];
 
@@ -189,6 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         method: method in { email: 1, call: 1, meeting: 1, text: 1, other: 1 } ? (method as FollowUpTask['method']) : 'other',
         message,
         eventTitle: ev.title || undefined,
+        eventId: ev.id,
       });
     }
 
@@ -290,6 +292,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         message: t.message,
         draftEmail: t.draftEmail,
         eventTitle: t.eventTitle,
+        eventId: t.eventId,
       })),
       optimizedRoute: optimizedRoute.slice(0, MAX_OPPORTUNITIES_IN_PLAN),
     });

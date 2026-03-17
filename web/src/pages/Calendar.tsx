@@ -41,7 +41,9 @@ import {
   ContentCopy as CopyIcon,
   Route as RouteIcon,
   Assignment as PlannerIcon,
+  AutoAwesome as AIIcon,
 } from '@mui/icons-material';
+import { GenerateEmailDialog } from '../components/GenerateEmailDialog';
 
 interface CalendarEventDisplay {
   id: string;
@@ -65,6 +67,7 @@ interface DayPlannerFollowUp {
   message: string;
   draftEmail?: string;
   eventTitle?: string;
+  eventId?: string;
 }
 
 interface DayPlannerOpportunity {
@@ -87,7 +90,7 @@ interface DayPlannerData {
 export function Calendar() {
   const navigate = useNavigate();
   const { permissions } = usePermissions();
-  const { currentUser } = useAuth();
+  const { userId } = useAuth();
   const [events, setEvents] = useState<CalendarEventDisplay[]>([]);
   const [contacts, setContacts] = useState<Map<string, Contact>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -100,6 +103,7 @@ export function Calendar() {
   const [planDate, setPlanDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [dayPlan, setDayPlan] = useState<DayPlannerData | null>(null);
   const [dayPlanLoading, setDayPlanLoading] = useState(false);
+  const [emailTarget, setEmailTarget] = useState<{ contactId: string; contactName: string } | null>(null);
 
   // Form state for creating/editing events
   const [eventForm, setEventForm] = useState({
@@ -383,7 +387,7 @@ export function Calendar() {
   };
 
   const handleSaveEvent = async () => {
-    if (!currentUser || !permissions.currentStoreId) {
+    if (!userId || !permissions.currentStoreId) {
       setError('You must be logged in and have a store selected');
       return;
     }
@@ -427,7 +431,7 @@ export function Calendar() {
         status: 'scheduled',
         location: eventForm.location.trim() || null,
         notes: null,
-        createdBy: currentUser.uid,
+        createdBy: userId,
         createdAt: new Date(),
         updatedAt: null,
         completedAt: null,
@@ -497,6 +501,34 @@ export function Calendar() {
       await loadCalendarData();
     } catch (err: any) {
       setError(err.message || 'Failed to update event');
+    }
+  };
+
+  const handleCompleteFollowUp = async (task: DayPlannerFollowUp) => {
+    try {
+      if (task.eventId) {
+        await api.patch(`/calendar-events/${task.eventId}`, {
+          status: 'completed',
+          completedAt: new Date(),
+        });
+      }
+      // Clear the contact's suggested follow-up
+      await api.patch(`/contacts/${task.contactId}`, {
+        suggestedFollowUpDate: null,
+        suggestedFollowUpMethod: null,
+        suggestedFollowUpNote: null,
+        suggestedFollowUpPriority: null,
+      });
+      setSuccess('Follow-up marked as done!');
+      if (dayPlan) {
+        setDayPlan({
+          ...dayPlan,
+          followUpTasks: dayPlan.followUpTasks.filter(t => t.contactId !== task.contactId),
+        });
+      }
+      await loadCalendarData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to complete follow-up');
     }
   };
 
@@ -613,9 +645,7 @@ export function Calendar() {
                   onClick={() => {
                     if (date) {
                       setSelectedDate(date);
-                      if (!isSelected) {
-                        openCreateEventDialog(date);
-                      }
+                      setPlanDate(date.toISOString().split('T')[0]);
                     }
                   }}
                 >
@@ -778,6 +808,24 @@ export function Calendar() {
                               </Tooltip>
                             </Box>
                           )}
+                          <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                            <Button
+                              size="small"
+                              startIcon={<AIIcon />}
+                              onClick={() => setEmailTarget({ contactId: task.contactId, contactName: task.contactName })}
+                            >
+                              Generate Email
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="success"
+                              startIcon={<CheckCircleIcon />}
+                              onClick={() => handleCompleteFollowUp(task)}
+                            >
+                              Done
+                            </Button>
+                          </Box>
                         </CardContent>
                       </Card>
                     ))}
@@ -911,6 +959,17 @@ export function Calendar() {
                             </IconButton>
                           </Tooltip>
                         </>
+                      )}
+                      {event.contactId && event.contactName && (
+                        <Tooltip title="Generate Email">
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            onClick={() => setEmailTarget({ contactId: event.contactId!, contactName: event.contactName! })}
+                          >
+                            <AIIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
                       )}
                       <Tooltip title="Edit">
                         <IconButton
@@ -1100,6 +1159,19 @@ export function Calendar() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {emailTarget && (
+        <GenerateEmailDialog
+          open
+          onClose={() => setEmailTarget(null)}
+          contactId={emailTarget.contactId}
+          contactName={emailTarget.contactName}
+          onReachoutAdded={() => {
+            loadDayPlan();
+            loadCalendarData();
+          }}
+        />
+      )}
     </Box>
   );
 }

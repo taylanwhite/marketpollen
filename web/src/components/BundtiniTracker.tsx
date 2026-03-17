@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
+import { useCampaign } from '../contexts/CampaignContext';
 import { useAnimatedCount } from '../hooks/useAnimatedCount';
 import { Contact } from '../types';
 import {
@@ -42,10 +43,16 @@ const sparkle = keyframes`
   50% { opacity: 1; transform: scale(1) rotate(180deg); }
 `;
 
+const shimmer = keyframes`
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+`;
+
 export function BundtiniTracker() {
   const { permissions } = usePermissions();
   const { refreshTrigger, lastDonationMouths } = useDonation();
-  const [progress, setProgress] = useState({ totalMouths: 0, goal: 10000, percentage: 0 });
+  const { products, storeGoal } = useCampaign();
+  const [progress, setProgress] = useState({ totalMouths: 0, goal: storeGoal, percentage: 0 });
   const [loading, setLoading] = useState(true);
   const isInitialLoad = useRef(true);
   const previousRefreshTrigger = useRef(0);
@@ -79,8 +86,9 @@ export function BundtiniTracker() {
 
       const progressData = getQuarterProgress(
         contacts,
-        permissions.currentStoreId!,
-        new Date()
+        new Date(),
+        products,
+        storeGoal
       );
       setProgress(progressData);
 
@@ -110,11 +118,12 @@ export function BundtiniTracker() {
     return null;
   }
 
-  const color = getProgressColor(progress.percentage);
+  const color = getProgressColor(Math.min(progress.percentage, 100));
   const quarterLabel = getCurrentQuarterLabel();
   
-  // Only show celebration effects while the counter is actively animating
   const isCelebrating = isAnimating;
+  const goalReached = progress.percentage >= 100;
+  const isGold = isCelebrating || goalReached;
 
   const colorMap = {
     success: '#f5c842',
@@ -135,6 +144,11 @@ export function BundtiniTracker() {
           <Typography variant="caption" sx={{ color: '#666' }}>
             {progress.percentage.toFixed(1)}% complete
           </Typography>
+          {goalReached && !isCelebrating && (
+            <Typography variant="body2" sx={{ color: '#B8860B', fontWeight: 600, mt: 1 }}>
+              🎉 Goal reached!
+            </Typography>
+          )}
           {lastDonationMouths > 0 && isCelebrating && (
             <Typography variant="body2" sx={{ color: '#252525', fontWeight: 600, mt: 1 }}>
               +{lastDonationMouths} mouths added!
@@ -161,7 +175,7 @@ export function BundtiniTracker() {
           display: 'flex',
           alignItems: 'center',
           gap: 1,
-          bgcolor: isCelebrating ? 'rgba(245, 200, 66, 0.25)' : 'rgba(0,0,0,0.06)',
+          bgcolor: isGold ? 'rgba(245, 200, 66, 0.25)' : 'rgba(0,0,0,0.06)',
           borderRadius: 2,
           px: 1.5,
           py: 0.75,
@@ -169,10 +183,13 @@ export function BundtiniTracker() {
           width: '100%',
           position: 'relative',
           transition: 'background-color 0.3s ease',
+          ...(goalReached && !isCelebrating && {
+            boxShadow: '0 0 8px rgba(255, 215, 0, 0.4)',
+            border: '1px solid rgba(255, 215, 0, 0.3)',
+          }),
           animation: isCelebrating ? `${pulseGlow} 0.8s ease-in-out infinite` : 'none',
         }}
       >
-        {/* Celebration sparkles */}
         {isCelebrating && (
           <>
             <CelebrationIcon
@@ -201,7 +218,7 @@ export function BundtiniTracker() {
         <CakeIcon
           sx={{
             fontSize: 20,
-            color: isCelebrating ? '#FFD700' : 'white',
+            color: isGold ? '#FFD700' : 'white',
             animation: isCelebrating ? `${bounce} 0.5s ease-in-out infinite` : 'none',
           }}
         />
@@ -211,10 +228,10 @@ export function BundtiniTracker() {
               variant="caption"
               sx={{
                 color: '#2d2d2d',
-                fontWeight: isCelebrating ? 700 : 500,
-                fontSize: isCelebrating ? '0.85rem' : '0.75rem',
+                fontWeight: isGold ? 700 : 500,
+                fontSize: isGold ? '0.85rem' : '0.75rem',
                 transition: 'all 0.3s ease',
-                textShadow: isCelebrating ? '0 0 10px rgba(255,215,0,0.8)' : 'none',
+                textShadow: isGold ? '0 0 10px rgba(255,215,0,0.8)' : 'none',
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -235,16 +252,22 @@ export function BundtiniTracker() {
           </Box>
           <LinearProgress
             variant="determinate"
-            value={progress.percentage}
+            value={Math.min(progress.percentage, 100)}
             sx={{
-              height: isCelebrating ? 8 : 6,
+              height: isGold ? 8 : 6,
               borderRadius: 3,
               bgcolor: 'rgba(0,0,0,0.1)',
               transition: 'height 0.3s ease',
               '& .MuiLinearProgress-bar': {
-                bgcolor: isCelebrating ? '#FFD700' : colorMap[color],
                 borderRadius: 3,
                 transition: 'background-color 0.3s ease',
+                ...(goalReached ? {
+                  background: 'linear-gradient(90deg, #FFD700 0%, #FFF8DC 25%, #FFD700 50%, #DAA520 75%, #FFD700 100%)',
+                  backgroundSize: '200% 100%',
+                  animation: `${shimmer} 3s linear infinite`,
+                } : {
+                  bgcolor: colorMap[color],
+                }),
               },
             }}
           />
@@ -255,7 +278,7 @@ export function BundtiniTracker() {
           sx={{
             height: 20,
             fontSize: '0.7rem',
-            bgcolor: isCelebrating ? '#FFD700' : colorMap[color],
+            bgcolor: isGold ? '#FFD700' : colorMap[color],
             color: '#2d2d2d',
             fontWeight: 600,
             animation: isCelebrating ? `${bounce} 0.5s ease-in-out infinite 0.2s` : 'none',

@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
-import { Contact, Reachout, DonationData, MOUTH_VALUES, QUARTERLY_GOAL } from '../types';
+import { Contact, Reachout, DonationData, CampaignProduct, SLUG_TO_FIELD } from '../types';
 import {
   getReachoutsWithDonations,
   calculateMouths,
@@ -11,6 +11,8 @@ import {
   getQuarterProgress,
   getProgressColor,
 } from '../utils/donationCalculations';
+import { useCampaign } from '../contexts/CampaignContext';
+import { DonationProductFields } from '../components/DonationProductFields';
 import {
   Box,
   Typography,
@@ -42,6 +44,7 @@ import {
   Button,
   Grid,
   Alert,
+  keyframes,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -60,9 +63,15 @@ interface DonationRow {
   businessName: string;
 }
 
+const shimmer = keyframes`
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+`;
+
 export function Donations() {
-  const { permissions } = usePermissions();
+  const { permissions, currentOrg, isOrgAdminFn } = usePermissions();
   const { triggerRefresh, setLastDonationMouths } = useDonation();
+  const { products, storeGoal } = useCampaign();
   const [loading, setLoading] = useState(true);
   const [donations, setDonations] = useState<DonationRow[]>([]);
   const [filteredDonations, setFilteredDonations] = useState<DonationRow[]>([]);
@@ -70,7 +79,7 @@ export function Donations() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterFollowedUp, setFilterFollowedUp] = useState<'all' | 'yes' | 'no'>('all');
   const [filterOrdered, setFilterOrdered] = useState<'all' | 'yes' | 'no'>('all');
-  const [progress, setProgress] = useState({ totalMouths: 0, goal: QUARTERLY_GOAL, percentage: 0 });
+  const [progress, setProgress] = useState({ totalMouths: 0, goal: storeGoal, percentage: 0 });
 
   // Edit modal state
   const [editingDonation, setEditingDonation] = useState<DonationRow | null>(null);
@@ -141,9 +150,8 @@ export function Donations() {
       }));
 
       const donationsWithData = getReachoutsWithDonations(contacts, {
-        storeId: storeId || undefined,
         quarterDate: new Date(),
-      });
+      }, products);
 
       const donationRows: DonationRow[] = donationsWithData.map(d => ({
         ...d,
@@ -153,7 +161,7 @@ export function Donations() {
       setDonations(donationRows);
 
       if (storeId) {
-        const progressData = getQuarterProgress(contacts, storeId, new Date());
+        const progressData = getQuarterProgress(contacts, new Date(), products, storeGoal);
         setProgress(progressData);
       }
     } catch (error) {
@@ -229,13 +237,12 @@ export function Donations() {
     setEditError('');
   };
 
-  const handleExportToExcel = () => {
-    // Prepare data for export
-    const exportData = filteredDonations.map((row) => {
+  const buildExportRows = (rows: DonationRow[], activeProducts: CampaignProduct[]) => {
+    return rows.map((row) => {
       const donation = row.reachout.donation;
       const contactName = `${row.contact.firstName || ''} ${row.contact.lastName || ''}`.trim() || '-';
-      
-      return {
+
+      const base: Record<string, string | number> = {
         'Date': formatDate(row.reachout.date),
         'Business Name': row.businessName,
         'Contact First Name': row.contact.firstName || '',
@@ -244,56 +251,105 @@ export function Donations() {
         'Phone': row.contact.phone || '',
         'Email': row.contact.email || '',
         'Mouths': row.mouths,
-        'FREE Bundtlet Card': donation?.freeBundletCard || 0,
-        'Dozen Bundtinis': donation?.dozenBundtinis || 0,
-        '8" Cake': donation?.cake8inch || 0,
-        '10" Cake': donation?.cake10inch || 0,
-        'Sample Tray': donation?.sampleTray || 0,
-        'Bundtlet/Tower': donation?.bundtletTower || 0,
-        'Cakes Donated Notes': donation?.cakesDonatedNotes || '',
-        'Followed Up': donation?.followedUp ? 'Yes' : 'No',
-        'Ordered From Us': donation?.orderedFromUs ? 'Yes' : 'No',
-        'Reachout Type': row.reachout.type || '',
-        'Reachout Note': row.reachout.note || '',
       };
-    });
 
-    // Create workbook and worksheet
-    const ws = XLSX.utils.json_to_sheet(exportData);
+      for (const p of activeProducts) {
+        const field = SLUG_TO_FIELD[p.slug];
+        if (field && donation) {
+          base[p.name] = (donation[field] as number) || 0;
+        } else if (donation?.customItems) {
+          base[p.name] = donation.customItems[p.id] || 0;
+        } else {
+          base[p.name] = 0;
+        }
+      }
+
+      base['Donation Notes'] = donation?.cakesDonatedNotes || '';
+      base['Followed Up'] = donation?.followedUp ? 'Yes' : 'No';
+      base['Ordered From Us'] = donation?.orderedFromUs ? 'Yes' : 'No';
+      base['Reachout Type'] = row.reachout.type || '';
+      base['Reachout Note'] = row.reachout.note || '';
+
+      return base;
+    });
+  };
+
+  const buildSheet = (rows: Record<string, string | number>[], activeProducts: CampaignProduct[]) => {
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const colWidths = [
+      { wch: 12 }, { wch: 25 }, { wch: 15 }, { wch: 15 },
+      { wch: 20 }, { wch: 15 }, { wch: 25 }, { wch: 8 },
+      ...activeProducts.map(() => ({ wch: 14 })),
+      { wch: 30 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 40 },
+    ];
+    ws['!cols'] = colWidths;
+    return ws;
+  };
+
+  const handleExportToExcel = () => {
+    const activeProducts = products.filter(p => p.isActive);
+    const exportData = buildExportRows(filteredDonations, activeProducts);
+
+    const ws = buildSheet(exportData, activeProducts);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Donations');
 
-    // Set column widths for better readability
-    const colWidths = [
-      { wch: 12 }, // Date
-      { wch: 25 }, // Business Name
-      { wch: 15 }, // Contact First Name
-      { wch: 15 }, // Contact Last Name
-      { wch: 20 }, // Contact Name
-      { wch: 15 }, // Phone
-      { wch: 25 }, // Email
-      { wch: 8 },  // Mouths
-      { wch: 12 }, // FREE Bundtlet Card
-      { wch: 12 }, // Dozen Bundtinis
-      { wch: 10 }, // 8" Cake
-      { wch: 10 }, // 10" Cake
-      { wch: 12 }, // Sample Tray
-      { wch: 12 }, // Bundtlet/Tower
-      { wch: 30 }, // Cakes Donated Notes
-      { wch: 12 }, // Followed Up
-      { wch: 15 }, // Ordered From Us
-      { wch: 12 }, // Reachout Type
-      { wch: 40 }, // Reachout Note
-    ];
-    ws['!cols'] = colWidths;
-
-    // Generate filename with current date and quarter
     const quarterLabel = getCurrentQuarterLabel();
     const dateStr = new Date().toISOString().split('T')[0];
-    const filename = `Donations_${quarterLabel}_${dateStr}.xlsx`;
+    XLSX.writeFile(wb, `Donations_${quarterLabel}_${dateStr}.xlsx`);
+  };
 
-    // Write file
-    XLSX.writeFile(wb, filename);
+  const [orgExporting, setOrgExporting] = useState(false);
+
+  const handleOrgExportToExcel = async () => {
+    if (!currentOrg) return;
+    setOrgExporting(true);
+
+    try {
+      const activeProducts = products.filter(p => p.isActive);
+      const wb = XLSX.utils.book_new();
+
+      for (const store of currentOrg.stores) {
+        const [businessList, contactsList] = await Promise.all([
+          api.get<Array<{ id: string; name: string }>>(`/businesses?storeId=${store.id}`),
+          api.get<Contact[]>(`/contacts?storeId=${store.id}`),
+        ]);
+
+        const businessMap = new Map<string, string>();
+        businessList.forEach((b) => businessMap.set(b.id, b.name));
+
+        const contacts: Contact[] = contactsList.map((c) => ({
+          ...c,
+          reachouts: (c.reachouts || []).map((r: any) => ({
+            ...r,
+            date: r.date instanceof Date ? r.date : new Date(r.date),
+          })),
+          createdAt: c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt),
+        }));
+
+        const donationsWithData = getReachoutsWithDonations(contacts, {
+          quarterDate: new Date(),
+        }, activeProducts);
+
+        const rows: DonationRow[] = donationsWithData.map(d => ({
+          ...d,
+          businessName: businessMap.get(d.contact.businessId) || d.contact.businessId,
+        }));
+
+        const exportData = buildExportRows(rows, activeProducts);
+        const ws = buildSheet(exportData, activeProducts);
+        const sheetName = store.name.slice(0, 31).replace(/[\\/*?[\]:]/g, '');
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      }
+
+      const quarterLabel = getCurrentQuarterLabel();
+      const dateStr = new Date().toISOString().split('T')[0];
+      XLSX.writeFile(wb, `${currentOrg.name}_Donations_${quarterLabel}_${dateStr}.xlsx`);
+    } catch (error) {
+      console.error('Error exporting org donations:', error);
+    } finally {
+      setOrgExporting(false);
+    }
   };
 
   const handleEditSave = async () => {
@@ -318,8 +374,8 @@ export function Donations() {
       });
 
       // Calculate the difference in mouths and trigger refresh
-      const oldMouths = editingDonation.reachout.donation ? calculateMouths(editingDonation.reachout.donation) : 0;
-      const newMouths = calculateMouths(editDonationData);
+      const oldMouths = editingDonation.reachout.donation ? calculateMouths(editingDonation.reachout.donation, products) : 0;
+      const newMouths = calculateMouths(editDonationData, products);
       const difference = newMouths - oldMouths;
       if (difference > 0) {
         setLastDonationMouths(difference);
@@ -347,7 +403,8 @@ export function Donations() {
     });
   };
 
-  const progressColor = getProgressColor(progress.percentage);
+  const goalReached = progress.percentage >= 100;
+  const progressColor = getProgressColor(Math.min(progress.percentage, 100));
   const colorMap = {
     success: '#f5c842',
     warning: '#e8b923',
@@ -369,13 +426,24 @@ export function Donations() {
       </Typography>
 
       {/* Progress Card */}
-      <Card sx={{ mb: 3, bgcolor: 'rgba(245, 200, 66, 0.2)', border: '1px solid rgba(245, 200, 66, 0.5)', color: '#2d2d2d' }}>
+      <Card sx={{
+        mb: 3,
+        bgcolor: goalReached ? 'rgba(255, 215, 0, 0.15)' : 'rgba(245, 200, 66, 0.2)',
+        border: goalReached ? '1px solid rgba(255, 215, 0, 0.6)' : '1px solid rgba(245, 200, 66, 0.5)',
+        color: '#2d2d2d',
+        ...(goalReached && { boxShadow: '0 0 12px rgba(255, 215, 0, 0.3)' }),
+      }}>
         <CardContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h6">{getCurrentQuarterLabel()} Bundtini Goal</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="h6">{getCurrentQuarterLabel()} Bundtini Goal</Typography>
+              {goalReached && (
+                <Typography component="span" sx={{ fontSize: '1.2rem' }}>🎉</Typography>
+              )}
+            </Box>
             <Chip
               label={`${progress.percentage.toFixed(1)}%`}
-              sx={{ bgcolor: colorMap[progressColor], color: '#2d2d2d', fontWeight: 600 }}
+              sx={{ bgcolor: goalReached ? '#FFD700' : colorMap[progressColor], color: '#2d2d2d', fontWeight: 600 }}
             />
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -388,15 +456,21 @@ export function Donations() {
           </Box>
           <LinearProgress
             variant="determinate"
-            value={progress.percentage}
+            value={Math.min(progress.percentage, 100)}
             sx={{
               mt: 2,
               height: 10,
               borderRadius: 5,
               bgcolor: 'rgba(0,0,0,0.1)',
               '& .MuiLinearProgress-bar': {
-                bgcolor: colorMap[progressColor],
                 borderRadius: 5,
+                ...(goalReached ? {
+                  background: 'linear-gradient(90deg, #FFD700 0%, #FFF8DC 25%, #FFD700 50%, #DAA520 75%, #FFD700 100%)',
+                  backgroundSize: '200% 100%',
+                  animation: `${shimmer} 3s linear infinite`,
+                } : {
+                  bgcolor: colorMap[progressColor],
+                }),
               },
             }}
           />
@@ -456,12 +530,26 @@ export function Donations() {
           <Button
             variant="outlined"
             color="primary"
+            size="small"
             startIcon={<FileDownloadIcon />}
             onClick={handleExportToExcel}
             disabled={filteredDonations.length === 0}
           >
-            Export to Excel
+            Export Store
           </Button>
+
+          {currentOrg && currentOrg.stores.length > 1 && isOrgAdminFn() && (
+            <Button
+              variant="outlined"
+              color="primary"
+              size="small"
+              startIcon={orgExporting ? <CircularProgress size={16} /> : <FileDownloadIcon />}
+              onClick={handleOrgExportToExcel}
+              disabled={orgExporting}
+            >
+              {orgExporting ? 'Exporting...' : 'Export All Stores'}
+            </Button>
+          )}
         </Box>
       </Paper>
 
@@ -551,86 +639,17 @@ export function Donations() {
           {editDonationData && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
               <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                Total Mouths: {calculateMouths(editDonationData)}
+                Total Mouths: {calculateMouths(editDonationData, products)}
               </Typography>
 
-              <Grid container spacing={2}>
-                <Grid size={{ xs: 6 }}>
-                  <TextField
-                    label="FREE Bundtlet Card"
-                    type="number"
-                    size="small"
-                    fullWidth
-                    value={editDonationData.freeBundletCard || ''}
-                    onChange={(e) => setEditDonationData(prev => prev ? { ...prev, freeBundletCard: parseInt(e.target.value) || 0 } : null)}
-                    helperText={`${MOUTH_VALUES.freeBundletCard} mouth each`}
-                    disabled={editLoading}
-                  />
-                </Grid>
-                <Grid size={{ xs: 6 }}>
-                  <TextField
-                    label="Dozen Bundtinis"
-                    type="number"
-                    size="small"
-                    fullWidth
-                    value={editDonationData.dozenBundtinis || ''}
-                    onChange={(e) => setEditDonationData(prev => prev ? { ...prev, dozenBundtinis: parseInt(e.target.value) || 0 } : null)}
-                    helperText={`${MOUTH_VALUES.dozenBundtinis} mouths each`}
-                    disabled={editLoading}
-                  />
-                </Grid>
-                <Grid size={{ xs: 6 }}>
-                  <TextField
-                    label="8&quot; Cake"
-                    type="number"
-                    size="small"
-                    fullWidth
-                    value={editDonationData.cake8inch || ''}
-                    onChange={(e) => setEditDonationData(prev => prev ? { ...prev, cake8inch: parseInt(e.target.value) || 0 } : null)}
-                    helperText={`${MOUTH_VALUES.cake8inch} mouths each`}
-                    disabled={editLoading}
-                  />
-                </Grid>
-                <Grid size={{ xs: 6 }}>
-                  <TextField
-                    label="10&quot; Cake"
-                    type="number"
-                    size="small"
-                    fullWidth
-                    value={editDonationData.cake10inch || ''}
-                    onChange={(e) => setEditDonationData(prev => prev ? { ...prev, cake10inch: parseInt(e.target.value) || 0 } : null)}
-                    helperText={`${MOUTH_VALUES.cake10inch} mouths each`}
-                    disabled={editLoading}
-                  />
-                </Grid>
-                <Grid size={{ xs: 6 }}>
-                  <TextField
-                    label="Sample Tray"
-                    type="number"
-                    size="small"
-                    fullWidth
-                    value={editDonationData.sampleTray || ''}
-                    onChange={(e) => setEditDonationData(prev => prev ? { ...prev, sampleTray: parseInt(e.target.value) || 0 } : null)}
-                    helperText={`${MOUTH_VALUES.sampleTray} mouths each`}
-                    disabled={editLoading}
-                  />
-                </Grid>
-                <Grid size={{ xs: 6 }}>
-                  <TextField
-                    label="Bundtlet/Tower"
-                    type="number"
-                    size="small"
-                    fullWidth
-                    value={editDonationData.bundtletTower || ''}
-                    onChange={(e) => setEditDonationData(prev => prev ? { ...prev, bundtletTower: parseInt(e.target.value) || 0 } : null)}
-                    helperText={`${MOUTH_VALUES.bundtletTower} mouth each`}
-                    disabled={editLoading}
-                  />
-                </Grid>
-              </Grid>
+              <DonationProductFields
+                products={products}
+                donationData={editDonationData}
+                onChange={(updated) => setEditDonationData(updated)}
+              />
 
               <TextField
-                label="Cakes Donated Notes"
+                label="Donation Notes"
                 size="small"
                 fullWidth
                 value={editDonationData.cakesDonatedNotes || ''}

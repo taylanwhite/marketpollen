@@ -24,7 +24,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     where: { id: uid },
     select: { is_global_admin: true },
   });
-  if (!user?.is_global_admin) return res.status(403).json({ error: 'Admin required' });
+
+  let isOrgAdminForAnyStore = false;
+  if (!user?.is_global_admin) {
+    const memberships = await prisma.organizationMember.findMany({
+      where: { user_id: uid, is_admin: true },
+      select: { org_id: true },
+    });
+    if (memberships.length > 0) {
+      isOrgAdminForAnyStore = true;
+    } else {
+      return res.status(403).json({ error: 'Admin required' });
+    }
+  }
 
   if (req.method === 'GET') {
     const storeId = (req.query?.storeId as string)?.trim();
@@ -40,10 +52,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'POST') {
-    const body = req.body as { email: string; storeId: string; canEdit?: boolean; isGlobalAdmin?: boolean };
+    const body = req.body as { email: string; storeId: string; canEdit?: boolean };
     if (!body?.email || !body?.storeId) return res.status(400).json({ error: 'email and storeId required' });
     const can = await canAccessStore(uid, body.storeId);
     if (!can) return res.status(404).json({ error: 'Store not found' });
+
     const row = await prisma.invite.create({
       data: {
         email: body.email.trim().toLowerCase(),
@@ -51,7 +64,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         can_edit: body.canEdit === true,
         invited_by: uid,
         status: 'pending',
-        is_global_admin: body.isGlobalAdmin === true,
+        is_global_admin: false,
       },
     });
     return res.status(201).json(toInviteJson(row));
