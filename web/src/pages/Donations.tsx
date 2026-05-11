@@ -1,9 +1,14 @@
 import { useState, useEffect } from 'react';
-import * as XLSX from 'xlsx';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
+import { useOffline } from '../contexts/OfflineContext';
+import { useTheme } from '@mui/material/styles';
+import { useMediaQuery } from '@mui/material';
 import { Contact, Reachout, DonationData, CampaignProduct, SLUG_TO_FIELD } from '../types';
+import { PullToRefreshIndicator } from '../components/PullToRefreshIndicator';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
+import { haptics } from '../utils/haptics';
 import {
   getReachoutsWithDonations,
   calculateMouths,
@@ -69,7 +74,8 @@ const shimmer = keyframes`
 
 export function Donations() {
   const { permissions, currentOrg, isOrgAdminFn } = usePermissions();
-  const { triggerRefresh, setLastDonationMouths } = useDonation();
+  const { triggerRefresh, setLastDonationMouths, dataVersion, bumpDataVersion } = useDonation();
+  const { syncedCount } = useOffline();
   const { products, storeGoal } = useCampaign();
   const [loading, setLoading] = useState(true);
   const [donations, setDonations] = useState<DonationRow[]>([]);
@@ -86,9 +92,18 @@ export function Donations() {
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState('');
 
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const pullState = usePullToRefresh({
+    onRefresh: () => loadDonations(),
+    enabled: isMobile,
+  });
+
   useEffect(() => {
     loadDonations();
-  }, [permissions.currentStoreId]);
+    // syncedCount makes offline-queued donations appear the moment the queue
+    // drains, even if the user never leaves this page.
+  }, [permissions.currentStoreId, dataVersion, syncedCount]);
 
   useEffect(() => {
     let filtered = donations;
@@ -173,6 +188,7 @@ export function Donations() {
   const handleToggleFollowedUp = async (row: DonationRow) => {
     if (!row.reachout.donation) return;
 
+    haptics.tap();
     try {
       const updatedReachouts = row.contact.reachouts.map(r => {
         if (r.id === row.reachout.id && r.donation) {
@@ -187,10 +203,11 @@ export function Donations() {
         return r;
       });
 
-      await api.patch(`/contacts/${row.contact.id}`, {
+      await api.queuePatch(`/contacts/${row.contact.id}`, {
         reachouts: updatedReachouts,
-      });
+      }, { label: 'Toggle followed-up' });
 
+      bumpDataVersion();
       loadDonations();
     } catch (error) {
       console.error('Error updating followed up status:', error);
@@ -200,6 +217,7 @@ export function Donations() {
   const handleToggleOrdered = async (row: DonationRow) => {
     if (!row.reachout.donation) return;
 
+    haptics.tap();
     try {
       const updatedReachouts = row.contact.reachouts.map(r => {
         if (r.id === row.reachout.id && r.donation) {
@@ -214,10 +232,11 @@ export function Donations() {
         return r;
       });
 
-      await api.patch(`/contacts/${row.contact.id}`, {
+      await api.queuePatch(`/contacts/${row.contact.id}`, {
         reachouts: updatedReachouts,
-      });
+      }, { label: 'Toggle ordered' });
 
+      bumpDataVersion();
       loadDonations();
     } catch (error) {
       console.error('Error updating ordered status:', error);
@@ -273,7 +292,11 @@ export function Donations() {
     });
   };
 
-  const buildSheet = (rows: Record<string, string | number>[], activeProducts: CampaignProduct[]) => {
+  const buildSheet = (
+    XLSX: typeof import('xlsx'),
+    rows: Record<string, string | number>[],
+    activeProducts: CampaignProduct[]
+  ) => {
     const ws = XLSX.utils.json_to_sheet(rows);
     const colWidths = [
       { wch: 12 }, { wch: 25 }, { wch: 15 }, { wch: 15 },
@@ -285,11 +308,13 @@ export function Donations() {
     return ws;
   };
 
-  const handleExportToExcel = () => {
+  const handleExportToExcel = async () => {
+    // Lazy-load xlsx (~400KB) only when the user actually clicks Export
+    const XLSX = await import('xlsx');
     const activeProducts = products.filter(p => p.isActive);
     const exportData = buildExportRows(filteredDonations, activeProducts);
 
-    const ws = buildSheet(exportData, activeProducts);
+    const ws = buildSheet(XLSX, exportData, activeProducts);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Donations');
 
@@ -305,6 +330,7 @@ export function Donations() {
     setOrgExporting(true);
 
     try {
+      const XLSX = await import('xlsx');
       const activeProducts = products.filter(p => p.isActive);
       const wb = XLSX.utils.book_new();
 
@@ -336,7 +362,7 @@ export function Donations() {
         }));
 
         const exportData = buildExportRows(rows, activeProducts);
-        const ws = buildSheet(exportData, activeProducts);
+        const ws = buildSheet(XLSX, exportData, activeProducts);
         const sheetName = store.name.slice(0, 31).replace(/[\\/*?[\]:]/g, '');
         XLSX.utils.book_append_sheet(wb, ws, sheetName);
       }
@@ -368,9 +394,9 @@ export function Donations() {
         return r;
       });
 
-      await api.patch(`/contacts/${editingDonation.contact.id}`, {
+      await api.queuePatch(`/contacts/${editingDonation.contact.id}`, {
         reachouts: updatedReachouts,
-      });
+      }, { label: 'Edit donation' });
 
       // Calculate the difference in mouths and trigger refresh
       const oldMouths = editingDonation.reachout.donation ? calculateMouths(editingDonation.reachout.donation, products) : 0;
@@ -385,10 +411,13 @@ export function Donations() {
         triggerRefresh();
       }
 
+      bumpDataVersion();
+      haptics.success();
       closeEditModal();
       loadDonations();
     } catch (err: any) {
       setEditError(err.message || 'Failed to update donation');
+      haptics.error();
     } finally {
       setEditLoading(false);
     }
@@ -420,6 +449,11 @@ export function Donations() {
 
   return (
     <Box>
+      <PullToRefreshIndicator
+        pullDistance={pullState.pullDistance}
+        refreshing={pullState.refreshing}
+        willTrigger={pullState.willTrigger}
+      />
       <Typography variant="h4" sx={{ mb: 3, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
         <CakeIcon /> Donations
       </Typography>
@@ -477,14 +511,14 @@ export function Donations() {
       </Card>
 
       {/* Filters */}
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+      <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 3 }}>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: { xs: 1.25, sm: 2 }, flexWrap: 'wrap', alignItems: { xs: 'stretch', sm: 'center' } }}>
           <TextField
             placeholder="Search contacts or businesses..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             size="small"
-            sx={{ flexGrow: 1, maxWidth: 400 }}
+            sx={{ flexGrow: 1, maxWidth: { xs: '100%', sm: 400 } }}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -494,66 +528,70 @@ export function Donations() {
             }}
           />
 
-          <FormControl size="small" sx={{ minWidth: 140 }}>
-            <InputLabel>Followed Up</InputLabel>
-            <Select
-              value={filterFollowedUp}
-              label="Followed Up"
-              onChange={(e) => setFilterFollowedUp(e.target.value as any)}
-            >
-              <MenuItem value="all">All</MenuItem>
-              <MenuItem value="yes">Yes</MenuItem>
-              <MenuItem value="no">No</MenuItem>
-            </Select>
-          </FormControl>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+            <FormControl size="small" sx={{ minWidth: 140, flex: { xs: 1, sm: 'unset' } }}>
+              <InputLabel>Followed Up</InputLabel>
+              <Select
+                value={filterFollowedUp}
+                label="Followed Up"
+                onChange={(e) => setFilterFollowedUp(e.target.value as any)}
+              >
+                <MenuItem value="all">All</MenuItem>
+                <MenuItem value="yes">Yes</MenuItem>
+                <MenuItem value="no">No</MenuItem>
+              </Select>
+            </FormControl>
 
-          <FormControl size="small" sx={{ minWidth: 140 }}>
-            <InputLabel>Ordered</InputLabel>
-            <Select
-              value={filterOrdered}
-              label="Ordered"
-              onChange={(e) => setFilterOrdered(e.target.value as any)}
-            >
-              <MenuItem value="all">All</MenuItem>
-              <MenuItem value="yes">Yes</MenuItem>
-              <MenuItem value="no">No</MenuItem>
-            </Select>
-          </FormControl>
+            <FormControl size="small" sx={{ minWidth: 140, flex: { xs: 1, sm: 'unset' } }}>
+              <InputLabel>Ordered</InputLabel>
+              <Select
+                value={filterOrdered}
+                label="Ordered"
+                onChange={(e) => setFilterOrdered(e.target.value as any)}
+              >
+                <MenuItem value="all">All</MenuItem>
+                <MenuItem value="yes">Yes</MenuItem>
+                <MenuItem value="no">No</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
 
-          <Chip
-            label={`${filteredDonations.length} donations`}
-            color="primary"
-            variant="outlined"
-          />
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Chip
+              label={`${filteredDonations.length} donations`}
+              color="primary"
+              variant="outlined"
+            />
 
-          <Button
-            variant="outlined"
-            color="primary"
-            size="small"
-            startIcon={<FileDownloadIcon />}
-            onClick={handleExportToExcel}
-            disabled={filteredDonations.length === 0}
-          >
-            Export Store
-          </Button>
-
-          {currentOrg && currentOrg.stores.length > 1 && isOrgAdminFn() && (
             <Button
               variant="outlined"
               color="primary"
               size="small"
-              startIcon={orgExporting ? <CircularProgress size={16} /> : <FileDownloadIcon />}
-              onClick={handleOrgExportToExcel}
-              disabled={orgExporting}
+              startIcon={<FileDownloadIcon />}
+              onClick={handleExportToExcel}
+              disabled={filteredDonations.length === 0}
             >
-              {orgExporting ? 'Exporting...' : 'Export All Stores'}
+              Export Store
             </Button>
-          )}
+
+            {currentOrg && currentOrg.stores.length > 1 && isOrgAdminFn() && (
+              <Button
+                variant="outlined"
+                color="primary"
+                size="small"
+                startIcon={orgExporting ? <CircularProgress size={16} /> : <FileDownloadIcon />}
+                onClick={handleOrgExportToExcel}
+                disabled={orgExporting}
+              >
+                {orgExporting ? 'Exporting...' : 'Export All Stores'}
+              </Button>
+            )}
+          </Box>
         </Box>
       </Paper>
 
-      {/* Donations Table */}
-      <TableContainer component={Paper}>
+      {/* Donations — desktop table */}
+      <TableContainer component={Paper} sx={{ display: { xs: 'none', md: 'block' } }}>
         <Table size="small">
           <TableHead>
             <TableRow sx={{ bgcolor: 'grey.100' }}>
@@ -623,6 +661,125 @@ export function Donations() {
           </TableBody>
         </Table>
       </TableContainer>
+
+      {/* Donations — mobile card list */}
+      <Box sx={{ display: { xs: 'flex', md: 'none' }, flexDirection: 'column', gap: 1.5 }}>
+        {filteredDonations.length === 0 ? (
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <Typography color="text.secondary">No donations found for this quarter</Typography>
+          </Paper>
+        ) : (
+          filteredDonations.map((row, index) => {
+            const contactName = `${row.contact.firstName || ''} ${row.contact.lastName || ''}`.trim() || 'Contact';
+            const followedUp = row.reachout.donation?.followedUp || false;
+            const ordered = row.reachout.donation?.orderedFromUs || false;
+            return (
+              <Card
+                key={`${row.contact.id}-${row.reachout.id}-${index}`}
+                sx={{ border: '1px solid rgba(0,0,0,0.08)' }}
+              >
+                <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography
+                        variant="subtitle1"
+                        sx={{ fontWeight: 700, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {contactName}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {row.businessName}
+                      </Typography>
+                    </Box>
+                    <Chip
+                      label={`${row.mouths} mouths`}
+                      size="small"
+                      sx={{ bgcolor: '#f5c842', color: '#2d2d2d', fontWeight: 700, flexShrink: 0 }}
+                    />
+                  </Box>
+
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.25 }}>
+                    {formatDate(row.reachout.date)}
+                    {row.reachout.donation?.cakesDonatedNotes && ` · ${row.reachout.donation.cakesDonatedNotes}`}
+                  </Typography>
+
+                  {/* Toggleable status chips */}
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 1.5 }}>
+                    <Chip
+                      icon={followedUp ? <CheckCircleIcon /> : <CancelIcon />}
+                      label={followedUp ? 'Followed up' : 'Not followed up'}
+                      size="small"
+                      clickable
+                      onClick={() => handleToggleFollowedUp(row)}
+                      sx={{
+                        bgcolor: followedUp ? 'rgba(46, 204, 113, 0.15)' : 'rgba(0,0,0,0.05)',
+                        color: followedUp ? '#27ae60' : 'rgba(0,0,0,0.6)',
+                        fontWeight: 600,
+                        '& .MuiChip-icon': { color: 'inherit' },
+                      }}
+                    />
+                    <Chip
+                      icon={ordered ? <CheckCircleIcon /> : <CancelIcon />}
+                      label={ordered ? 'Ordered' : 'Not ordered'}
+                      size="small"
+                      clickable
+                      onClick={() => handleToggleOrdered(row)}
+                      sx={{
+                        bgcolor: ordered ? 'rgba(46, 204, 113, 0.15)' : 'rgba(0,0,0,0.05)',
+                        color: ordered ? '#27ae60' : 'rgba(0,0,0,0.6)',
+                        fontWeight: 600,
+                        '& .MuiChip-icon': { color: 'inherit' },
+                      }}
+                    />
+                  </Box>
+
+                  {/* Tap-to-call / tap-to-email row */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    {row.contact.phone && (
+                      <Button
+                        size="small"
+                        component="a"
+                        href={`tel:${row.contact.phone}`}
+                        sx={{ textTransform: 'none', color: '#27ae60', minWidth: 0, px: 1 }}
+                      >
+                        Call
+                      </Button>
+                    )}
+                    {row.contact.phone && (
+                      <Button
+                        size="small"
+                        component="a"
+                        href={`sms:${row.contact.phone}`}
+                        sx={{ textTransform: 'none', color: '#2ecc71', minWidth: 0, px: 1 }}
+                      >
+                        Text
+                      </Button>
+                    )}
+                    {row.contact.email && (
+                      <Button
+                        size="small"
+                        component="a"
+                        href={`mailto:${row.contact.email}`}
+                        sx={{ textTransform: 'none', color: '#3498db', minWidth: 0, px: 1 }}
+                      >
+                        Email
+                      </Button>
+                    )}
+                    <Box sx={{ flex: 1 }} />
+                    <IconButton size="small" onClick={() => openEditModal(row)} aria-label="Edit donation">
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </Box>
+                </CardContent>
+              </Card>
+            );
+          })
+        )}
+      </Box>
 
       {/* Edit Donation Modal */}
       <Dialog open={!!editingDonation} onClose={closeEditModal} maxWidth="sm" fullWidth>

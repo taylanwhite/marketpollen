@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { api } from '../api/client';
 import { Contact, Reachout, DonationData } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
@@ -55,7 +55,10 @@ import {
   Warning as WarningIcon,
   AutoAwesome as AIIcon,
 } from '@mui/icons-material';
-import { GenerateEmailDialog } from './GenerateEmailDialog';
+const GenerateEmailDialog = lazy(() =>
+  import('./GenerateEmailDialog').then((m) => ({ default: m.GenerateEmailDialog }))
+);
+import { haptics } from '../utils/haptics';
 
 interface EditContactModalProps {
   contact: Contact;
@@ -86,7 +89,7 @@ const reachoutTypeIcons: Record<string, React.ReactElement> = {
 
 export function EditContactModal({ contact, onClose, onSuccess }: EditContactModalProps) {
   const { permissions } = usePermissions();
-  const { triggerRefresh, setLastDonationMouths } = useDonation();
+  const { triggerRefresh, setLastDonationMouths, bumpDataVersion } = useDonation();
   const { products } = useCampaign();
   // Note: useVoiceInput removed - it was part of the "Add Reachout" tab that was removed
   
@@ -185,9 +188,9 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         return r;
       });
 
-      await api.patch(`/contacts/${contact.id}`, {
+      await api.queuePatch(`/contacts/${contact.id}`, {
         reachouts: updatedReachouts
-      });
+      }, { label: 'Edit reachout' });
 
       // Trigger donation tracker refresh if donation was modified
       if (donationChanged) {
@@ -228,19 +231,22 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     setError('');
 
     try {
-      await api.patch(`/contacts/${contact.id}`, {
+      await api.queuePatch(`/contacts/${contact.id}`, {
         firstName: formData.firstName || null,
         lastName: formData.lastName || null,
         email: formData.email || null,
         phone: formData.phone || null,
         personalDetails: formData.personalDetails || null,
         status: formData.status
-      });
+      }, { label: 'Edit contact' });
 
       setSuccess('Contact updated!');
+      haptics.success();
+      bumpDataVersion();
       onSuccess();
     } catch (err: any) {
       setError(err.message || 'Failed to update contact');
+      haptics.error();
     } finally {
       setLoading(false);
     }
@@ -1008,13 +1014,15 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         onSkip={() => finishCreateBusiness()}
         onClose={() => setShowPlacePicker(false)}
       />
-      <GenerateEmailDialog
-        open={emailDialogOpen}
-        onClose={() => setEmailDialogOpen(false)}
-        contactId={contact.id}
-        contactName={getContactName()}
-        onReachoutAdded={onSuccess}
-      />
+      <Suspense fallback={null}>
+        <GenerateEmailDialog
+          open={emailDialogOpen}
+          onClose={() => setEmailDialogOpen(false)}
+          contactId={contact.id}
+          contactName={getContactName()}
+          onReachoutAdded={onSuccess}
+        />
+      </Suspense>
     </Dialog>
   );
 }

@@ -53,6 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'POST') {
     const body = req.body as {
+      id?: string;
       title: string;
       description?: string;
       date: string | Date;
@@ -66,8 +67,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
     if (!body?.title) return res.status(400).json({ error: 'title is required' });
     const eventDate = body.date instanceof Date ? body.date : new Date(body.date);
+
+    // If the client provided an id (offline-queue replay), dedupe by returning
+    // the existing row on a unique-constraint conflict. This makes POSTs safe
+    // to retry after a network drop.
+    if (body.id) {
+      const existing = await prisma.calendarEvent.findUnique({ where: { id: body.id } });
+      if (existing) {
+        return res.status(200).json(toEventJson(existing));
+      }
+    }
+
     const row = await prisma.calendarEvent.create({
       data: {
+        ...(body.id ? { id: body.id } : {}),
         store_id: storeId,
         title: body.title,
         description: body.description ?? null,

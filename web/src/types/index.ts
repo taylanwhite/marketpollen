@@ -134,7 +134,7 @@ export interface Reachout {
   note: string;
   rawNotes?: string | null; // Original unprocessed meeting notes
   createdBy: string; // user uid
-  type?: 'call' | 'email' | 'meeting' | 'other';
+  type?: 'call' | 'email' | 'meeting' | 'text' | 'other';
   donation?: DonationData; // Optional donation data
 }
 

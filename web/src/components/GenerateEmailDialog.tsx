@@ -91,10 +91,10 @@ export function GenerateEmailDialog({ open, onClose, contactId, contactName, onR
         type: 'email' as const,
       };
 
-      await api.patch(`/contacts/${contactId}`, {
+      await api.queuePatch(`/contacts/${contactId}`, {
         lastReachoutDate: new Date().toISOString(),
         reachouts: [...existingReachouts, newReachout],
-      });
+      }, { label: `Log email · ${contactName || 'contact'}` });
 
       setLogged(true);
       onReachoutAdded?.();

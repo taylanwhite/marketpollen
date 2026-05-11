@@ -289,7 +289,7 @@ export function Opportunities() {
   return (
     <Box>
       <Typography variant="h4" sx={{ mb: 3, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <ExploreIcon /> Opportunities
+        <ExploreIcon /> Discover
       </Typography>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}

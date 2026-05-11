@@ -4,6 +4,8 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore } from './lib/store-access.js';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function reachoutToJson(r: any) {
   const customDonations = r.custom_donations as Record<string, number> | null;
   const hasDonation = r.free_bundlet_card || r.dozen_bundtinis || r.cake_8inch || r.cake_10inch || r.sample_tray || r.bundtlet_tower || r.cakes_donated_notes || (customDonations && Object.keys(customDonations).length > 0);
@@ -83,6 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'POST') {
     const body = req.body as {
+      id?: string;
       businessId: string;
       contactId?: string;
       firstName?: string;
@@ -94,10 +97,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       status?: string;
     };
     if (!body?.businessId) return res.status(400).json({ error: 'businessId is required' });
+
+    // Idempotency: if a client id was supplied (offline replay), return the
+    // existing row instead of creating a duplicate.
+    if (body.id) {
+      if (!UUID_RE.test(body.id)) return res.status(400).json({ error: 'id must be a UUID' });
+      const existing = await prisma.contact.findUnique({
+        where: { id: body.id },
+        include: { reachouts: true },
+      });
+      if (existing) {
+        if (existing.store_id !== storeId) {
+          return res.status(409).json({ error: 'Contact id belongs to another store' });
+        }
+        return res.status(200).json(contactToJson(existing));
+      }
+    }
+
     const contactIdApp = body.contactId || `contact-${Date.now()}`;
     try {
       const row = await prisma.contact.create({
         data: {
+          ...(body.id ? { id: body.id } : {}),
           business_id: body.businessId,
           store_id: storeId,
           contact_id: contactIdApp,
@@ -114,8 +135,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       return res.status(201).json(contactToJson(row));
     } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2023') {
-        return res.status(400).json({ error: 'Invalid store id format' });
+      if (err instanceof Prisma.PrismaClientKnownRequestError) {
+        if (err.code === 'P2023') return res.status(400).json({ error: 'Invalid store id format' });
+        if (err.code === 'P2002' && body.id) {
+          const existing = await prisma.contact.findUnique({
+            where: { id: body.id },
+            include: { reachouts: true },
+          });
+          if (existing) return res.status(200).json(contactToJson(existing));
+        }
       }
       throw err;
     }

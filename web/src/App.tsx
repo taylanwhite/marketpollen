@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { PermissionProvider } from './contexts/PermissionContext';
 import { DonationProvider } from './contexts/DonationContext';
 import { CampaignProvider } from './contexts/CampaignContext';
+import { OfflineProvider } from './contexts/OfflineContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
@@ -25,6 +26,7 @@ function AppRoutes() {
   return (
     <AuthProvider>
       <PermissionProvider>
+        <OfflineProvider>
         <CampaignProvider>
         <DonationProvider>
           <Routes>
@@ -111,6 +113,7 @@ function AppRoutes() {
           </Routes>
         </DonationProvider>
         </CampaignProvider>
+        </OfflineProvider>
       </PermissionProvider>
     </AuthProvider>
   );

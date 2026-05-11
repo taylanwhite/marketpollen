@@ -1,131 +1,228 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
-import { Contact, Reachout, DonationData, Business, SLUG_TO_FIELD } from '../types';
+import { Reachout, DonationData, Business, SLUG_TO_FIELD } from '../types';
 import { createEmptyDonation, calculateMouths } from '../utils/donationCalculations';
 import { useCampaign } from '../contexts/CampaignContext';
 import { useDonation } from '../contexts/DonationContext';
 import { DonationProductFields } from './DonationProductFields';
-import { Box, Button, Switch, FormControlLabel, Typography, Divider, Collapse, TextField, Checkbox, Chip } from '@mui/material';
+import {
+  Box,
+  Button,
+  Switch,
+  FormControlLabel,
+  Typography,
+  Collapse,
+  TextField,
+  Chip,
+  Stack,
+  Autocomplete,
+  CircularProgress,
+  Alert,
+  InputAdornment,
+  ToggleButton,
+  ToggleButtonGroup,
+  IconButton,
+} from '@mui/material';
 import { type AddressData } from './AddressPicker';
 import { PlaceMatchPicker, type PlaceResult } from './PlaceMatchPicker';
-import { Cake as CakeIcon } from '@mui/icons-material';
+import { NearbyPlacesChips, type NearbyPlace } from './NearbyPlacesChips';
+import { haptics } from '../utils/haptics';
+import {
+  Cake as CakeIcon,
+  Mic as MicIcon,
+  MicOff as MicOffIcon,
+  AutoAwesome as AIIcon,
+  Phone as PhoneIcon,
+  Email as EmailIcon,
+  EventAvailable as MeetingIcon,
+  Sms as SmsIcon,
+  HelpOutline as OtherIcon,
+  Save as SaveIcon,
+  Clear as ClearIcon,
+  Business as BusinessIcon,
+  Person as PersonIcon,
+} from '@mui/icons-material';
+
+type ReachoutType = 'meeting' | 'call' | 'email' | 'text' | 'other';
 
 interface ContactFormProps {
   onSuccess?: () => void;
   defaultBusinessId?: string;
 }
 
+interface FormState {
+  name: string; // combined "First Last"; we split on save
+  email: string;
+  phone: string;
+  personalDetails: string;
+  reachoutNote: string;
+  reachoutType: ReachoutType;
+  followUpDays: number;
+}
+
+const FOLLOW_UP_PRESETS: { label: string; days: number }[] = [
+  { label: '3 days', days: 3 },
+  { label: '1 week', days: 7 },
+  { label: '2 weeks', days: 14 },
+  { label: '1 month', days: 30 },
+];
+
+const REACHOUT_TYPES: { value: ReachoutType; label: string; icon: React.ReactNode }[] = [
+  { value: 'meeting', label: 'Visit', icon: <MeetingIcon fontSize="small" /> },
+  { value: 'call', label: 'Call', icon: <PhoneIcon fontSize="small" /> },
+  { value: 'text', label: 'Text', icon: <SmsIcon fontSize="small" /> },
+  { value: 'email', label: 'Email', icon: <EmailIcon fontSize="small" /> },
+  { value: 'other', label: 'Other', icon: <OtherIcon fontSize="small" /> },
+];
+
+function splitName(full: string): { firstName: string; lastName: string } {
+  const trimmed = full.trim();
+  if (!trimmed) return { firstName: '', lastName: '' };
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) return { firstName: parts[0], lastName: '' };
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+}
+
 export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) {
   const { userId } = useAuth();
   const { products } = useCampaign();
   const { permissions } = usePermissions();
-  const { triggerRefresh, setLastDonationMouths } = useDonation();
+  const { triggerRefresh, setLastDonationMouths, bumpDataVersion } = useDonation();
   const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
-  
+
   const [businesses, setBusinesses] = useState<Business[]>([]);
-  const [selectedBusinessId, setSelectedBusinessId] = useState(defaultBusinessId || '');
-  const [newBusinessName, setNewBusinessName] = useState('');
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string>(defaultBusinessId || '');
+
   const [showNewBusiness, setShowNewBusiness] = useState(false);
-  const [newBusinessAddress, setNewBusinessAddress] = useState<AddressData>({
-    address: '',
-    city: '',
-    state: '',
-    zipCode: '',
-  });
+  const [newBusinessName, setNewBusinessName] = useState('');
+  const [newBusinessAddress, setNewBusinessAddress] = useState<AddressData>({ address: '', city: '', state: '', zipCode: '' });
+  const [newBusinessPlaceId, setNewBusinessPlaceId] = useState<string | null>(null);
   const [showPlacePicker, setShowPlacePicker] = useState(false);
-  
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
+  const [creatingBusiness, setCreatingBusiness] = useState(false);
+
+  const [rawNotes, setRawNotes] = useState('');
+  const [hasExtracted, setHasExtracted] = useState(false);
+  // Snapshot of whatever the user had typed when they last started dictating,
+  // so the live transcript appends instead of overwriting their text.
+  const typedPrefixRef = useRef<string>('');
+
+  const [form, setForm] = useState<FormState>({
+    name: '',
     email: '',
     phone: '',
     personalDetails: '',
     reachoutNote: '',
-    reachoutType: 'call' as 'call' | 'email' | 'meeting' | 'other',
-    suggestedFollowUpDays: 3
+    reachoutType: 'meeting',
+    followUpDays: 3,
   });
 
-  const [rawNotes, setRawNotes] = useState(''); // Editable raw meeting notes
   const [includeDonation, setIncludeDonation] = useState(false);
   const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation(products));
-  
+
   const [loading, setLoading] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('Saved!');
 
-  // Load businesses on mount and when store changes
+  // Hydrate the businesses list whenever the active store changes
   useEffect(() => {
-    loadBusinesses();
-  }, [permissions.currentStoreId]);
-
-  const loadBusinesses = async () => {
-    try {
+    let cancelled = false;
+    (async () => {
       if (!permissions.currentStoreId) {
         setBusinesses([]);
         return;
       }
-      const list = await api.get<Business[]>(`/businesses?storeId=${permissions.currentStoreId}`);
-      const businessList = list.map((b) => ({
-        ...b,
-        createdAt: b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt),
-      }));
-      businessList.sort((a, b) => a.name.localeCompare(b.name));
-      setBusinesses(businessList);
-    } catch (error) {
-      console.error('Error loading businesses:', error);
-    }
-  };
+      try {
+        const list = await api.get<Business[]>(`/businesses?storeId=${permissions.currentStoreId}`);
+        if (cancelled) return;
+        const sorted = list
+          .map((b) => ({ ...b, createdAt: b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setBusinesses(sorted);
+      } catch (err) {
+        console.error('Error loading businesses:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [permissions.currentStoreId]);
 
-  // Update raw notes with transcript (combine final + interim for display)
+  // When dictation starts, snapshot whatever the user typed first; then
+  // append the live transcript to that snapshot instead of overwriting.
   useEffect(() => {
-    if (transcript || interimTranscript) {
-      const fullText = interimTranscript ? `${transcript} ${interimTranscript}`.trim() : transcript;
-      setRawNotes(fullText);
+    if (isListening) {
+      // Snapshot only on the rising edge of isListening
+      typedPrefixRef.current = rawNotes;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isListening]);
+
+  useEffect(() => {
+    if (!transcript && !interimTranscript) return;
+    const live = interimTranscript ? `${transcript} ${interimTranscript}`.trim() : transcript;
+    const prefix = typedPrefixRef.current;
+    const sep = prefix && !prefix.endsWith(' ') && !prefix.endsWith('\n') ? ' ' : '';
+    setRawNotes(prefix ? `${prefix}${sep}${live}` : live);
   }, [transcript, interimTranscript]);
 
-  const processNotesWithAI = async () => {
+  // Make sure speech recognition doesn't keep running if the form unmounts
+  // (e.g. user dismisses the QuickAddDialog mid-dictation).
+  useEffect(() => {
+    return () => {
+      if (isListening) stopListening();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const selectedBusiness = useMemo(
+    () => businesses.find((b) => b.id === selectedBusinessId) || null,
+    [businesses, selectedBusinessId]
+  );
+
+  const totalMouths = useMemo(
+    () => (includeDonation ? calculateMouths(donationData, products) : 0),
+    [includeDonation, donationData, products]
+  );
+
+  const handleProcess = async () => {
     if (!rawNotes.trim()) {
-      setError('Please enter meeting notes to process');
+      setError('Tell me about your visit first — type or dictate above.');
       return;
     }
-
-    setAiProcessing(true);
     setError('');
-    
+    setAiProcessing(true);
     try {
-      const extracted = await extractContactInfo(rawNotes, products.filter(p => p.isActive).map(p => ({
+      const activeProducts = products.filter((p) => p.isActive).map((p) => ({
         slug: p.slug,
         name: p.name,
         mouthValue: p.mouthValue,
-      })));
-      
-      // Update form fields (does NOT create a contact - just fills the form)
-      setFormData(prev => ({
+      }));
+      const extracted = await extractContactInfo(rawNotes, activeProducts);
+
+      const combinedName = [extracted.firstName, extracted.lastName].filter(Boolean).join(' ').trim();
+      setForm((prev) => ({
         ...prev,
-        firstName: extracted.firstName || prev.firstName,
-        lastName: extracted.lastName || prev.lastName,
+        name: combinedName || prev.name,
         email: extracted.email || prev.email,
         phone: extracted.phone || prev.phone,
         personalDetails: extracted.personalDetails || prev.personalDetails,
         reachoutNote: extracted.reachoutNote || prev.reachoutNote,
-        reachoutType: extracted.reachoutType || prev.reachoutType,
-        suggestedFollowUpDays: extracted.suggestedFollowUpDays || prev.suggestedFollowUpDays
+        reachoutType: (extracted.reachoutType as ReachoutType) || prev.reachoutType,
+        followUpDays: extracted.suggestedFollowUpDays || prev.followUpDays,
       }));
 
-      // Auto-match or pre-fill business
-      if (extracted.businessName && businesses.length > 0) {
-        const extractedLower = extracted.businessName.toLowerCase();
-        const match = businesses.find(b => {
-          const nameLower = b.name.toLowerCase();
-          return nameLower === extractedLower
-            || nameLower.includes(extractedLower)
-            || extractedLower.includes(nameLower);
+      // Auto-match the business by fuzzy name
+      if (extracted.businessName) {
+        const target = extracted.businessName.toLowerCase();
+        const match = businesses.find((b) => {
+          const n = b.name.toLowerCase();
+          return n === target || n.includes(target) || target.includes(n);
         });
         if (match) {
           setSelectedBusinessId(match.id);
@@ -135,25 +232,30 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           setNewBusinessName(extracted.businessName);
           setSelectedBusinessId('');
         }
-      } else if (extracted.businessName) {
-        setShowNewBusiness(true);
-        setNewBusinessName(extracted.businessName);
-        setSelectedBusinessId('');
       }
 
-      // Auto-fill donation data if detected
-      // Check if AI detected donation OR if notes contain donation keywords
+      // Carry the AI-extracted address into the "new business" payload so it
+      // gets saved if the user creates the business without picking a Place.
+      if (extracted.address || extracted.city || extracted.state || extracted.zipCode) {
+        setNewBusinessAddress((prev) => ({
+          address: extracted.address || prev.address,
+          city: extracted.city || prev.city,
+          state: extracted.state || prev.state,
+          zipCode: extracted.zipCode || prev.zipCode,
+        }));
+      }
+
+      // Donation detection: trust the AI's extracted donation, fall back to keyword scan
       const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'cake'];
       const notesLower = rawNotes.toLowerCase();
-      const hasDonationKeywords = donationKeywords.some(keyword => notesLower.includes(keyword));
-      
+      const hasDonationKeywords = donationKeywords.some((k) => notesLower.includes(k));
+
       if (extracted.donation || hasDonationKeywords) {
         setIncludeDonation(true);
-        // If AI extracted donation data, use it directly; otherwise use fallback logic
         if (extracted.donation) {
           const d = extracted.donation;
           const customItems: Record<string, number> = {};
-          for (const product of products.filter(p => p.isActive)) {
+          for (const product of products.filter((p) => p.isActive)) {
             if (!SLUG_TO_FIELD[product.slug] && typeof d[product.slug] === 'number' && (d[product.slug] as number) > 0) {
               customItems[product.id] = d[product.slug] as number;
             }
@@ -170,38 +272,43 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             orderedFromUs: (d.orderedFromUs as boolean) ?? false,
             followedUp: (d.followedUp as boolean) ?? false,
           });
-        } else if (hasDonationKeywords) {
-          // Fallback: enable donation toggle but keep existing data
-          setDonationData(prev => ({
-            ...prev,
-            cakesDonatedNotes: prev.cakesDonatedNotes || rawNotes,
-            orderedFromUs: notesLower.includes('order') || notesLower.includes('ordered') || notesLower.includes('ordering') ? true : prev.orderedFromUs,
-            followedUp: notesLower.includes('followed up') || notesLower.includes('follow up') ? true : prev.followedUp,
-          }));
         }
       }
-      
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 2000);
-    } catch (err: any) {
+
+      setHasExtracted(true);
+    } catch (err) {
       console.error('AI extraction error:', err);
-      setError('AI processing failed. You can still fill the form manually.');
+      setError('AI processing failed. You can fill the fields in manually below.');
+      setHasExtracted(true);
     } finally {
       setAiProcessing(false);
     }
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setFormData(prev => ({
-      ...prev,
-      [e.target.name]: e.target.value
-    }));
-  };
-
-  const generateContactId = () => {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    return `CONT-${timestamp}-${random}`;
+  const handleClear = () => {
+    setRawNotes('');
+    setHasExtracted(false);
+    setForm({
+      name: '',
+      email: '',
+      phone: '',
+      personalDetails: '',
+      reachoutNote: '',
+      reachoutType: 'meeting',
+      followUpDays: 3,
+    });
+    setIncludeDonation(false);
+    setDonationData(createEmptyDonation(products));
+    setError('');
+    setSuccess(false);
+    setSelectedBusinessId(defaultBusinessId || '');
+    setShowNewBusiness(false);
+    setNewBusinessName('');
+    setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+    setNewBusinessPlaceId(null);
+    typedPrefixRef.current = '';
+    clearTranscript();
+    if (isListening) stopListening();
   };
 
   const handleCreateBusiness = () => {
@@ -213,524 +320,723 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       setError('Please select a store first');
       return;
     }
+    setError('');
     setShowPlacePicker(true);
   };
 
   const finishCreateBusiness = async (placeId?: string) => {
+    setCreatingBusiness(true);
+    setError('');
     try {
-      const created = await api.post<Business>(`/businesses?storeId=${permissions.currentStoreId}`, {
+      const storeId = permissions.currentStoreId!;
+      // Generate the id client-side so the queued POST is idempotent on retry
+      // and we can keep working offline.
+      const newId = crypto.randomUUID();
+      const optimistic: Business = {
+        id: newId,
+        storeId,
         name: newBusinessName.trim(),
         address: newBusinessAddress.address || undefined,
         city: newBusinessAddress.city || undefined,
         state: newBusinessAddress.state || undefined,
         zipCode: newBusinessAddress.zipCode || undefined,
-        placeId: placeId || undefined,
+        placeId: placeId || newBusinessPlaceId || undefined,
+        createdAt: new Date(),
+        createdBy: userId || '',
+      };
+
+      await api.queuePost(`/businesses?storeId=${storeId}`, {
+        id: newId,
+        name: optimistic.name,
+        address: optimistic.address,
+        city: optimistic.city,
+        state: optimistic.state,
+        zipCode: optimistic.zipCode,
+        placeId: optimistic.placeId,
+      }, { label: `New business · ${optimistic.name}` });
+
+      // Optimistically add the business to the picker so the user can keep
+      // working before the server replies.
+      setBusinesses((prev) => {
+        if (prev.some((b) => b.id === newId)) return prev;
+        return [...prev, optimistic].sort((a, b) => a.name.localeCompare(b.name));
       });
-      await loadBusinesses();
-      setSelectedBusinessId(created.id);
+      setSelectedBusinessId(newId);
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+      setNewBusinessPlaceId(null);
       setShowNewBusiness(false);
       setShowPlacePicker(false);
-    } catch (err: any) {
-      setError(err.message || 'Failed to create business');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create business';
+      setError(message);
+    } finally {
+      setCreatingBusiness(false);
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async () => {
     setError('');
     setSuccess(false);
 
     if (!userId) {
-      setError('You must be logged in to create a contact');
+      setError('You must be logged in to save a visit');
       return;
     }
-
     if (!selectedBusinessId) {
-      setError('Please select or create a business');
+      setError('Pick or create a business for this contact first');
       return;
     }
-
     if (!permissions.currentStoreId) {
       setError('Please select a store first');
       return;
     }
 
     setLoading(true);
-
     try {
       const now = new Date();
-      
-      // Create initial reachout if note provided
+      const { firstName, lastName } = splitName(form.name);
+      const storeId = permissions.currentStoreId;
+      const contactName = `${firstName} ${lastName}`.trim() || form.email || 'New contact';
+
+      // Client-generate everything that previously required server-side ids,
+      // so the entire save chain can survive a network drop.
+      const newContactId = crypto.randomUUID();
+      const reachoutLogEventId = crypto.randomUUID();
+      const followUpEventId = crypto.randomUUID();
       const initialReachout: Reachout = {
         id: `reach-${Date.now()}`,
         date: now,
-        note: formData.reachoutNote || 'Initial contact created',
+        note: form.reachoutNote || rawNotes || 'Initial contact',
         rawNotes: rawNotes || null,
         createdBy: userId,
-        type: formData.reachoutType,
+        type: form.reachoutType,
         donation: includeDonation ? donationData : undefined,
       };
 
-      // Generate AI follow-up suggestion
-      let suggestedFollowUpDate: Date | null = null;
-      let suggestedFollowUpMethod: 'email' | 'call' | 'meeting' | 'text' | 'other' | null = null;
+      // Step 1 — try AI follow-up suggestion online. If it fails for any
+      // reason (offline, slow, API down), fall back to the user-picked
+      // "follow up in N days" preset. Either way, we never block saving.
+      let suggestedFollowUpDate: Date;
+      let suggestedFollowUpMethod: 'email' | 'call' | 'meeting' | 'text' | 'other' | null;
       let suggestedFollowUpNote: string | null = null;
-      let suggestedFollowUpPriority: 'low' | 'medium' | 'high' | null = null;
+      let suggestedFollowUpPriority: 'low' | 'medium' | 'high' | null = 'medium';
+      let aiSuggestionApplied = false;
 
       try {
-        const aiSuggestion = await generateFollowUpSuggestion({
-          firstName: formData.firstName || undefined,
-          lastName: formData.lastName || undefined,
-          reachouts: [{
-            date: initialReachout.date,
-            note: initialReachout.note || '',
-            type: initialReachout.type || 'other',
-            donation: initialReachout.donation
-          }],
-          personalDetails: formData.personalDetails || undefined,
-          status: 'new',
-          email: formData.email || undefined,
-          phone: formData.phone || undefined,
-        });
-
-        suggestedFollowUpDate = new Date(aiSuggestion.suggestedDate);
-        suggestedFollowUpMethod = aiSuggestion.suggestedMethod || null;
-        suggestedFollowUpNote = aiSuggestion.message || null;
-        suggestedFollowUpPriority = aiSuggestion.priority || null;
-      } catch (aiError) {
-        console.error('AI follow-up generation failed, using fallback:', aiError);
-        // Fallback to simple calculation
+        if (navigator.onLine) {
+          const aiSuggestion = await generateFollowUpSuggestion({
+            firstName: firstName || undefined,
+            lastName: lastName || undefined,
+            reachouts: [
+              {
+                date: initialReachout.date,
+                note: initialReachout.note || '',
+                type: initialReachout.type || 'other',
+                donation: initialReachout.donation,
+              },
+            ],
+            personalDetails: form.personalDetails || undefined,
+            status: 'new',
+            email: form.email || undefined,
+            phone: form.phone || undefined,
+          });
+          suggestedFollowUpDate = new Date(aiSuggestion.suggestedDate);
+          suggestedFollowUpMethod = aiSuggestion.suggestedMethod || null;
+          suggestedFollowUpNote = aiSuggestion.message || null;
+          suggestedFollowUpPriority = aiSuggestion.priority || 'medium';
+          aiSuggestionApplied = true;
+        } else {
+          throw new Error('offline');
+        }
+      } catch (aiErr) {
+        if ((aiErr as Error)?.message !== 'offline') {
+          console.warn('AI follow-up generation failed, using fallback:', aiErr);
+        }
         suggestedFollowUpDate = new Date(now);
-        suggestedFollowUpDate.setDate(suggestedFollowUpDate.getDate() + formData.suggestedFollowUpDays);
-        suggestedFollowUpMethod = formData.email ? 'email' : formData.phone ? 'call' : 'email';
-        suggestedFollowUpNote = null;
-        suggestedFollowUpPriority = 'medium';
+        suggestedFollowUpDate.setDate(suggestedFollowUpDate.getDate() + form.followUpDays);
+        suggestedFollowUpMethod = form.email ? 'email' : form.phone ? 'call' : 'meeting';
       }
 
-      const storeId = permissions.currentStoreId;
-      const contactIdApp = generateContactId();
-
-      const created = await api.post<Contact>(`/contacts?storeId=${storeId}`, {
+      // Step 2 — create the contact. Pass a client-generated UUID so the
+      // POST is idempotent on retry and the rest of the chain can run
+      // immediately (even offline) referencing this id.
+      await api.queuePost(`/contacts?storeId=${storeId}`, {
+        id: newContactId,
         businessId: selectedBusinessId,
-        contactId: contactIdApp,
-        firstName: formData.firstName || null,
-        lastName: formData.lastName || null,
-        email: formData.email || null,
-        phone: formData.phone || null,
-        personalDetails: formData.personalDetails || null,
+        firstName: firstName || null,
+        lastName: lastName || null,
+        email: form.email || null,
+        phone: form.phone || null,
+        personalDetails: form.personalDetails || null,
         status: 'new',
-      });
+      }, { label: `New contact · ${contactName}` });
 
-      await api.patch(`/contacts/${created.id}`, {
-        suggestedFollowUpDate: suggestedFollowUpDate || null,
+      // Step 3 — attach the initial reachout + follow-up suggestion. PATCH
+      // bodies send the full reachouts array, which makes them idempotent.
+      await api.queuePatch(`/contacts/${newContactId}`, {
+        suggestedFollowUpDate: suggestedFollowUpDate.toISOString(),
         suggestedFollowUpMethod: suggestedFollowUpMethod || null,
         suggestedFollowUpNote: suggestedFollowUpNote || null,
         suggestedFollowUpPriority: suggestedFollowUpPriority || null,
-        lastReachoutDate: now,
+        lastReachoutDate: now.toISOString(),
         reachouts: [initialReachout],
-      });
+      }, { label: `Log visit · ${contactName}` });
 
-      const contactId = created.id;
-
-      if (formData.reachoutNote || rawNotes) {
-        try {
-          const normalizedNow = new Date(now);
-          normalizedNow.setHours(0, 0, 0, 0);
-          await api.post(`/calendar-events?storeId=${storeId}`, {
-            title: `Reachout: ${formData.firstName || formData.lastName || 'New Contact'}`,
-            description: formData.reachoutNote || rawNotes || null,
-            date: normalizedNow,
-            type: 'reachout',
-            contactId: contactId,
-            businessId: selectedBusinessId,
-            priority: 'medium',
-            status: 'completed',
-            createdBy: userId,
-          });
-        } catch (eventError) {
-          console.error('Failed to create calendar event:', eventError);
-        }
+      // Step 4 — log the reachout on the calendar so it appears in history
+      if (form.reachoutNote || rawNotes) {
+        const normalizedNow = new Date(now);
+        normalizedNow.setHours(0, 0, 0, 0);
+        await api.queuePost(`/calendar-events?storeId=${storeId}`, {
+          id: reachoutLogEventId,
+          title: `Reachout: ${firstName || lastName || 'New Contact'}`,
+          description: form.reachoutNote || rawNotes || null,
+          date: normalizedNow.toISOString(),
+          type: 'reachout',
+          contactId: newContactId,
+          businessId: selectedBusinessId,
+          priority: 'medium',
+          status: 'completed',
+          createdBy: userId,
+        }, { label: `Reachout log · ${contactName}` });
       }
 
-      if (suggestedFollowUpDate) {
-        try {
-          const contactName = `${formData.firstName || ''} ${formData.lastName || ''}`.trim() || formData.email || 'Contact';
-          const normalizedDate = new Date(suggestedFollowUpDate);
-          normalizedDate.setHours(0, 0, 0, 0);
-          await api.post(`/calendar-events?storeId=${storeId}`, {
-            title: `Follow-up: ${contactName}`,
-            description: suggestedFollowUpNote || `Follow up with ${contactName}`,
-            date: normalizedDate,
-            type: 'followup',
-            contactId: contactId,
-            businessId: selectedBusinessId,
-            priority: suggestedFollowUpPriority || 'medium',
-            status: 'scheduled',
-            createdBy: userId,
-          });
-        } catch (eventError) {
-          console.error('Failed to create follow-up calendar event:', eventError);
-        }
+      // Step 5 — schedule the follow-up event
+      {
+        const normalizedDate = new Date(suggestedFollowUpDate);
+        normalizedDate.setHours(0, 0, 0, 0);
+        await api.queuePost(`/calendar-events?storeId=${storeId}`, {
+          id: followUpEventId,
+          title: `Follow-up: ${contactName}`,
+          description: suggestedFollowUpNote || `Follow up with ${contactName}`,
+          date: normalizedDate.toISOString(),
+          type: 'followup',
+          contactId: newContactId,
+          businessId: selectedBusinessId,
+          priority: suggestedFollowUpPriority || 'medium',
+          status: 'scheduled',
+          createdBy: userId,
+        }, { label: `Schedule follow-up · ${contactName}` });
       }
-      
-      if (includeDonation) {
-        const mouths = calculateMouths(donationData, products);
-        setLastDonationMouths(mouths);
+
+      // Donation tracker animation (only when mouths were actually given)
+      if (includeDonation && totalMouths > 0) {
+        setLastDonationMouths(totalMouths);
         triggerRefresh();
       }
+      // Broadcast "data has changed" so any visible page reloads under us
+      bumpDataVersion();
 
-      setSuccess(true);
-      setFormData({
-        firstName: '',
-        lastName: '',
-        email: '',
-        phone: '',
-        personalDetails: '',
-        reachoutNote: '',
-        reachoutType: 'call',
-        suggestedFollowUpDays: 3
-      });
-      setRawNotes('');
-      setIncludeDonation(false);
-      setDonationData(createEmptyDonation(products));
-      clearTranscript();
-      
-      if (onSuccess) {
-        onSuccess();
+      // Tailor the success toast to what actually happened
+      const wasOffline = !navigator.onLine;
+      const parts: string[] = [];
+      if (wasOffline) {
+        parts.push('Saved offline');
+      } else {
+        parts.push('Saved');
       }
-      
-      setTimeout(() => setSuccess(false), 3000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to create contact');
+      if (includeDonation && totalMouths > 0) {
+        parts.push(`${totalMouths} mouths logged`);
+      }
+      parts.push(
+        aiSuggestionApplied
+          ? 'follow-up scheduled'
+          : `follow-up in ${form.followUpDays} day${form.followUpDays === 1 ? '' : 's'}`
+      );
+      setSuccessMessage(parts.join(' · '));
+      setSuccess(true);
+      haptics.success();
+      handleClear();
+      onSuccess?.();
+      setTimeout(() => setSuccess(false), 4000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save visit';
+      setError(message);
+      haptics.error();
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <div className="contact-form-container">
-      <h2>Add New Contact</h2>
-      
-      {/* Voice Input Section */}
-      <div className="voice-input-section">
-        <div className="voice-controls">
-          <button
-            type="button"
-            onClick={isListening ? stopListening : startListening}
-            className={`btn-voice ${isListening ? 'listening' : ''}`}
-          >
-            {isListening ? '🛑 Stop Recording' : '🎤 Start Voice Input'}
-          </button>
-          {transcript && (
-            <button
-              type="button"
-              onClick={clearTranscript}
-              className="btn-clear"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-        {isListening && (
-          <div className="listening-indicator">
-            <span className="pulse"></span> Listening...
-          </div>
-        )}
-        {transcript && (
-          <div className="transcript-preview">
-            <strong>Transcript:</strong> {transcript}
-          </div>
-        )}
-        {voiceError && (
-          <div className="error-message">{voiceError}</div>
-        )}
-      </div>
+  // Whether the user has dictated/typed at least *something* worth processing
+  const hasNotes = rawNotes.trim().length > 0;
 
-      {/* Raw Meeting Notes Section */}
-      <div className="raw-notes-section">
-        <h3>Raw Meeting Notes</h3>
-        <p className="field-description">
-          Edit your notes below, then click "Process" to extract contact information.
-        </p>
-        <textarea
+  const handleNearbyPlaceTap = (place: NearbyPlace) => {
+    // Pre-fill: drop the business name into the raw notes so AI extraction will
+    // pick it up, and stage the place as the new-business candidate. The
+    // /places-nearby endpoint already filters out places we already have, so
+    // this branch is always a "new business" — no need to also check `businesses`.
+    const prefix = `Visited ${place.name}. `;
+    setRawNotes((prev) => (prev.trim() ? `${prefix}${prev}` : prefix));
+    setShowNewBusiness(true);
+    setNewBusinessName(place.name);
+    setNewBusinessPlaceId(place.placeId);
+    setNewBusinessAddress((prev) => ({
+      address: place.address || prev.address,
+      city: prev.city,
+      state: prev.state,
+      zipCode: prev.zipCode,
+    }));
+    setSelectedBusinessId('');
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Nearby business suggestions (geolocation-based, opt-in via browser prompt) */}
+      <NearbyPlacesChips
+        storeId={permissions.currentStoreId}
+        onSelect={handleNearbyPlaceTap}
+      />
+
+      {/* Step 1: dictate / type the visit */}
+      <Box>
+        <TextField
           value={rawNotes}
           onChange={(e) => setRawNotes(e.target.value)}
-          placeholder="Type or speak your meeting notes here. The AI will extract contact information, personal details, and create a summary."
-          rows={8}
-          className="raw-notes-textarea"
-          disabled={aiProcessing}
+          placeholder='e.g. "Visited Sarah at Lewis Bank, dropped off a sample tray. She loves hiking. Wants to chat about a corporate order next week."'
+          multiline
+          minRows={4}
+          maxRows={10}
+          fullWidth
+          autoFocus
+          disabled={loading || aiProcessing}
+          slotProps={{
+            input: {
+              endAdornment: (
+                <InputAdornment position="end" sx={{ alignSelf: 'flex-start', mt: 1, mr: -0.5 }}>
+                  <IconButton
+                    onClick={isListening ? stopListening : startListening}
+                    size="small"
+                    aria-label={isListening ? 'Stop dictation' : 'Start dictation'}
+                    sx={{
+                      bgcolor: isListening ? '#e74c3c' : 'rgba(245, 200, 66, 0.2)',
+                      color: isListening ? '#fff' : '#2d2d2d',
+                      width: 40,
+                      height: 40,
+                      '&:hover': {
+                        bgcolor: isListening ? '#c0392b' : 'rgba(245, 200, 66, 0.35)',
+                      },
+                    }}
+                  >
+                    {isListening ? <MicOffIcon /> : <MicIcon />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            },
+            htmlInput: {
+              autoCapitalize: 'sentences',
+              autoCorrect: 'on',
+            },
+          }}
         />
-        <button
-          type="button"
-          onClick={processNotesWithAI}
-          disabled={aiProcessing || !rawNotes.trim()}
-          className="btn-primary btn-ai-process"
-        >
-          {aiProcessing ? '🤖 Processing...' : 'Process'}
-        </button>
-      </div>
-
-      <form onSubmit={handleSubmit} className="contact-form">
-        {error && <div className="error-message">{error}</div>}
-        {success && <div className="success-message">Contact created successfully!</div>}
-
-        {/* Business Selection */}
-        {!showNewBusiness ? (
-          <div className="form-group">
-            <label htmlFor="business">Business *</label>
-            <div className="business-select-container">
-              <select
-                id="business"
-                value={selectedBusinessId}
-                onChange={(e) => setSelectedBusinessId(e.target.value)}
-                required
-                className="business-select"
-              >
-                <option value="">Select a business...</option>
-                {businesses.map((business) => (
-                  <option key={business.id} value={business.id}>
-                    {business.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => setShowNewBusiness(true)}
-                className="btn-secondary"
-              >
-                + New Business
-              </button>
-            </div>
-          </div>
-        ) : (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, p: 2, bgcolor: 'grey.50', borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>New Business</Typography>
-            <TextField
-              label="Business Name"
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+          {isListening && (
+            <Chip
               size="small"
-              fullWidth
-              value={newBusinessName}
-              onChange={(e) => setNewBusinessName(e.target.value)}
-              autoFocus
+              label="Listening…"
+              sx={{
+                bgcolor: 'rgba(231, 76, 60, 0.12)',
+                color: '#c0392b',
+                fontWeight: 600,
+                '& .MuiChip-label': { px: 1 },
+              }}
             />
-            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-              <Button
-                size="small"
-                onClick={() => {
-                  setShowNewBusiness(false);
-                  setNewBusinessName('');
-                  setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="small"
-                variant="contained"
-                onClick={handleCreateBusiness}
-              >
-                Create
-              </Button>
-            </Box>
-          </Box>
-        )}
-
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="firstName">First Name</label>
-            <input
-              id="firstName"
-              name="firstName"
-              type="text"
-              value={formData.firstName}
-              onChange={handleChange}
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="lastName">Last Name</label>
-            <input
-              id="lastName"
-              name="lastName"
-              type="text"
-              value={formData.lastName}
-              onChange={handleChange}
-            />
-          </div>
-        </div>
-
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              value={formData.email}
-              onChange={handleChange}
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="phone">Phone</label>
-            <input
-              id="phone"
-              name="phone"
-              type="tel"
-              value={formData.phone}
-              onChange={handleChange}
-            />
-          </div>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="reachoutType">Reachout Type</label>
-          <select
-            id="reachoutType"
-            name="reachoutType"
-            value={formData.reachoutType}
-            onChange={(e) => setFormData(prev => ({ ...prev, reachoutType: e.target.value as any }))}
-            className="business-select"
-          >
-            <option value="call">Phone Call</option>
-            <option value="email">Email</option>
-            <option value="meeting">Meeting</option>
-            <option value="other">Other</option>
-          </select>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="personalDetails">Personal Details (AI-extracted)</label>
-          <input
-            id="personalDetails"
-            name="personalDetails"
-            type="text"
-            value={formData.personalDetails}
-            onChange={handleChange}
-            placeholder="e.g., Has a sister, likes blue, plays golf..."
-          />
-          <small>Fun facts to build rapport and familiarity</small>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="reachoutNote">Initial Reachout Note</label>
-          <textarea
-            id="reachoutNote"
-            name="reachoutNote"
-            value={formData.reachoutNote}
-            onChange={handleChange}
-            rows={4}
-            placeholder="What was discussed in this contact?"
-          />
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="suggestedFollowUpDays">Follow Up In (Days)</label>
-          <input
-            id="suggestedFollowUpDays"
-            name="suggestedFollowUpDays"
-            type="number"
-            min="1"
-            max="30"
-            value={formData.suggestedFollowUpDays}
-            onChange={(e) => setFormData(prev => ({ ...prev, suggestedFollowUpDays: parseInt(e.target.value) || 3 }))}
-          />
-          <small>AI suggests: {formData.suggestedFollowUpDays} days</small>
-        </div>
-
-        <Box sx={{ my: 2 }}>
-          <Divider sx={{ my: 1 }} />
-          <FormControlLabel
-            control={
-              <Switch
-                checked={includeDonation}
-                onChange={(e) => {
-                  setIncludeDonation(e.target.checked);
-                  if (!e.target.checked) {
-                    setDonationData(createEmptyDonation(products));
-                  }
-                }}
-                disabled={loading || aiProcessing}
-              />
-            }
-            label={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CakeIcon fontSize="small" />
-                <Typography>Include Donation</Typography>
-              </Box>
-            }
-          />
-        </Box>
-
-        <Collapse in={includeDonation}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1, p: 2, bgcolor: 'grey.50', borderRadius: 2, mb: 2 }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
-              <CakeIcon fontSize="small" color="primary" />
-              Product Donations
-              {includeDonation && (
-                <Chip 
-                  label={`${calculateMouths(donationData, products)} mouths`} 
-                  size="small" 
-                  color="primary" 
-                  sx={{ ml: 'auto' }}
-                />
-              )}
+          )}
+          {!isListening && (
+            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>
+              Tip: tap the mic key on your keyboard to dictate hands-free.
             </Typography>
+          )}
+          <Box sx={{ flex: 1 }} />
+          {hasNotes && !aiProcessing && (
+            <Button size="small" startIcon={<ClearIcon />} onClick={handleClear} disabled={loading}>
+              Clear
+            </Button>
+          )}
+        </Box>
+      </Box>
 
-            <DonationProductFields
-              products={products}
-              donationData={donationData}
-              onChange={setDonationData}
-            />
+      {voiceError && (
+        <Alert severity="info" sx={{ py: 0.5 }}>
+          {voiceError}. You can still type or use the mic on your phone keyboard.
+        </Alert>
+      )}
 
-            <TextField
-              label="Donation Notes"
-              size="small"
-              fullWidth
-              value={donationData.cakesDonatedNotes || ''}
-              onChange={(e) => setDonationData(prev => ({ ...prev, cakesDonatedNotes: e.target.value }))}
-              placeholder="e.g. Gave 2 boxes of bundtinis for employee birthday program"
-              disabled={loading || aiProcessing}
-              multiline
-              rows={2}
-              variant="outlined"
-            />
+      {/* Step 2: extract with AI */}
+      {!hasExtracted && (
+        <Button
+          variant="contained"
+          size="large"
+          fullWidth
+          startIcon={aiProcessing ? <CircularProgress size={18} color="inherit" /> : <AIIcon />}
+          onClick={handleProcess}
+          disabled={!hasNotes || aiProcessing || loading}
+          sx={{
+            bgcolor: '#f5c842',
+            color: '#2d2d2d',
+            py: 1.5,
+            fontWeight: 700,
+            fontSize: '1rem',
+            '&:hover': { bgcolor: '#e8b923' },
+            '&.Mui-disabled': { bgcolor: 'rgba(0,0,0,0.08)' },
+          }}
+        >
+          {aiProcessing ? 'Extracting…' : 'Extract with AI'}
+        </Button>
+      )}
 
-            <Box sx={{ display: 'flex', gap: 2 }}>
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={donationData.orderedFromUs}
-                    onChange={(e) => setDonationData(prev => ({ ...prev, orderedFromUs: e.target.checked }))}
-                    disabled={loading || aiProcessing}
-                  />
-                }
-                label="Ordered from us?"
-              />
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={donationData.followedUp}
-                    onChange={(e) => setDonationData(prev => ({ ...prev, followedUp: e.target.checked }))}
-                    disabled={loading || aiProcessing}
-                  />
-                }
-                label="Followed up?"
-              />
-            </Box>
+      {error && (
+        <Alert severity="error" onClose={() => setError('')}>
+          {error}
+        </Alert>
+      )}
+
+      {success && <Alert severity="success">{successMessage}</Alert>}
+
+      {/* Step 3: review extracted fields */}
+      <Collapse in={hasExtracted} timeout={300} unmountOnExit>
+        <Stack spacing={2.5} sx={{ pt: 1 }}>
+          <Box>
+            <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.5, fontWeight: 700 }}>
+              AI found
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Tap any field to edit, then save.
+            </Typography>
           </Box>
-        </Collapse>
 
-        {aiProcessing && (
-          <div className="ai-processing">
-            <span className="spinner"></span> AI is extracting information...
-          </div>
-        )}
+          {/* Contact name */}
+          <TextField
+            label="Contact name"
+            value={form.name}
+            onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+            fullWidth
+            disabled={loading}
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <PersonIcon fontSize="small" color="action" />
+                  </InputAdornment>
+                ),
+              },
+              htmlInput: { autoCapitalize: 'words', autoComplete: 'name' },
+            }}
+          />
 
-        <button type="submit" disabled={loading || aiProcessing} className="btn-primary">
-          {loading ? 'Saving...' : aiProcessing ? 'Processing...' : 'Save Contact'}
-        </button>
-      </form>
+          {/* Business */}
+          <Autocomplete
+            value={selectedBusiness}
+            options={businesses}
+            getOptionLabel={(o) => o.name}
+            onChange={(_, value) => {
+              setSelectedBusinessId(value?.id || '');
+              if (value) setShowNewBusiness(false);
+            }}
+            disabled={loading || showNewBusiness}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Business"
+                placeholder="Search or pick a business"
+                slotProps={{
+                  input: {
+                    ...params.InputProps,
+                    startAdornment: (
+                      <>
+                        <InputAdornment position="start">
+                          <BusinessIcon fontSize="small" color="action" />
+                        </InputAdornment>
+                        {params.InputProps.startAdornment}
+                      </>
+                    ),
+                  },
+                }}
+              />
+            )}
+          />
+
+          {!showNewBusiness ? (
+            <Button
+              size="small"
+              startIcon={<BusinessIcon />}
+              onClick={() => {
+                setShowNewBusiness(true);
+                setSelectedBusinessId('');
+              }}
+              disabled={loading}
+              sx={{ alignSelf: 'flex-start' }}
+            >
+              + New business
+            </Button>
+          ) : (
+            <Box
+              sx={{
+                p: 1.5,
+                bgcolor: 'rgba(245, 200, 66, 0.08)',
+                border: '1px solid rgba(245, 200, 66, 0.3)',
+                borderRadius: 2,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1.5,
+              }}
+            >
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                New business
+              </Typography>
+              <TextField
+                size="small"
+                label="Business name"
+                value={newBusinessName}
+                onChange={(e) => setNewBusinessName(e.target.value)}
+                autoFocus
+                disabled={creatingBusiness}
+                fullWidth
+                slotProps={{ htmlInput: { autoCapitalize: 'words' } }}
+              />
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setShowNewBusiness(false);
+                    setNewBusinessName('');
+                  }}
+                  disabled={creatingBusiness}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={handleCreateBusiness}
+                  disabled={creatingBusiness || !newBusinessName.trim()}
+                  startIcon={creatingBusiness ? <CircularProgress size={14} /> : undefined}
+                >
+                  {creatingBusiness ? 'Creating…' : 'Create'}
+                </Button>
+              </Stack>
+            </Box>
+          )}
+
+          {/* Email + phone (two-column on wider screens) */}
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+            <TextField
+              label="Email"
+              type="email"
+              value={form.email}
+              onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
+              fullWidth
+              disabled={loading}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <EmailIcon fontSize="small" color="action" />
+                    </InputAdornment>
+                  ),
+                },
+                htmlInput: { inputMode: 'email', autoComplete: 'email', autoCapitalize: 'none', autoCorrect: 'off' },
+              }}
+            />
+            <TextField
+              label="Phone"
+              type="tel"
+              value={form.phone}
+              onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))}
+              fullWidth
+              disabled={loading}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <PhoneIcon fontSize="small" color="action" />
+                    </InputAdornment>
+                  ),
+                },
+                htmlInput: { inputMode: 'tel', autoComplete: 'tel' },
+              }}
+            />
+          </Stack>
+
+          {/* Reachout type chips */}
+          <Box>
+            <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
+              How did you reach them?
+            </Typography>
+            <ToggleButtonGroup
+              value={form.reachoutType}
+              exclusive
+              onChange={(_, val) => val && setForm((p) => ({ ...p, reachoutType: val as ReachoutType }))}
+              fullWidth
+              size="small"
+              sx={{
+                '& .MuiToggleButton-root': {
+                  py: 1,
+                  textTransform: 'none',
+                  fontWeight: 500,
+                  borderColor: 'rgba(0,0,0,0.15)',
+                  '&.Mui-selected': {
+                    bgcolor: 'rgba(245, 200, 66, 0.25)',
+                    borderColor: '#f5c842',
+                    color: '#2d2d2d',
+                    fontWeight: 700,
+                    '&:hover': { bgcolor: 'rgba(245, 200, 66, 0.35)' },
+                  },
+                },
+              }}
+            >
+              {REACHOUT_TYPES.map((t) => (
+                <ToggleButton key={t.value} value={t.value} aria-label={t.label}>
+                  <Stack direction="row" alignItems="center" spacing={0.5}>
+                    {t.icon}
+                    <span>{t.label}</span>
+                  </Stack>
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          </Box>
+
+          {/* Personal details */}
+          <TextField
+            label="Personal details"
+            placeholder="Hobbies, family, interests"
+            value={form.personalDetails}
+            onChange={(e) => setForm((p) => ({ ...p, personalDetails: e.target.value }))}
+            fullWidth
+            disabled={loading}
+            multiline
+            maxRows={3}
+            helperText="Fun facts to build rapport later"
+          />
+
+          {/* Reachout summary note (always editable) */}
+          <TextField
+            label="Visit summary"
+            value={form.reachoutNote}
+            onChange={(e) => setForm((p) => ({ ...p, reachoutNote: e.target.value }))}
+            fullWidth
+            disabled={loading}
+            multiline
+            minRows={2}
+            maxRows={6}
+            helperText="Saved to the contact's history"
+          />
+
+          {/* Donation toggle + steppers */}
+          <Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={includeDonation}
+                  onChange={(e) => {
+                    setIncludeDonation(e.target.checked);
+                    if (!e.target.checked) setDonationData(createEmptyDonation(products));
+                  }}
+                  disabled={loading}
+                />
+              }
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CakeIcon fontSize="small" />
+                  <Typography>Donated products</Typography>
+                  {includeDonation && totalMouths > 0 && (
+                    <Chip
+                      size="small"
+                      label={`${totalMouths} mouths`}
+                      sx={{ bgcolor: '#f5c842', color: '#2d2d2d', fontWeight: 700, ml: 1 }}
+                    />
+                  )}
+                </Box>
+              }
+            />
+            <Collapse in={includeDonation}>
+              <Box sx={{ mt: 1 }}>
+                <DonationProductFields
+                  products={products}
+                  donationData={donationData}
+                  onChange={setDonationData}
+                />
+                <TextField
+                  label="Donation notes (optional)"
+                  size="small"
+                  fullWidth
+                  multiline
+                  maxRows={3}
+                  value={donationData.cakesDonatedNotes || ''}
+                  onChange={(e) => setDonationData((prev) => ({ ...prev, cakesDonatedNotes: e.target.value }))}
+                  placeholder="e.g. dropped sample tray at front desk"
+                  sx={{ mt: 2 }}
+                  disabled={loading}
+                />
+              </Box>
+            </Collapse>
+          </Box>
+
+          {/* Follow-up preset chips */}
+          <Box>
+            <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
+              Follow up in
+            </Typography>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
+              {FOLLOW_UP_PRESETS.map((preset) => {
+                const active = form.followUpDays === preset.days;
+                return (
+                  <Chip
+                    key={preset.days}
+                    label={preset.label}
+                    clickable
+                    onClick={() => setForm((p) => ({ ...p, followUpDays: preset.days }))}
+                    variant={active ? 'filled' : 'outlined'}
+                    sx={{
+                      bgcolor: active ? '#f5c842' : 'transparent',
+                      color: '#2d2d2d',
+                      fontWeight: active ? 700 : 500,
+                      borderColor: active ? '#f5c842' : 'rgba(0,0,0,0.2)',
+                      '&:hover': { bgcolor: active ? '#e8b923' : 'rgba(245, 200, 66, 0.12)' },
+                    }}
+                  />
+                );
+              })}
+              <TextField
+                size="small"
+                type="number"
+                value={form.followUpDays}
+                onChange={(e) => setForm((p) => ({ ...p, followUpDays: Math.max(1, parseInt(e.target.value) || 1) }))}
+                slotProps={{
+                  htmlInput: { min: 1, max: 365, inputMode: 'numeric', style: { width: 40, textAlign: 'center' } },
+                }}
+                sx={{ width: 100 }}
+                helperText="days"
+              />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+              AI may pick a smarter date based on the visit context.
+            </Typography>
+          </Box>
+
+          {/* Save */}
+          <Button
+            variant="contained"
+            size="large"
+            fullWidth
+            onClick={handleSubmit}
+            disabled={loading || aiProcessing}
+            startIcon={loading ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
+            sx={{
+              bgcolor: '#f5c842',
+              color: '#2d2d2d',
+              py: 1.5,
+              fontWeight: 700,
+              fontSize: '1rem',
+              '&:hover': { bgcolor: '#e8b923' },
+              '&.Mui-disabled': { bgcolor: 'rgba(0,0,0,0.08)' },
+              mt: 0.5,
+            }}
+          >
+            {loading ? 'Saving…' : 'Save visit'}
+          </Button>
+        </Stack>
+      </Collapse>
 
       <PlaceMatchPicker
         open={showPlacePicker}
@@ -743,6 +1049,6 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         onSkip={() => finishCreateBusiness()}
         onClose={() => setShowPlacePicker(false)}
       />
-    </div>
+    </Box>
   );
 }

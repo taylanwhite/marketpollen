@@ -37,3 +37,25 @@ body {
   max-width: 100%;
   overflow-x: hidden;
 }
+
+/* Larger tap targets on phones — minimum 44x44 per Apple HIG */
+@media (pointer: coarse) {
+  button,
+  [role='button'],
+  .MuiButtonBase-root,
+  .MuiIconButton-root {
+    min-height: 36px;
+  }
+}
+
+/* Respect "Reduce Motion" — disable animations/transitions for users who ask */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

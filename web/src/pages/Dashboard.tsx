@@ -1,11 +1,29 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
+import { useOffline } from '../contexts/OfflineContext';
 import { ContactForm } from '../components/ContactForm';
-import { EditContactModal } from '../components/EditContactModal';
+
+// Heavy modals — pulled in on demand to keep the contacts list snappy on
+// first paint, especially on slow LTE.
+const EditContactModal = lazy(() =>
+  import('../components/EditContactModal').then((m) => ({ default: m.EditContactModal }))
+);
+const ContactActionsSheet = lazy(() =>
+  import('../components/ContactActionsSheet').then((m) => ({ default: m.ContactActionsSheet }))
+);
+const GenerateEmailDialog = lazy(() =>
+  import('../components/GenerateEmailDialog').then((m) => ({ default: m.GenerateEmailDialog }))
+);
+import { PullToRefreshIndicator } from '../components/PullToRefreshIndicator';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
+import { ContactsListSkeleton } from '../components/ContactsListSkeleton';
+import { haptics } from '../utils/haptics';
+import { useTheme } from '@mui/material/styles';
+import { useMediaQuery } from '@mui/material';
 import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { Contact, FollowUpSuggestion, Reachout, DonationData, SLUG_TO_FIELD } from '../types';
@@ -62,7 +80,8 @@ import {
 export function Dashboard() {
   const { userId } = useAuth();
   const { permissions, canEdit, loading: permissionsLoading } = usePermissions();
-  const { triggerRefresh, setLastDonationMouths } = useDonation();
+  const { triggerRefresh, setLastDonationMouths, dataVersion, bumpDataVersion } = useDonation();
+  const { syncedCount } = useOffline();
   const { products } = useCampaign();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -83,6 +102,14 @@ export function Dashboard() {
   
   // Quick reachout dialog
   const [quickReachoutContact, setQuickReachoutContact] = useState<Contact | null>(null);
+  const [actionSheetContact, setActionSheetContact] = useState<Contact | null>(null);
+  const [emailDialogContact, setEmailDialogContact] = useState<Contact | null>(null);
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const pullState = usePullToRefresh({
+    onRefresh: () => loadData(),
+    enabled: isMobile,
+  });
   const [quickReachoutData, setQuickReachoutData] = useState({ note: '', type: 'call' as 'call' | 'email' | 'meeting' | 'other', rawNotes: '' });
   const [quickReachoutLoading, setQuickReachoutLoading] = useState(false);
   const [quickReachoutError, setQuickReachoutError] = useState('');
@@ -109,7 +136,12 @@ export function Dashboard() {
     if (permissions.currentStoreId) {
       loadData();
     }
-  }, [permissions.currentStoreId, permissions.storePermissions.length, permissionsLoading, navigate]);
+    // dataVersion fires after a save from elsewhere (the global QuickAdd
+    // sheet, the action bottom sheet, etc.) so the list immediately re-fetches.
+    // syncedCount fires after the offline queue drains a queued write to the
+    // server — without this, contacts created offline would stay invisible
+    // until pull-to-refresh.
+  }, [permissions.currentStoreId, permissions.storePermissions.length, permissionsLoading, navigate, dataVersion, syncedCount]);
 
   useEffect(() => {
     let filtered = contacts;
@@ -192,7 +224,12 @@ export function Dashboard() {
   };
 
   const handleContactClick = (contact: Contact) => {
-    setEditingContact(contact);
+    if (isMobile) {
+      // On mobile, surface the high-frequency actions (call/text/email) first
+      setActionSheetContact(contact);
+    } else {
+      setEditingContact(contact);
+    }
   };
 
   const handleOpenFollowUpDialog = (contact: Contact) => {
@@ -250,12 +287,12 @@ export function Dashboard() {
       const normalizedDate = new Date(suggestedDate);
       normalizedDate.setHours(0, 0, 0, 0);
 
-      await api.patch(`/contacts/${followUpDialogContact.id}`, {
+      await api.queuePatch(`/contacts/${followUpDialogContact.id}`, {
         suggestedFollowUpDate: normalizedDate,
         suggestedFollowUpMethod: aiSuggestion.suggestedMethod || null,
         suggestedFollowUpNote: aiSuggestion.message || null,
         suggestedFollowUpPriority: aiSuggestion.priority || null,
-      });
+      }, { label: 'Save follow-up suggestion' });
 
       // Update local contact state
       const updatedContact = {
@@ -303,7 +340,8 @@ export function Dashboard() {
       const normalizedDate = new Date(suggestedDate);
       normalizedDate.setHours(0, 0, 0, 0);
 
-      await api.post(`/calendar-events?storeId=${permissions.currentStoreId}`, {
+      await api.queuePost(`/calendar-events?storeId=${permissions.currentStoreId}`, {
+        id: crypto.randomUUID(),
         title: `Follow-up: ${contactName}`,
         description: suggestion.message,
         date: normalizedDate,
@@ -312,7 +350,7 @@ export function Dashboard() {
         businessId: followUpDialogContact.businessId,
         priority: suggestion.priority || 'medium',
         status: 'scheduled',
-      });
+      }, { label: `Schedule follow-up · ${contactName}` });
 
       setAddedToCalendar(true);
     } catch (err) {
@@ -451,10 +489,13 @@ export function Dashboard() {
 
       const updatedReachouts = [...quickReachoutContact.reachouts, reachout];
 
-      await api.patch(`/contacts/${quickReachoutContact.id}`, {
+      const contactName = `${quickReachoutContact.firstName || ''} ${quickReachoutContact.lastName || ''}`.trim()
+        || quickReachoutContact.email
+        || 'contact';
+      await api.queuePatch(`/contacts/${quickReachoutContact.id}`, {
         reachouts: updatedReachouts,
         lastReachoutDate: new Date(),
-      });
+      }, { label: `Log visit · ${contactName}` });
 
       // Trigger donation tracker refresh with celebration if donation was included
       if (includeDonation && donationData) {
@@ -462,11 +503,14 @@ export function Dashboard() {
         setLastDonationMouths(mouths);
         triggerRefresh();
       }
+      bumpDataVersion();
+      haptics.success();
 
       closeQuickReachout();
       loadData();
     } catch (err: any) {
       setQuickReachoutError(err.message || 'Failed to add reachout');
+      haptics.error();
     } finally {
       setQuickReachoutLoading(false);
     }
@@ -474,14 +518,22 @@ export function Dashboard() {
 
   if (loading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh' }}>
-        <CircularProgress />
+      <Box>
+        <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+          Contacts
+        </Typography>
+        <ContactsListSkeleton count={isMobile ? 4 : 6} />
       </Box>
     );
   }
 
   return (
     <Box>
+      <PullToRefreshIndicator
+        pullDistance={pullState.pullDistance}
+        refreshing={pullState.refreshing}
+        willTrigger={pullState.willTrigger}
+      />
       {/* Header */}
       <Paper sx={{ p: 2, mb: 3 }}>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -529,13 +581,44 @@ export function Dashboard() {
       </Collapse>
 
       {/* Edit Modal */}
-      {editingContact && (
-        <EditContactModal
-          contact={editingContact}
-          onClose={() => setEditingContact(null)}
-          onSuccess={() => { loadData(); setEditingContact(null); }}
+      <Suspense fallback={null}>
+        {editingContact && (
+          <EditContactModal
+            contact={editingContact}
+            onClose={() => setEditingContact(null)}
+            onSuccess={() => { loadData(); setEditingContact(null); }}
+          />
+        )}
+      </Suspense>
+
+      {/* Mobile bottom-sheet with call/text/email/log-visit actions */}
+      <Suspense fallback={null}>
+        <ContactActionsSheet
+          open={!!actionSheetContact}
+          contact={actionSheetContact}
+          businessName={
+            actionSheetContact ? businesses.get(actionSheetContact.businessId) : undefined
+          }
+          onClose={() => setActionSheetContact(null)}
+          onLogVisit={(c) => openQuickReachout(c)}
+          onAddFollowUp={(c) => handleOpenFollowUpDialog(c)}
+          onGenerateEmail={(c) => setEmailDialogContact(c)}
+          onEdit={(c) => setEditingContact(c)}
         />
-      )}
+      </Suspense>
+
+      {/* AI email composer triggered from the bottom sheet */}
+      <Suspense fallback={null}>
+        {emailDialogContact && (
+          <GenerateEmailDialog
+            open={!!emailDialogContact}
+            onClose={() => setEmailDialogContact(null)}
+            contactId={emailDialogContact.id}
+            contactName={getContactName(emailDialogContact)}
+            onReachoutAdded={() => { loadData(); setEmailDialogContact(null); }}
+          />
+        )}
+      </Suspense>
 
       {/* Quick Reachout Dialog */}
       <Dialog open={!!quickReachoutContact} onClose={closeQuickReachout} maxWidth="sm" fullWidth>
