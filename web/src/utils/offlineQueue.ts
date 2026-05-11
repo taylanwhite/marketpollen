@@ -46,6 +46,152 @@ let syncedCount = 0;
 // Per-entry retry backoff (ms): 0, 2s, 5s, 15s, 30s, then cap at 60s
 const BACKOFF_MS = [0, 2_000, 5_000, 15_000, 30_000, 60_000];
 
+// ─── Active reachability probing ───────────────────────────────────────────
+//
+// `navigator.onLine` and the OS-level online/offline events only know about
+// hardware-level connectivity. They lie in three real-world scenarios that
+// hit field marketers constantly:
+//
+//   1. Marginal cellular — the radio still has a "bar" but nothing routes,
+//      so every fetch hangs/times out.
+//   2. Captive-portal Wi-Fi — fetches "succeed" against the portal but
+//      return HTML/401 instead of API JSON.
+//   3. The API itself is down/being deployed — internet is fine but no
+//      writes will ever land.
+//
+// We compensate by actively probing GET /api/health (no auth, no DB, no
+// caching) on a few smart triggers and updating `isOnline` based on what
+// actually round-trips. Listeners (the OfflineContext, all UI banners and
+// gated buttons) react automatically because they already subscribe to this
+// module's `notify()` channel.
+
+const HEALTH_URL = '/api/health';
+const PROBE_TIMEOUT_MS = 5_000;
+// Heartbeat cadence while online and foregrounded. 25s is a balance between
+// "marketer notices a dead zone within 30s of walking into it" and "doesn't
+// burn battery / mobile data".
+const PROBE_INTERVAL_ONLINE_MS = 25_000;
+// Backoff while offline — we still poll occasionally so the app can flip
+// itself back to online when service returns even if the OS misses the
+// `online` event (a real failure mode on iOS Safari over flaky cellular).
+const PROBE_BACKOFF_OFFLINE_MS = [10_000, 20_000, 60_000, 120_000];
+
+let inFlightProbe: Promise<boolean> | null = null;
+let probeIntervalId: ReturnType<typeof setInterval> | null = null;
+let consecutiveOfflineProbes = 0;
+let probeNextScheduledAt = 0;
+
+/**
+ * Round-trip the /api/health endpoint with a hard timeout. Returns whether
+ * we were able to reach our own backend (the only definition of "online"
+ * that matters for marketers in the field).
+ *
+ * Never throws. Bails out cleanly on AbortError, network error, non-2xx,
+ * malformed JSON, etc — all of which we treat as "offline" because none of
+ * them allow real work to happen.
+ */
+async function probeReachability(): Promise<boolean> {
+  // Coalesce concurrent probes so a burst of failures (e.g. 3 AI calls
+  // failing in the same second) doesn't fan out into 3 health fetches.
+  if (inFlightProbe) return inFlightProbe;
+
+  inFlightProbe = (async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+      const res = await fetch(HEALTH_URL, {
+        method: 'GET',
+        // Belt-and-suspenders: the SW also bypasses cache for /api/health,
+        // but tell the HTTP cache directly too in case the SW isn't active.
+        cache: 'no-store',
+        signal: controller.signal,
+        // Don't send the auth header — keep this as cheap as possible and
+        // independent of token state (handy during sign-in races).
+        headers: { Accept: 'application/json' },
+      });
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeoutId);
+      inFlightProbe = null;
+    }
+  })();
+
+  return inFlightProbe;
+}
+
+/**
+ * Run a probe and update `isOnline` based on the result. Notifies all
+ * subscribers. Manages backoff scheduling so we poll less aggressively
+ * while we're confirmed offline. If the state flips from offline → online
+ * and we have queued mutations, kick a drain immediately.
+ */
+async function runProbeAndUpdate(): Promise<void> {
+  const reachable = await probeReachability();
+  const wasOnline = isOnline;
+  if (reachable) {
+    consecutiveOfflineProbes = 0;
+    if (!isOnline) {
+      isOnline = true;
+      notify();
+      // Reconnected — drain any pending writes immediately.
+      drain().catch(() => {});
+    }
+  } else {
+    consecutiveOfflineProbes += 1;
+    if (isOnline) {
+      isOnline = false;
+      notify();
+    }
+  }
+  // Touch wasOnline so the linter doesn't complain; useful for future
+  // telemetry hooks (e.g. log "session went offline" once per transition).
+  void wasOnline;
+}
+
+/**
+ * Public API: trigger an immediate reachability probe. Components call this
+ * after a failed AI call (or any unexplained network error) so the global
+ * offline state catches up to reality within ~2s instead of waiting for
+ * the next periodic heartbeat.
+ *
+ * Safe to call frequently — concurrent calls are coalesced.
+ */
+export function pingNow(): Promise<void> {
+  return runProbeAndUpdate();
+}
+
+/**
+ * Schedule the next interval-driven probe. Cadence depends on current state:
+ *   - Online: steady heartbeat every PROBE_INTERVAL_ONLINE_MS
+ *   - Offline: exponential-ish backoff so we don't hammer a dead network
+ *     while still recovering quickly when service returns.
+ */
+function scheduleNextProbe(): void {
+  if (probeIntervalId) {
+    clearTimeout(probeIntervalId);
+    probeIntervalId = null;
+  }
+  if (typeof document !== 'undefined' && document.hidden) {
+    // Don't poll while the tab is in the background — battery killer with
+    // no UI to update. We'll catch up on visibilitychange.
+    return;
+  }
+  let delay: number;
+  if (isOnline) {
+    delay = PROBE_INTERVAL_ONLINE_MS;
+  } else {
+    const idx = Math.min(consecutiveOfflineProbes, PROBE_BACKOFF_OFFLINE_MS.length - 1);
+    delay = PROBE_BACKOFF_OFFLINE_MS[idx];
+  }
+  probeNextScheduledAt = Date.now() + delay;
+  probeIntervalId = setTimeout(async () => {
+    await runProbeAndUpdate();
+    scheduleNextProbe();
+  }, delay);
+}
+
 // Token getter is injected from the API client to avoid an import cycle
 let tokenGetter: (() => Promise<string | null>) | null = null;
 export function setOfflineTokenGetter(getter: () => Promise<string | null>) {
@@ -88,14 +234,35 @@ async function refreshCount() {
 refreshCount().catch((err) => console.warn('Failed to read outbox count', err));
 
 if (typeof window !== 'undefined') {
+  // OS-level events are still useful as fast-paths: airplane-mode toggles
+  // and Wi-Fi disconnects fire these reliably and immediately. We treat
+  // them as hints — the real source of truth is `runProbeAndUpdate`.
   window.addEventListener('online', () => {
-    isOnline = true;
-    notify();
-    drain().catch((err) => console.warn('Drain on reconnect failed', err));
+    // Don't trust the OS blindly — verify with a probe before flipping
+    // the UI to "online" and triggering a drain. Captive portal Wi-Fi
+    // fires this event long before any actual API can reach us.
+    runProbeAndUpdate().catch(() => {});
   });
   window.addEventListener('offline', () => {
     isOnline = false;
+    consecutiveOfflineProbes += 1;
     notify();
+    // Reset the periodic schedule so we move to the offline backoff.
+    scheduleNextProbe();
+  });
+
+  // Probe whenever the marketer brings the app back to foreground — they
+  // constantly switch between Market Pollen and Maps/Messages, and this
+  // catches the case where they drove out of a dead zone with the tab
+  // hidden. Also resumes the heartbeat (which pauses while hidden).
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      runProbeAndUpdate().catch(() => {});
+      scheduleNextProbe();
+    } else if (probeIntervalId) {
+      clearTimeout(probeIntervalId);
+      probeIntervalId = null;
+    }
   });
 }
 
@@ -209,9 +376,13 @@ export async function drain(): Promise<void> {
         await refreshCount();
       } catch (err) {
         if (isNetworkError(err)) {
-          // Still offline; stop draining for now
+          // Still offline; stop draining for now. Bump the offline-probe
+          // counter and reschedule so the next health probe uses the
+          // offline backoff cadence (we just got first-hand evidence).
           isOnline = false;
+          consecutiveOfflineProbes += 1;
           notify();
+          scheduleNextProbe();
           break;
         }
         // Server-side error — bump attempts; after several failures we leave
@@ -277,13 +448,27 @@ export async function cachedGet<T>(url: string): Promise<T> {
 }
 
 /**
- * Periodic background ping while pending items exist, in case the browser
- * never fires "online" (some mobile networks are unreliable about events).
+ * Boot the reachability monitor. We do this in a microtask rather than
+ * synchronously at module load so importers (the React tree) finish
+ * mounting before we fire the first probe — the OfflineContext can then
+ * receive the very first `notify()` instead of having to read a snapshot.
  */
 if (typeof window !== 'undefined') {
-  setInterval(() => {
-    if (pendingCount > 0 && navigator.onLine) {
-      drain().catch(() => {});
-    }
-  }, 30_000);
+  Promise.resolve().then(() => {
+    // Prime the state once, then start the recurring schedule.
+    runProbeAndUpdate().catch(() => {});
+    scheduleNextProbe();
+  });
+}
+
+/**
+ * Diagnostic helper for any future "is the probe loop healthy?" UI. Not
+ * used by the app today, but cheap to expose and useful in support cases.
+ */
+export function getProbeDiagnostics() {
+  return {
+    isOnline,
+    consecutiveOfflineProbes,
+    nextProbeInMs: probeNextScheduledAt > 0 ? Math.max(0, probeNextScheduledAt - Date.now()) : null,
+  };
 }

@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { api } from '../api/client';
 import { Contact } from '../types';
+import { useOffline } from '../contexts/OfflineContext';
+import { OnlineOnlyNotice } from './OnlineOnlyNotice';
 import {
   Box, Typography, TextField, Button, Dialog, DialogTitle,
   DialogContent, DialogActions, CircularProgress, Alert, IconButton,
-  Checkbox, FormControlLabel,
+  Checkbox, FormControlLabel, Chip, Tooltip,
 } from '@mui/material';
 import {
   Email as EmailIcon, ContentCopy as CopyIcon,
@@ -26,6 +28,7 @@ interface EmailDraft {
 }
 
 export function GenerateEmailDialog({ open, onClose, contactId, contactName, onReachoutAdded }: GenerateEmailDialogProps) {
+  const { isOnline } = useOffline();
   const [customPrompt, setCustomPrompt] = useState('');
   const [feedback, setFeedback] = useState('');
   const [draft, setDraft] = useState<EmailDraft | null>(null);
@@ -125,26 +128,80 @@ export function GenerateEmailDialog({ open, onClose, contactId, contactName, onR
       </DialogTitle>
       <DialogContent>
         <Box sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <TextField
-            label="Custom instructions (optional)"
-            value={customPrompt}
-            onChange={e => setCustomPrompt(e.target.value)}
-            placeholder="e.g. Follow up about the sample tray we dropped off"
-            fullWidth
-            size="small"
-            multiline
-            maxRows={3}
+          {/* Email generation is 100% AI-powered and cannot be queued — there
+              is no useful "draft offline, generate later" experience here.
+              Be explicit so the marketer knows to come back when they have
+              signal instead of staring at a spinner that won't resolve. */}
+          <OnlineOnlyNotice
+            feature="Email generation"
+            message="No service — email generation needs internet. Reconnect and tap Generate."
           />
 
-          {!draft && !loading && (
-            <Button
-              variant="contained"
-              onClick={() => generate()}
-              startIcon={<EmailIcon />}
+          <Box>
+            <TextField
+              label="Custom instructions (optional)"
+              value={customPrompt}
+              onChange={e => setCustomPrompt(e.target.value)}
+              placeholder='e.g. "Be extra kind to this customer, and use emojis. They LOVE emojis."'
               fullWidth
+              size="small"
+              multiline
+              minRows={2}
+              maxRows={4}
+              helperText="Guide the tone, length, or what to mention. Tap an example to start:"
+            />
+            {/* Tappable example chips so marketers don't have to guess what
+                kinds of instructions actually shape the email. Tapping a chip
+                replaces the field so they can tweak it before generating. */}
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
+              {[
+                'Be extra warm and friendly — they love emojis',
+                'Follow up on the sample tray we dropped off',
+                'Keep it short and casual',
+                'Mention our upcoming holiday promo',
+              ].map((example) => (
+                <Chip
+                  key={example}
+                  label={example}
+                  size="small"
+                  variant="outlined"
+                  onClick={() => setCustomPrompt(example)}
+                  sx={{
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    height: 'auto',
+                    py: 0.5,
+                    '& .MuiChip-label': {
+                      whiteSpace: 'normal',
+                      lineHeight: 1.3,
+                      px: 1,
+                    },
+                  }}
+                />
+              ))}
+            </Box>
+          </Box>
+
+          {!draft && !loading && (
+            <Tooltip
+              title={!isOnline ? 'Email generation needs service' : ''}
+              enterTouchDelay={0}
+              disableHoverListener={isOnline}
+              disableFocusListener={isOnline}
+              disableTouchListener={isOnline}
             >
-              Generate Email
-            </Button>
+              <span style={{ width: '100%' }}>
+                <Button
+                  variant="contained"
+                  onClick={() => generate()}
+                  startIcon={<EmailIcon />}
+                  disabled={!isOnline}
+                  fullWidth
+                >
+                  Generate Email
+                </Button>
+              </span>
+            </Tooltip>
           )}
 
           {loading && (
@@ -210,16 +267,26 @@ export function GenerateEmailDialog({ open, onClose, contactId, contactName, onR
                     }
                   }}
                 />
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={loading ? <CircularProgress size={14} /> : <RefreshIcon />}
-                  onClick={() => feedback.trim() ? generate(feedback.trim()) : generate()}
-                  disabled={loading}
-                  sx={{ whiteSpace: 'nowrap', minWidth: 'auto', mt: 0.25 }}
+                <Tooltip
+                  title={!isOnline ? 'Revisions need service' : ''}
+                  enterTouchDelay={0}
+                  disableHoverListener={isOnline}
+                  disableFocusListener={isOnline}
+                  disableTouchListener={isOnline}
                 >
-                  Revise
-                </Button>
+                  <span>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={loading ? <CircularProgress size={14} /> : <RefreshIcon />}
+                      onClick={() => feedback.trim() ? generate(feedback.trim()) : generate()}
+                      disabled={loading || !isOnline}
+                      sx={{ whiteSpace: 'nowrap', minWidth: 'auto', mt: 0.25 }}
+                    >
+                      Revise
+                    </Button>
+                  </span>
+                </Tooltip>
               </Box>
 
               {logged ? (

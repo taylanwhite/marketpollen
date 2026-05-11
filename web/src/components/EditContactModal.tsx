@@ -373,11 +373,14 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           <Typography component="span" variant="h5" sx={{ fontWeight: 600 }}>
             {getContactName()}
           </Typography>
+          {/* Hidden on mobile because the ContactActionsSheet already
+              surfaces "Generate Email" before this modal opens. On desktop
+              we skip the action sheet, so this is the only entry point. */}
           <Button
             size="small"
             startIcon={<AIIcon />}
             onClick={() => setEmailDialogOpen(true)}
-            sx={{ ml: 1 }}
+            sx={{ ml: 1, display: { xs: 'none', sm: 'inline-flex' } }}
           >
             Generate Email
           </Button>

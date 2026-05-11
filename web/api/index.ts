@@ -4,6 +4,7 @@
  * Requires rewrite: /api/:path* -> /api in vercel.json.
  */
 import express from 'express';
+import healthHandler from '../dist-handlers/health.js';
 import meHandler from '../dist-handlers/me.js';
 import storesHandler from '../dist-handlers/stores.js';
 import storesIdHandler from '../dist-handlers/stores/[id].js';
@@ -61,6 +62,11 @@ const withIdPid = (handler: Handler): express.RequestHandler => (req, res) => {
   (req as express.Request & { query: Record<string, string> }).query = { ...req.query, id: req.params.id, pid: req.params.pid };
   return handler(req, res);
 };
+
+// Health — cheap reachability probe used by the offline detection system
+// in the client. Must stay tiny: no auth, no DB, no third-party calls.
+app.get('/api/health', route(healthHandler));
+app.head('/api/health', route(healthHandler));
 
 app.get('/api/me', route(meHandler));
 app.get('/api/stores', route(storesHandler));

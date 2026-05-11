@@ -11,7 +11,7 @@
  * everything else (admin actions, RPC-style calls that need a response).
  */
 
-import { enqueueOrSend, cachedGet, setOfflineTokenGetter } from '../utils/offlineQueue';
+import { enqueueOrSend, cachedGet, setOfflineTokenGetter, pingNow } from '../utils/offlineQueue';
 
 let tokenGetter: (() => Promise<string | null>) | null = null;
 
@@ -29,6 +29,14 @@ function resolveUrl(path: string): string {
   return path.startsWith('http') ? path : `/api${path}`;
 }
 
+function isLikelyNetworkError(err: unknown): boolean {
+  if (!err) return false;
+  // fetch() throws TypeError on true network failures (DNS, CORS, refused).
+  if (err instanceof TypeError) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /network|fetch|failed to fetch|load failed|networkerror|aborted/i.test(msg);
+}
+
 async function request<T = unknown>(
   path: string,
   options: { method?: string; body?: object; headers?: HeadersInit } = {}
@@ -42,16 +50,32 @@ async function request<T = unknown>(
 
   const url = resolveUrl(path);
   const body = options.body !== undefined ? JSON.stringify(options.body) : undefined;
-  const res = await fetch(url, {
-    method: options.method ?? 'GET',
-    headers,
-    body,
-  });
+  try {
+    const res = await fetch(url, {
+      method: options.method ?? 'GET',
+      headers,
+      body,
+    });
 
-  if (res.status === 204) return undefined as T;
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || data.message || res.statusText || String(res.status));
-  return data as T;
+    if (res.status === 204) return undefined as T;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || data.message || res.statusText || String(res.status));
+    return data as T;
+  } catch (err) {
+    // AI calls (extract, generate-email), Places API calls, and other
+    // non-queueable requests all flow through here. When they fail with a
+    // network-shaped error, kick a reachability probe so the global offline
+    // banner appears within seconds — instead of staying lit at "online"
+    // until the marketer's next save attempt also fails.
+    //
+    // We fire-and-forget; the probe's own error handling and coalescing
+    // make it safe to call repeatedly, and we never want a probe failure
+    // to mask the real underlying error from the caller.
+    if (isLikelyNetworkError(err)) {
+      pingNow().catch(() => {});
+    }
+    throw err;
+  }
 }
 
 export interface QueueOptions {

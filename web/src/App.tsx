@@ -109,7 +109,13 @@ function AppRoutes() {
                 </ProtectedRoute>
               }
             />
-            <Route path="/" element={<Navigate to="/select-store" replace />} />
+            {/* Land authenticated users on the dashboard. ProtectedRoute will
+                bounce to /select-store automatically if no store is remembered
+                in localStorage, so a marketer who refreshes the bare URL goes
+                straight to their last-used store instead of the picker. */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            {/* Catch-all for any unknown URL (typo, stale share link, etc.) */}
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </DonationProvider>
         </CampaignProvider>

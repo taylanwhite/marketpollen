@@ -17,7 +17,7 @@
  * Bump CACHE_VERSION to invalidate caches after a deploy.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const SHELL_CACHE = `mp-shell-${CACHE_VERSION}`;
 const API_CACHE = `mp-api-${CACHE_VERSION}`;
 
@@ -129,6 +129,11 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (isApiRequest(url)) {
+    // Reachability probe: NEVER cache or fallback. The whole point of this
+    // endpoint is to prove the network actually round-trips; serving a stale
+    // cached 200 when offline would lie to the client and defeat the probe.
+    if (url.pathname === '/api/health') return;
+
     if (request.method === 'GET') {
       event.respondWith(networkFirstApi(request));
     }

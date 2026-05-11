@@ -6,6 +6,7 @@ import { MobileBottomNav } from './MobileBottomNav';
 import { UserMenu } from './UserMenu';
 import { QuickAddDialog } from './QuickAddDialog';
 import { OfflineIndicator } from './OfflineIndicator';
+import { OfflineBanner } from './OnlineOnlyNotice';
 import { Store } from '../types';
 import { api } from '../api/client';
 import { prefetchOfflineAssets } from '../utils/prefetchOfflineAssets';
@@ -238,6 +239,10 @@ export function MainLayout({ children }: MainLayoutProps) {
         }}
       >
         <Toolbar />
+        {/* Persistent, sticky no-signal banner directly under the AppBar.
+            The pill in the top bar is easy to miss on a busy page; this
+            ribbon is unmissable and tells marketers exactly what's degraded. */}
+        <OfflineBanner />
         {children}
       </Box>
 

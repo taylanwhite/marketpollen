@@ -82,6 +82,9 @@ export function StorePicker() {
 
   const handleLogout = async () => {
     try {
+      // Clear the remembered store so the next user on a shared device
+      // doesn't auto-load this user's last selection.
+      localStorage.removeItem('selectedStoreId');
       await signOut();
       navigate('/login');
     } catch (error) {

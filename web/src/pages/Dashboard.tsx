@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
@@ -30,6 +30,7 @@ import { Contact, FollowUpSuggestion, Reachout, DonationData, SLUG_TO_FIELD } fr
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
 import { useCampaign } from '../contexts/CampaignContext';
 import { DonationProductFields } from '../components/DonationProductFields';
+import { OnlineOnlyNotice } from '../components/OnlineOnlyNotice';
 import {
   Box,
   Typography,
@@ -56,6 +57,7 @@ import {
   Checkbox,
   Divider,
   Snackbar,
+  Tooltip,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -81,7 +83,7 @@ export function Dashboard() {
   const { userId } = useAuth();
   const { permissions, canEdit, loading: permissionsLoading } = usePermissions();
   const { triggerRefresh, setLastDonationMouths, dataVersion, bumpDataVersion } = useDonation();
-  const { syncedCount } = useOffline();
+  const { syncedCount, isOnline } = useOffline();
   const { products } = useCampaign();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -110,10 +112,17 @@ export function Dashboard() {
     onRefresh: () => loadData(),
     enabled: isMobile,
   });
-  const [quickReachoutData, setQuickReachoutData] = useState({ note: '', type: 'call' as 'call' | 'email' | 'meeting' | 'other', rawNotes: '' });
+  const [quickReachoutData, setQuickReachoutData] = useState({ note: '', type: 'call' as 'call' | 'email' | 'meeting' | 'text' | 'other' });
   const [quickReachoutLoading, setQuickReachoutLoading] = useState(false);
   const [quickReachoutError, setQuickReachoutError] = useState('');
   const [aiProcessing, setAiProcessing] = useState(false);
+  // Holds the marketer's original dictation/typing if they later tap "Clean
+  // up with AI" — keeps the pre-AI version for the audit trail (rawNotes
+  // column) without exposing it as a second textarea in the UI.
+  const preAiTextRef = useRef<string | null>(null);
+  // Snapshot of what was typed BEFORE the mic was tapped, so dictated speech
+  // appends to existing notes instead of replacing them.
+  const typedPrefixRef = useRef<string>('');
   
   // Donation fields for quick reachout
   const [includeDonation, setIncludeDonation] = useState(false);
@@ -168,17 +177,35 @@ export function Dashboard() {
     setFilteredContacts(filtered);
   }, [businessFilter, contacts, searchTerm, businesses]);
 
-  // Update raw notes when transcript changes (only use final transcript)
+  // When the user taps Record, snapshot whatever they had already typed so
+  // the dictated transcript appends to it instead of clobbering it.
   useEffect(() => {
-    if (transcript && quickReachoutContact) {
-      // Combine final transcript with any interim text for display
-      const fullText = interimTranscript ? `${transcript} ${interimTranscript}` : transcript;
-      setQuickReachoutData(prev => ({
-        ...prev,
-        rawNotes: fullText
-      }));
+    if (isListening) {
+      typedPrefixRef.current = quickReachoutData.note;
     }
+    // Intentionally only depend on isListening — we don't want to re-snapshot
+    // every keystroke while the mic is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isListening]);
+
+  useEffect(() => {
+    if (!quickReachoutContact) return;
+    if (!transcript && !interimTranscript) return;
+    const spoken = interimTranscript ? `${transcript} ${interimTranscript}` : transcript;
+    const prefix = typedPrefixRef.current;
+    const merged = prefix
+      ? `${prefix.trimEnd()}${prefix.trim() ? ' ' : ''}${spoken}`
+      : spoken;
+    setQuickReachoutData(prev => ({ ...prev, note: merged }));
   }, [transcript, interimTranscript, quickReachoutContact]);
+
+  // If the user loses signal mid-dictation, kill the mic immediately. Web
+  // Speech recognition silently goes deaf without a connection on most
+  // browsers and would otherwise look like it's still listening.
+  useEffect(() => {
+    if (!isOnline && isListening) stopListening();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline]);
 
   const loadData = async () => {
     try {
@@ -387,48 +414,62 @@ export function Dashboard() {
 
   const openQuickReachout = (contact: Contact) => {
     setQuickReachoutContact(contact);
-    setQuickReachoutData({ note: '', type: 'call', rawNotes: '' });
+    setQuickReachoutData({ note: '', type: 'call' });
     setQuickReachoutError('');
     setIncludeDonation(false);
     setDonationData(createEmptyDonation(products));
+    preAiTextRef.current = null;
+    typedPrefixRef.current = '';
     clearTranscript();
   };
 
   const closeQuickReachout = () => {
     setQuickReachoutContact(null);
-    setQuickReachoutData({ note: '', type: 'call', rawNotes: '' });
+    setQuickReachoutData({ note: '', type: 'call' });
     setQuickReachoutError('');
     setIncludeDonation(false);
     setDonationData(createEmptyDonation(products));
+    preAiTextRef.current = null;
+    typedPrefixRef.current = '';
     if (isListening) stopListening();
     clearTranscript();
   };
 
   const processWithAI = async () => {
-    if (!quickReachoutData.rawNotes.trim()) {
-      setQuickReachoutError('Please enter notes to process');
+    const original = quickReachoutData.note;
+    if (!original.trim()) {
+      setQuickReachoutError('Type or dictate something first.');
       return;
     }
 
     setAiProcessing(true);
     setQuickReachoutError('');
+    haptics.tap();
+
+    // Stash the user's pre-AI text so we can still write it to the rawNotes
+    // column (audit trail) even though the textarea is about to be replaced.
+    preAiTextRef.current = original;
 
     try {
-      const extracted = await extractContactInfo(quickReachoutData.rawNotes, products.filter(p => p.isActive).map(p => ({
-        slug: p.slug,
-        name: p.name,
-        mouthValue: p.mouthValue,
-      })));
+      const extracted = await extractContactInfo(
+        original,
+        products.filter(p => p.isActive).map(p => ({
+          slug: p.slug,
+          name: p.name,
+          mouthValue: p.mouthValue,
+        })),
+      );
+
       setQuickReachoutData(prev => ({
         ...prev,
-        note: extracted.reachoutNote || quickReachoutData.rawNotes,
+        note: extracted.reachoutNote || original,
         type: extracted.reachoutType || prev.type,
       }));
 
       const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'cake'];
-      const notesLower = quickReachoutData.rawNotes.toLowerCase();
+      const notesLower = original.toLowerCase();
       const hasDonationKeywords = donationKeywords.some(keyword => notesLower.includes(keyword));
-      
+
       if (extracted.donation || hasDonationKeywords) {
         setIncludeDonation(true);
         if (extracted.donation) {
@@ -454,14 +495,17 @@ export function Dashboard() {
         } else if (hasDonationKeywords) {
           setDonationData(prev => ({
             ...prev,
-            cakesDonatedNotes: prev.cakesDonatedNotes || quickReachoutData.rawNotes,
+            cakesDonatedNotes: prev.cakesDonatedNotes || original,
             orderedFromUs: notesLower.includes('order') || notesLower.includes('ordered') || notesLower.includes('ordering') ? true : prev.orderedFromUs,
             followedUp: notesLower.includes('followed up') || notesLower.includes('follow up') ? true : prev.followedUp,
           }));
         }
       }
-    } catch (err) {
-      setQuickReachoutData(prev => ({ ...prev, note: quickReachoutData.rawNotes }));
+    } catch {
+      // AI failed (offline / quota / etc.) — leave the original text in place
+      // and let the marketer save anyway. preAiTextRef stays cleared since
+      // the textarea content is still their own words.
+      preAiTextRef.current = null;
     } finally {
       setAiProcessing(false);
     }
@@ -481,7 +525,9 @@ export function Dashboard() {
         id: `reach-${Date.now()}`,
         date: new Date(),
         note: quickReachoutData.note,
-        rawNotes: quickReachoutData.rawNotes || null,
+        // Audit trail: if the user tapped "Clean up with AI", store their
+        // pre-AI dictation in rawNotes; otherwise it's just a copy of note.
+        rawNotes: preAiTextRef.current ?? quickReachoutData.note,
         createdBy: userId || '',
         type: quickReachoutData.type,
         donation: includeDonation ? donationData : undefined,
@@ -621,85 +667,129 @@ export function Dashboard() {
       </Suspense>
 
       {/* Quick Reachout Dialog */}
-      <Dialog open={!!quickReachoutContact} onClose={closeQuickReachout} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Dialog
+        open={!!quickReachoutContact}
+        onClose={closeQuickReachout}
+        maxWidth="sm"
+        fullWidth
+        fullScreen={isMobile}
+        PaperProps={{
+          sx: {
+            borderRadius: { xs: 0, sm: 3 },
+            overscrollBehavior: 'contain',
+          },
+        }}
+      >
+        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}>
           <Box>
-            <Typography variant="h6">Quick Reachout</Typography>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>Quick Reachout</Typography>
             <Typography variant="body2" color="text.secondary">
               {quickReachoutContact && getContactName(quickReachoutContact)}
             </Typography>
           </Box>
-          <IconButton onClick={closeQuickReachout} size="small">
+          <IconButton onClick={closeQuickReachout} size="small" aria-label="Close">
             <CloseIcon />
           </IconButton>
         </DialogTitle>
-        <DialogContent>
+        <DialogContent sx={{ pb: 2 }}>
           {quickReachoutError && <Alert severity="error" sx={{ mb: 2 }}>{quickReachoutError}</Alert>}
-          {voiceError && <Alert severity="warning" sx={{ mb: 2 }}>{voiceError}</Alert>}
-          
+          {voiceError && isOnline && <Alert severity="warning" sx={{ mb: 2 }}>{voiceError}</Alert>}
+          {/* When offline: tell the marketer up-front that AI cleanup &
+              dictation are paused but typing + saving still work. */}
+          <OnlineOnlyNotice
+            feature="Dictation & AI cleanup"
+            sx={{ mb: 2 }}
+          />
+
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
-            {/* Voice + Type Row */}
-            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-              <Button
-                variant={isListening ? 'contained' : 'outlined'}
-                color={isListening ? 'error' : 'primary'}
-                startIcon={isListening ? <MicOffIcon /> : <MicIcon />}
-                onClick={isListening ? stopListening : startListening}
-                disabled={aiProcessing || quickReachoutLoading}
-              >
-                {isListening ? 'Stop' : 'Record'}
-              </Button>
-              {isListening && <Chip label="🔴 Listening..." color="error" size="small" />}
-              <TextField
-                select
-                label="Type"
-                value={quickReachoutData.type}
-                onChange={(e) => setQuickReachoutData(prev => ({ ...prev, type: e.target.value as any }))}
-                size="small"
-                sx={{ width: 140 }}
-                disabled={quickReachoutLoading}
-              >
-                <MenuItem value="call">📞 Call</MenuItem>
-                <MenuItem value="email">📧 Email</MenuItem>
-                <MenuItem value="meeting">🤝 Meeting</MenuItem>
-                <MenuItem value="other">📝 Other</MenuItem>
-              </TextField>
-            </Box>
-
-            {/* Raw Notes */}
+            {/* Reachout type — compact selector */}
             <TextField
-              label="Meeting Notes"
-              multiline
-              rows={3}
-              value={quickReachoutData.rawNotes}
-              onChange={(e) => setQuickReachoutData(prev => ({ ...prev, rawNotes: e.target.value }))}
-              placeholder="Type or speak your notes..."
-              fullWidth
-              disabled={aiProcessing || quickReachoutLoading}
-            />
-            
-            <Button
-              variant="outlined"
+              select
+              label="Type"
+              value={quickReachoutData.type}
+              onChange={(e) => setQuickReachoutData(prev => ({ ...prev, type: e.target.value as 'call' | 'email' | 'meeting' | 'text' | 'other' }))}
               size="small"
-              startIcon={aiProcessing ? <CircularProgress size={16} /> : <AIIcon />}
-              onClick={processWithAI}
-              disabled={aiProcessing || !quickReachoutData.rawNotes.trim() || quickReachoutLoading}
-            >
-              {aiProcessing ? 'Processing...' : 'Process'}
-            </Button>
-
-            {/* Summary Note */}
-            <TextField
-              label="Summary Note"
-              multiline
-              minRows={6}
-              maxRows={12}
-              value={quickReachoutData.note}
-              onChange={(e) => setQuickReachoutData(prev => ({ ...prev, note: e.target.value }))}
-              placeholder="AI will summarize, or type manually"
               fullWidth
               disabled={quickReachoutLoading}
+            >
+              <MenuItem value="call">📞 Call</MenuItem>
+              <MenuItem value="text">💬 Text</MenuItem>
+              <MenuItem value="email">📧 Email</MenuItem>
+              <MenuItem value="meeting">🤝 Meeting</MenuItem>
+              <MenuItem value="other">📝 Other</MenuItem>
+            </TextField>
+
+            {/* Single notes field — what you type or dictate is exactly what
+                gets saved. The "Clean up with AI" action below rewrites this
+                field in place; there is no second field to confuse with. */}
+            <TextField
+              label="What happened?"
+              multiline
+              minRows={isMobile ? 6 : 4}
+              maxRows={12}
+              value={quickReachoutData.note}
+              onChange={(e) => {
+                const next = e.target.value;
+                setQuickReachoutData(prev => ({ ...prev, note: next }));
+                // Any manual edit invalidates the AI provenance snapshot —
+                // rawNotes should now mirror what the user actually saved.
+                preAiTextRef.current = null;
+              }}
+              placeholder="Type, or tap Record to dictate. e.g. Stopped by, owner was busy. Left a sample tray."
+              fullWidth
+              disabled={quickReachoutLoading}
+              autoFocus={!isMobile}
             />
+
+            {/* Inline action row: dictate + AI cleanup. Both are gated on
+                `isOnline` because both require live network calls (Web
+                Speech API recognition + OpenAI). When offline, the buttons
+                stay visible but disabled with a tooltip explaining why —
+                so the marketer immediately understands what changed. */}
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+              <Tooltip
+                title={!isOnline ? 'Dictation needs service' : ''}
+                enterTouchDelay={0}
+                disableHoverListener={isOnline}
+                disableFocusListener={isOnline}
+                disableTouchListener={isOnline}
+              >
+                <span>
+                  <Button
+                    variant={isListening ? 'contained' : 'outlined'}
+                    color={isListening ? 'error' : 'primary'}
+                    startIcon={isListening ? <MicOffIcon /> : <MicIcon />}
+                    onClick={isListening ? stopListening : startListening}
+                    disabled={aiProcessing || quickReachoutLoading || !isOnline}
+                    size="small"
+                  >
+                    {isListening ? 'Stop' : 'Record'}
+                  </Button>
+                </span>
+              </Tooltip>
+              {isListening && <Chip label="Listening…" color="error" size="small" />}
+              <Box sx={{ flex: 1 }} />
+              <Tooltip
+                title={!isOnline ? 'AI cleanup needs service' : ''}
+                enterTouchDelay={0}
+                disableHoverListener={isOnline}
+                disableFocusListener={isOnline}
+                disableTouchListener={isOnline}
+              >
+                <span>
+                  <Button
+                    variant="text"
+                    size="small"
+                    startIcon={aiProcessing ? <CircularProgress size={14} /> : <AIIcon />}
+                    onClick={processWithAI}
+                    disabled={aiProcessing || !quickReachoutData.note.trim() || quickReachoutLoading || !isOnline}
+                    sx={{ textTransform: 'none' }}
+                  >
+                    {aiProcessing ? 'Cleaning up…' : 'Clean up with AI'}
+                  </Button>
+                </span>
+              </Tooltip>
+            </Box>
 
             {/* Donation Toggle */}
             <Divider sx={{ my: 1 }} />

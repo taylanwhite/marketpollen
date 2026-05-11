@@ -57,7 +57,20 @@ export function useVoiceInput(): UseVoiceInputReturn {
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      setError(`Speech recognition error: ${event.error}`);
+      // The 'network' error fires when the browser's speech service can't
+      // reach Google/Apple's recognition backend. Translate it into the
+      // same plain-English message the rest of the app uses so the
+      // marketer doesn't see jargon mid-visit.
+      if (event.error === 'network') {
+        setError("Dictation lost service. Type your notes — they'll save here.");
+      } else if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setError('Microphone permission was denied. Enable it in your browser settings to use dictation.');
+      } else if (event.error === 'no-speech') {
+        // Common when the marketer takes a moment to think. Don't alarm them.
+        setError(null);
+      } else {
+        setError(`Dictation error: ${event.error}`);
+      }
       setIsListening(false);
     };
 
@@ -78,6 +91,15 @@ export function useVoiceInput(): UseVoiceInputReturn {
 
   const startListening = useCallback(() => {
     if (recognitionRef.current && !isListening) {
+      // Web Speech API recognition is cloud-based on Chrome and most Android
+      // browsers; iOS Safari can do on-device but only on iOS 17+. Either
+      // way, the kindest UX when offline is to fail fast with an
+      // actionable message instead of a silent dead mic.
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        setError("Dictation needs internet. Type your notes — they'll save here.");
+        setIsListening(false);
+        return;
+      }
       setError(null);
       setInterimTranscript('');
       setIsListening(true);

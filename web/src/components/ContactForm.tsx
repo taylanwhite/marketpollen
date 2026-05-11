@@ -8,7 +8,9 @@ import { Reachout, DonationData, Business, SLUG_TO_FIELD } from '../types';
 import { createEmptyDonation, calculateMouths } from '../utils/donationCalculations';
 import { useCampaign } from '../contexts/CampaignContext';
 import { useDonation } from '../contexts/DonationContext';
+import { useOffline } from '../contexts/OfflineContext';
 import { DonationProductFields } from './DonationProductFields';
+import { OnlineOnlyNotice } from './OnlineOnlyNotice';
 import {
   Box,
   Button,
@@ -26,6 +28,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   IconButton,
+  Tooltip,
 } from '@mui/material';
 import { type AddressData } from './AddressPicker';
 import { PlaceMatchPicker, type PlaceResult } from './PlaceMatchPicker';
@@ -92,6 +95,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   const { products } = useCampaign();
   const { permissions } = usePermissions();
   const { triggerRefresh, setLastDonationMouths, bumpDataVersion } = useDonation();
+  const { isOnline } = useOffline();
   const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
 
   const [businesses, setBusinesses] = useState<Business[]>([]);
@@ -179,6 +183,19 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // If the marketer is offline (or loses signal mid-form), AI extraction can't
+  // run — but we don't want to leave them staring at a "Extract with AI" button
+  // that will fail. Auto-reveal the manual review fields so they can fill the
+  // form by hand and save normally. The save chain queues to the outbox.
+  // We also flip the mic off — it depends on cloud speech recognition.
+  useEffect(() => {
+    if (!isOnline) {
+      setHasExtracted(true);
+      if (isListening) stopListening();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline]);
 
   const selectedBusiness = useMemo(
     () => businesses.find((b) => b.id === selectedBusinessId) || null,
@@ -582,6 +599,15 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Top-of-form offline notice — explains exactly which features are
+          paused and reassures the marketer that their typing/save still
+          works. The global ribbon in MainLayout covers the "you have no
+          signal" headline; this one details the QuickAdd-specific impact. */}
+      <OnlineOnlyNotice
+        feature="AI fields & dictation"
+        message="No service — AI fields and dictation are paused. Type your visit below and tap Save; it'll sync when you're back."
+      />
+
       {/* Nearby business suggestions (geolocation-based, opt-in via browser prompt) */}
       <NearbyPlacesChips
         storeId={permissions.currentStoreId}
@@ -604,22 +630,35 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             input: {
               endAdornment: (
                 <InputAdornment position="end" sx={{ alignSelf: 'flex-start', mt: 1, mr: -0.5 }}>
-                  <IconButton
-                    onClick={isListening ? stopListening : startListening}
-                    size="small"
-                    aria-label={isListening ? 'Stop dictation' : 'Start dictation'}
-                    sx={{
-                      bgcolor: isListening ? '#e74c3c' : 'rgba(245, 200, 66, 0.2)',
-                      color: isListening ? '#fff' : '#2d2d2d',
-                      width: 40,
-                      height: 40,
-                      '&:hover': {
-                        bgcolor: isListening ? '#c0392b' : 'rgba(245, 200, 66, 0.35)',
-                      },
-                    }}
+                  <Tooltip
+                    title={!isOnline ? 'Dictation needs service' : isListening ? 'Stop dictation' : 'Start dictation'}
+                    enterTouchDelay={0}
                   >
-                    {isListening ? <MicOffIcon /> : <MicIcon />}
-                  </IconButton>
+                    {/* span wrapper lets the tooltip show even when the button is disabled */}
+                    <span>
+                      <IconButton
+                        onClick={isListening ? stopListening : startListening}
+                        size="small"
+                        disabled={!isOnline}
+                        aria-label={isListening ? 'Stop dictation' : 'Start dictation'}
+                        sx={{
+                          bgcolor: isListening ? '#e74c3c' : 'rgba(245, 200, 66, 0.2)',
+                          color: isListening ? '#fff' : '#2d2d2d',
+                          width: 40,
+                          height: 40,
+                          '&:hover': {
+                            bgcolor: isListening ? '#c0392b' : 'rgba(245, 200, 66, 0.35)',
+                          },
+                          '&.Mui-disabled': {
+                            bgcolor: 'rgba(0,0,0,0.04)',
+                            color: 'rgba(0,0,0,0.26)',
+                          },
+                        }}
+                      >
+                        {isListening ? <MicOffIcon /> : <MicIcon />}
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                 </InputAdornment>
               ),
             },
@@ -644,7 +683,9 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           )}
           {!isListening && (
             <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>
-              Tip: tap the mic key on your keyboard to dictate hands-free.
+              {isOnline
+                ? 'Tip: tap the mic key on your keyboard to dictate hands-free.'
+                : 'No service — type your notes; we\'ll save them on this device.'}
             </Typography>
           )}
           <Box sx={{ flex: 1 }} />
@@ -662,8 +703,10 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         </Alert>
       )}
 
-      {/* Step 2: extract with AI */}
-      {!hasExtracted && (
+      {/* Step 2: extract with AI — only shown when online. When offline, the
+          useEffect above auto-flips `hasExtracted` so the manual review form
+          is visible right away (no broken-button confusion). */}
+      {!hasExtracted && isOnline && (
         <Button
           variant="contained"
           size="large"
@@ -698,10 +741,12 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         <Stack spacing={2.5} sx={{ pt: 1 }}>
           <Box>
             <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.5, fontWeight: 700 }}>
-              AI found
+              {isOnline ? 'AI found' : 'Fill in the details'}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Tap any field to edit, then save.
+              {isOnline
+                ? 'Tap any field to edit, then save.'
+                : "We'll save your visit on this device and finish syncing when you're back online."}
             </Typography>
           </Box>
 
@@ -997,17 +1042,6 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                   />
                 );
               })}
-              <TextField
-                size="small"
-                type="number"
-                value={form.followUpDays}
-                onChange={(e) => setForm((p) => ({ ...p, followUpDays: Math.max(1, parseInt(e.target.value) || 1) }))}
-                slotProps={{
-                  htmlInput: { min: 1, max: 365, inputMode: 'numeric', style: { width: 40, textAlign: 'center' } },
-                }}
-                sx={{ width: 100 }}
-                helperText="days"
-              />
             </Stack>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
               AI may pick a smarter date based on the visit context.

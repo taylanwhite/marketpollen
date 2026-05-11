@@ -155,6 +155,63 @@ export function Calendar() {
     }
   }, [permissions.currentStoreId, planDate]);
 
+  // "Last 5 visits" — most recent reachouts across all contacts in this store.
+  // Depends on the `contacts` Map directly so the memo only recomputes when
+  // the underlying data actually changes; an `Array.from(contacts.values())`
+  // would be a fresh array every render and defeat memoization.
+  //
+  // IMPORTANT: this hook (and `todaySummary` below) MUST stay above the
+  // `if (loading) return ...` early return later in this component, otherwise
+  // React sees a different hook count between the loading and loaded renders
+  // and throws minified error #310.
+  const recentVisits = useMemo(() => {
+    const all: Array<{
+      contactId: string;
+      contactName: string;
+      date: Date;
+      note: string;
+      type?: string;
+    }> = [];
+    for (const c of contacts.values()) {
+      const name = `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email || c.phone || 'Contact';
+      for (const r of c.reachouts) {
+        all.push({
+          contactId: c.id,
+          contactName: name,
+          date: r.date instanceof Date ? r.date : new Date(r.date),
+          note: r.note || '',
+          type: r.type || undefined,
+        });
+      }
+    }
+    return all.sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 5);
+  }, [contacts]);
+
+  const todaySummary = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const eventsToday = events.filter(
+      (e) => e.date >= startOfToday && e.date < endOfToday && e.status !== 'cancelled'
+    );
+    const followUpsToday = eventsToday.filter((e) => e.type === 'followup').length;
+
+    let visitsLastWeek = 0;
+    for (const c of contacts.values()) {
+      for (const r of c.reachouts) {
+        const d = r.date instanceof Date ? r.date : new Date(r.date);
+        if (d >= sevenDaysAgo) visitsLastWeek++;
+      }
+    }
+    return {
+      eventsToday: eventsToday.length,
+      followUpsToday,
+      visitsLastWeek,
+    };
+  }, [events, contacts]);
+
   const loadDayPlan = async () => {
     if (!permissions.currentStoreId || !planDate) return;
     try {
@@ -587,59 +644,6 @@ export function Calendar() {
   const days = getDaysInMonth(currentDate);
   const selectedDateEvents = selectedDate ? getEventsForDate(selectedDate) : [];
   const contactList = Array.from(contacts.values());
-
-  // "Last 5 visits" — most recent reachouts across all contacts in this store.
-  // Depends on `contacts` (the Map) directly so the memo only recomputes when
-  // the underlying data actually changes; `contactList` is a fresh Array every
-  // render and would defeat memoization.
-  const recentVisits = useMemo(() => {
-    const all: Array<{
-      contactId: string;
-      contactName: string;
-      date: Date;
-      note: string;
-      type?: string;
-    }> = [];
-    for (const c of contacts.values()) {
-      const name = `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email || c.phone || 'Contact';
-      for (const r of c.reachouts) {
-        all.push({
-          contactId: c.id,
-          contactName: name,
-          date: r.date instanceof Date ? r.date : new Date(r.date),
-          note: r.note || '',
-          type: r.type || undefined,
-        });
-      }
-    }
-    return all.sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 5);
-  }, [contacts]);
-
-  // Quick "today at a glance" counters
-  const todaySummary = useMemo(() => {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
-    const sevenDaysAgo = new Date(startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-    const eventsToday = events.filter(
-      (e) => e.date >= startOfToday && e.date < endOfToday && e.status !== 'cancelled'
-    );
-    const followUpsToday = eventsToday.filter((e) => e.type === 'followup').length;
-
-    let visitsLastWeek = 0;
-    for (const c of contacts.values()) {
-      for (const r of c.reachouts) {
-        const d = r.date instanceof Date ? r.date : new Date(r.date);
-        if (d >= sevenDaysAgo) visitsLastWeek++;
-      }
-    }
-    return {
-      eventsToday: eventsToday.length,
-      followUpsToday,
-      visitsLastWeek,
-    };
-  }, [events, contacts]);
 
   const formatTimeAgo = (date: Date) => {
     const diffMs = Date.now() - date.getTime();

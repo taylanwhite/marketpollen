@@ -113,6 +113,15 @@ export function NearbyPlacesChips({ storeId, onSelect, maxChips = 5 }: NearbyPla
       return;
     }
 
+    // Offline: don't even attempt the call. Places API is online-only and
+    // calling it here would throw and add noise to the console. We just
+    // show nothing — the marketer can still type the business name in by hand.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setPlaces([]);
+      setLoadingPlaces(false);
+      return;
+    }
+
     setLoadingPlaces(true);
     (async () => {
       try {
