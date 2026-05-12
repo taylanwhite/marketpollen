@@ -31,6 +31,7 @@ import {
   Tooltip,
 } from '@mui/material';
 import { type AddressData } from './AddressPicker';
+import { useTheme, useMediaQuery } from '@mui/material';
 import { PlaceMatchPicker, type PlaceResult } from './PlaceMatchPicker';
 import { NearbyPlacesChips, type NearbyPlace } from './NearbyPlacesChips';
 import { haptics } from '../utils/haptics';
@@ -97,6 +98,12 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   const { triggerRefresh, setLastDonationMouths, bumpDataVersion } = useDonation();
   const { isOnline } = useOffline();
   const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
+  const theme = useTheme();
+  // Match the Quick Reachout dialog: don't auto-focus the notes textarea on
+  // mobile because that pops the on-screen keyboard the moment the sheet
+  // opens — and our marketers almost always reach for the mic button first,
+  // not the keyboard. Desktop users still get focus for typing speed.
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>(defaultBusinessId || '');
@@ -624,7 +631,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           minRows={4}
           maxRows={10}
           fullWidth
-          autoFocus
+          autoFocus={!isMobile}
           disabled={loading || aiProcessing}
           slotProps={{
             input: {

@@ -51,10 +51,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: 'Google Places API key is not configured' });
   }
 
-  const body = req.body as { storeId: string; address?: string; lat?: number; lng?: number; textQuery?: string };
+  const body = req.body as { storeId: string; address?: string; lat?: number; lng?: number; textQuery?: string; pageToken?: string };
   const storeId = body?.storeId?.trim();
   const textQuery = body?.textQuery?.trim();
-  console.log('places-nearby request:', { storeId, textQuery, address: body.address, lat: body.lat, lng: body.lng });
+  // Google Places v1 returns up to 20 results per call and a nextPageToken
+  // we can echo back to grab the next batch (up to 60 total). The token is
+  // opaque and short-lived (~2min), so the client treats it as ephemeral.
+  const pageToken = typeof body?.pageToken === 'string' ? body.pageToken.trim() : '';
+  console.log('places-nearby request:', { storeId, textQuery, address: body.address, lat: body.lat, lng: body.lng, hasPageToken: !!pageToken });
   if (!storeId) return res.status(400).json({ error: 'storeId required' });
 
   const can = await canAccessStore(uid, storeId);
@@ -98,55 +102,68 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     let places: any[] = [];
+    let nextPageToken: string | undefined;
+
+    // Common headers for both endpoints. We add `places.id` etc to the field
+    // mask so we don't pay for fields we don't render.
+    const fieldMask = 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,nextPageToken';
 
     if (textQuery) {
       // Text Search API - search by keywords like "Event Venue", "Law firm", etc.
-      console.log('Using TEXT SEARCH with query:', textQuery);
+      console.log('Using TEXT SEARCH with query:', textQuery, pageToken ? '(page 2+)' : '(page 1)');
+      const reqBody: Record<string, unknown> = {
+        textQuery,
+        locationBias: {
+          circle: {
+            center: { latitude: lat, longitude: lng },
+            radius: NEARBY_RADIUS_M,
+          },
+        },
+        maxResultCount: MAX_RESULTS,
+      };
+      // Google requires the original textQuery + locationBias on every page
+      // request, AND the pageToken. Sending the token alone returns an error.
+      if (pageToken) reqBody.pageToken = pageToken;
       const textRes = await axios.post(
         'https://places.googleapis.com/v1/places:searchText',
-        {
-          textQuery,
-          locationBias: {
-            circle: {
-              center: { latitude: lat, longitude: lng },
-              radius: NEARBY_RADIUS_M,
-            },
-          },
-          maxResultCount: MAX_RESULTS,
-        },
+        reqBody,
         {
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location',
+            'X-Goog-FieldMask': fieldMask,
           },
         }
       );
       places = textRes.data?.places || [];
+      nextPageToken = textRes.data?.nextPageToken || undefined;
     } else {
       // Nearby Search API - general nearby places
-      console.log('Using NEARBY SEARCH (no text query)');
+      console.log('Using NEARBY SEARCH (no text query)', pageToken ? '(page 2+)' : '(page 1)');
+      const reqBody: Record<string, unknown> = {
+        locationRestriction: {
+          circle: {
+            center: { latitude: lat, longitude: lng },
+            radius: NEARBY_RADIUS_M,
+          },
+        },
+        maxResultCount: MAX_RESULTS,
+        rankPreference: 'DISTANCE',
+      };
+      if (pageToken) reqBody.pageToken = pageToken;
       const nearbyRes = await axios.post(
         'https://places.googleapis.com/v1/places:searchNearby',
-        {
-          locationRestriction: {
-            circle: {
-              center: { latitude: lat, longitude: lng },
-              radius: NEARBY_RADIUS_M,
-            },
-          },
-          maxResultCount: MAX_RESULTS,
-          rankPreference: 'DISTANCE',
-        },
+        reqBody,
         {
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location',
+            'X-Goog-FieldMask': fieldMask,
           },
         }
       );
       places = nearbyRes.data?.places || [];
+      nextPageToken = nearbyRes.data?.nextPageToken || undefined;
     }
 
     const out: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; distanceM?: number }> = [];
@@ -173,7 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Sort by distance
     out.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity));
-    return res.status(200).json({ places: out });
+    return res.status(200).json({ places: out, nextPageToken });
   } catch (err: any) {
     console.error('Places search error:', err?.response?.data || err);
     const msg = err?.response?.data?.error?.message || err?.message || 'Places search failed';

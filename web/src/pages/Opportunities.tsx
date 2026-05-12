@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
@@ -6,7 +6,9 @@ import { Opportunity } from '../types';
 import { AddressPicker } from '../components/AddressPicker';
 import { DismissOpportunityModal } from '../components/DismissOpportunityModal';
 import { OnlineOnlyNotice } from '../components/OnlineOnlyNotice';
+import { FilterTypeDialog } from '../components/FilterTypeDialog';
 import { useOffline } from '../contexts/OfflineContext';
+import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
 import {
   Box,
   Typography,
@@ -40,6 +42,7 @@ import {
   Restore as RestoreIcon,
   Search as SearchIcon,
   Close as CloseIcon,
+  Tune as MoreFiltersIcon,
 } from '@mui/icons-material';
 
 interface NearbyPlace {
@@ -51,6 +54,28 @@ interface NearbyPlace {
   zipCode?: string;
   distanceM?: number;
 }
+
+/**
+ * Common bakery prospect types, surfaced as quick-tap chips on the Generate
+ * tab. These are the categories that historically convert best for our
+ * marketers: anywhere with regular client-appreciation, employee-treat, or
+ * event budgets. Order matters — most-tapped first. Keep the labels short
+ * so chip rows stay clean on narrow screens.
+ *
+ * The string is sent verbatim as the Google Places `textQuery`, so phrasing
+ * matters: "Real estate office" pulls realtor branches; "Real estate" alone
+ * also pulls listings, which we don't want.
+ */
+const QUICK_TYPE_FILTERS = [
+  'Real estate office',
+  'Law firm',
+  'Event venue',
+  'Hospital',
+  'School',
+  'Bank',
+  'Salon',
+  'Dentist',
+] as const;
 
 function formatDistance(meters?: number): string {
   if (meters == null) return '';
@@ -104,6 +129,11 @@ export function Opportunities() {
   const [textQuery, setTextQuery] = useState('');
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [nearbyPlaces, setNearbyPlaces] = useState<NearbyPlace[]>([]);
+  // Google Places paginates with an opaque token. Empty string means "no
+  // more pages" (server omits it in the response). We track it so the
+  // infinite-scroll sentinel can trigger the next fetch with the right token.
+  const [nearbyPageToken, setNearbyPageToken] = useState<string>('');
+  const [loadingNearbyMore, setLoadingNearbyMore] = useState(false);
   const [selectedPlaceIds, setSelectedPlaceIds] = useState<Set<string>>(new Set());
   const [loadingStore, setLoadingStore] = useState(true);
   const [loadingNearby, setLoadingNearby] = useState(false);
@@ -131,6 +161,9 @@ export function Opportunities() {
   // "find places near my store" — there's no reason to make them stare at
   // an empty Google Places autocomplete first.
   const [addressEditOpen, setAddressEditOpen] = useState(false);
+  // "More…" filter directory dialog. Houses the long-tail of business
+  // types so the inline quick-tap chips stay short and focused.
+  const [filterDialogOpen, setFilterDialogOpen] = useState(false);
 
   const storeId = permissions.currentStoreId;
 
@@ -243,13 +276,17 @@ export function Opportunities() {
     setError('');
     setSuccess('');
     setLoadingNearby(true);
+    // Reset pagination state on a fresh search — any existing token belongs
+    // to a different query and Google would reject it.
     setNearbyPlaces([]);
+    setNearbyPageToken('');
     setSelectedPlaceIds(new Set());
     try {
       const payload: { storeId: string; address: string; textQuery?: string } = { storeId, address: address.trim() };
       if (textQuery.trim()) payload.textQuery = textQuery.trim();
-      const res = await api.post<{ places: NearbyPlace[] }>('/places-nearby', payload);
+      const res = await api.post<{ places: NearbyPlace[]; nextPageToken?: string }>('/places-nearby', payload);
       setNearbyPlaces(res.places || []);
+      setNearbyPageToken(res.nextPageToken || '');
       if (!res.places?.length) setSuccess('No new nearby places found (existing businesses and opportunities are excluded).');
     } catch (err: any) {
       setError(err.message || 'Failed to find nearby places');
@@ -257,6 +294,55 @@ export function Opportunities() {
       setLoadingNearby(false);
     }
   };
+
+  /**
+   * Fetch the next page of Google Places results using the opaque token
+   * from the previous response. Appends to the existing list rather than
+   * replacing it (infinite scroll behavior). De-duplicates by placeId
+   * so the rare server-side duplicate (existed-set race between pages)
+   * doesn't double-render.
+   */
+  const handleLoadMoreNearby = useCallback(async () => {
+    if (!storeId || !nearbyPageToken || loadingNearbyMore || loadingNearby) return;
+    // Inline so useCallback's deps stay stable — buildAddressString is a
+    // fresh closure every render and would defeat the memoization.
+    const address = [searchAddress, searchCity, searchState, searchZipCode]
+      .filter(Boolean)
+      .join(', ')
+      .trim();
+    if (!address) return;
+    setLoadingNearbyMore(true);
+    try {
+      const payload: { storeId: string; address: string; textQuery?: string; pageToken: string } = {
+        storeId,
+        address,
+        pageToken: nearbyPageToken,
+      };
+      if (textQuery.trim()) payload.textQuery = textQuery.trim();
+      const res = await api.post<{ places: NearbyPlace[]; nextPageToken?: string }>('/places-nearby', payload);
+      const incoming = res.places || [];
+      setNearbyPlaces((prev) => {
+        const seen = new Set(prev.map((p) => p.placeId));
+        return [...prev, ...incoming.filter((p) => !seen.has(p.placeId))];
+      });
+      setNearbyPageToken(res.nextPageToken || '');
+    } catch (err: any) {
+      // Stop trying — clear the token so the sentinel disconnects and the
+      // marketer doesn't see repeated failures from the same dead token.
+      setNearbyPageToken('');
+      setError(err.message || 'Failed to load more places');
+    } finally {
+      setLoadingNearbyMore(false);
+    }
+  }, [storeId, nearbyPageToken, loadingNearbyMore, loadingNearby, textQuery, searchAddress, searchCity, searchState, searchZipCode]);
+
+  // Sentinel for the Generate-tab nearby places list. When it scrolls into
+  // view we fetch the next page from Google.
+  const { sentinelRef: nearbySentinelRef } = useInfiniteScroll({
+    onLoadMore: handleLoadMoreNearby,
+    hasMore: !!nearbyPageToken,
+    loading: loadingNearbyMore,
+  });
 
   const togglePlaceSelection = (placeId: string) => {
     setSelectedPlaceIds(prev => {
@@ -371,6 +457,47 @@ export function Opportunities() {
     [dismissedOpportunities, term],
   );
 
+  // Local infinite scroll for the saved Opportunities tab. We render a
+  // window of the filtered list and grow it as the marketer scrolls. Doing
+  // this client-side (rather than paginating from the server) means search
+  // still scans the *entire* dataset and the offline cache continues to
+  // hold one snapshot per status — no API churn.
+  const PAGE_SIZE = 30;
+  const [visibleActiveCount, setVisibleActiveCount] = useState(PAGE_SIZE);
+  const [visibleDismissedCount, setVisibleDismissedCount] = useState(PAGE_SIZE);
+
+  // Reset the visible window whenever the underlying filtered list changes
+  // (search term changed, items added/removed, etc). Without this the
+  // window can stay smaller than the current list's first page or, worse,
+  // paginate past data that no longer exists.
+  useEffect(() => {
+    setVisibleActiveCount(PAGE_SIZE);
+  }, [term, opportunities.length]);
+  useEffect(() => {
+    setVisibleDismissedCount(PAGE_SIZE);
+  }, [term, dismissedOpportunities.length]);
+
+  const visibleOpportunities = useMemo(
+    () => filteredOpportunities.slice(0, visibleActiveCount),
+    [filteredOpportunities, visibleActiveCount],
+  );
+  const visibleDismissedList = useMemo(
+    () => filteredDismissed.slice(0, visibleDismissedCount),
+    [filteredDismissed, visibleDismissedCount],
+  );
+
+  const hasMoreActive = visibleActiveCount < filteredOpportunities.length;
+  const hasMoreDismissed = visibleDismissedCount < filteredDismissed.length;
+
+  const { sentinelRef: activeSentinelRef } = useInfiniteScroll({
+    onLoadMore: () => setVisibleActiveCount((c) => c + PAGE_SIZE),
+    hasMore: hasMoreActive,
+  });
+  const { sentinelRef: dismissedSentinelRef } = useInfiniteScroll({
+    onLoadMore: () => setVisibleDismissedCount((c) => c + PAGE_SIZE),
+    hasMore: hasMoreDismissed,
+  });
+
   // While searching, automatically reveal dismissed matches so a marketer
   // doesn't think a remembered place is "missing" — it might just be parked.
   const effectiveShowDismissed = showDismissed || (!!term && filteredDismissed.length > 0);
@@ -477,19 +604,41 @@ export function Opportunities() {
               ) : (
                 <>
                   {filteredOpportunities.length > 0 && (
-                    <List disablePadding sx={{ mb: 1 }}>
-                      {filteredOpportunities.map((opp) => (
-                        <OpportunityRow
-                          key={opp.id}
-                          opp={opp}
-                          canEdit={canEdit(opp.storeId)}
-                          converting={convertingId === opp.id}
-                          dismissing={dismissingId === opp.id}
-                          onConvert={() => handleConvert(opp)}
-                          onDismiss={() => openDismissModal(opp)}
-                        />
-                      ))}
-                    </List>
+                    <>
+                      <List disablePadding sx={{ mb: 1 }}>
+                        {visibleOpportunities.map((opp) => (
+                          <OpportunityRow
+                            key={opp.id}
+                            opp={opp}
+                            canEdit={canEdit(opp.storeId)}
+                            converting={convertingId === opp.id}
+                            dismissing={dismissingId === opp.id}
+                            onConvert={() => handleConvert(opp)}
+                            onDismiss={() => openDismissModal(opp)}
+                          />
+                        ))}
+                      </List>
+                      {/* Infinite-scroll sentinel for the active list. When
+                          this scrolls into view we reveal the next PAGE_SIZE
+                          items. Disconnects when there's nothing left. */}
+                      {hasMoreActive && (
+                        <Box
+                          ref={activeSentinelRef}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            py: 1.5,
+                            gap: 1,
+                            color: 'text.secondary',
+                            fontSize: '0.8rem',
+                          }}
+                        >
+                          <CircularProgress size={14} />
+                          {`Loading… (${visibleOpportunities.length} of ${filteredOpportunities.length})`}
+                        </Box>
+                      )}
+                    </>
                   )}
 
                   {term && filteredOpportunities.length === 0 && filteredDismissed.length > 0 && (
@@ -522,17 +671,39 @@ export function Opportunities() {
               />
 
               {effectiveShowDismissed && filteredDismissed.length > 0 && (
-                <List disablePadding sx={{ mt: 1, bgcolor: 'action.hover', borderRadius: 1, py: 0.5 }}>
-                  {filteredDismissed.map((opp) => (
-                    <DismissedOpportunityRow
-                      key={opp.id}
-                      opp={opp}
-                      canEdit={canEdit(opp.storeId)}
-                      restoring={restoringId === opp.id}
-                      onRestore={() => handleRestore(opp)}
-                    />
-                  ))}
-                </List>
+                <>
+                  <List disablePadding sx={{ mt: 1, bgcolor: 'action.hover', borderRadius: 1, py: 0.5 }}>
+                    {visibleDismissedList.map((opp) => (
+                      <DismissedOpportunityRow
+                        key={opp.id}
+                        opp={opp}
+                        canEdit={canEdit(opp.storeId)}
+                        restoring={restoringId === opp.id}
+                        onRestore={() => handleRestore(opp)}
+                      />
+                    ))}
+                  </List>
+                  {/* Sentinel for the dismissed list — same pattern as
+                      active. Lives outside the List bg-tint so the loader
+                      sits flush with the page background. */}
+                  {hasMoreDismissed && (
+                    <Box
+                      ref={dismissedSentinelRef}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        py: 1.5,
+                        gap: 1,
+                        color: 'text.secondary',
+                        fontSize: '0.8rem',
+                      }}
+                    >
+                      <CircularProgress size={14} />
+                      {`Loading… (${visibleDismissedList.length} of ${filteredDismissed.length})`}
+                    </Box>
+                  )}
+                </>
               )}
               {effectiveShowDismissed && term && filteredDismissed.length === 0 && dismissedOpportunities.length > 0 && (
                 <Typography color="text.secondary" variant="body2" sx={{ mt: 1, fontStyle: 'italic' }}>
@@ -637,14 +808,94 @@ export function Opportunities() {
                     )}
                   </Box>
 
-                  <TextField
-                    label="Filter by type (optional)"
-                    placeholder="e.g. Event venue, law firm, real estate"
-                    value={textQuery}
-                    onChange={(e) => setTextQuery(e.target.value)}
-                    size="small"
-                    fullWidth
-                  />
+                  <Box>
+                    <TextField
+                      label="Filter by type (optional)"
+                      placeholder="e.g. Event venue, law firm, real estate"
+                      value={textQuery}
+                      onChange={(e) => setTextQuery(e.target.value)}
+                      size="small"
+                      fullWidth
+                    />
+                    {/* Quick-tap chips for the most common bakery prospect
+                        categories. Tapping a chip both fills the field AND
+                        kicks off the search immediately — one-tap discovery
+                        for the field marketer. We hide the entire row once
+                        results load so the chips don't compete with them
+                        for thumb-space (the "minimal/no screen space when
+                        loaded" requirement). */}
+                    {nearbyPlaces.length === 0 && !loadingNearby && (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
+                        {QUICK_TYPE_FILTERS.map((preset) => {
+                          const isActive = textQuery.trim().toLowerCase() === preset.toLowerCase();
+                          return (
+                            <Chip
+                              key={preset}
+                              label={preset}
+                              size="small"
+                              variant={isActive ? 'filled' : 'outlined'}
+                              color={isActive ? 'primary' : 'default'}
+                              onClick={() => {
+                                if (isActive) {
+                                  // Tap the active chip again to clear the
+                                  // filter and go back to "any nearby business".
+                                  setTextQuery('');
+                                  return;
+                                }
+                                setTextQuery(preset);
+                                // Auto-fire the search so the marketer's
+                                // intent ("show me real estate near me") is
+                                // a single tap away. They can still tap the
+                                // main button after typing custom text.
+                                if (isOnline && !loadingNearby) {
+                                  // Defer one tick so the textQuery state
+                                  // update is visible to handleFindNearby
+                                  // when it builds its payload.
+                                  setTimeout(() => handleFindNearby(), 0);
+                                }
+                              }}
+                              sx={{
+                                cursor: 'pointer',
+                                fontSize: '0.75rem',
+                                height: 'auto',
+                                py: 0.4,
+                                '& .MuiChip-label': {
+                                  whiteSpace: 'normal',
+                                  lineHeight: 1.3,
+                                  px: 1,
+                                },
+                              }}
+                            />
+                          );
+                        })}
+                        {/* Escape hatch: tap "More…" to open the full
+                            filter directory dialog. Visually distinct from
+                            the quick chips (icon + dashed-style outline)
+                            so marketers don't mistake it for another
+                            preset that auto-fires a search. */}
+                        <Chip
+                          icon={<MoreFiltersIcon sx={{ fontSize: 14, ml: 0.5 }} />}
+                          label="More…"
+                          size="small"
+                          variant="outlined"
+                          onClick={() => setFilterDialogOpen(true)}
+                          sx={{
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            height: 'auto',
+                            py: 0.4,
+                            borderStyle: 'dashed',
+                            color: 'text.secondary',
+                            '& .MuiChip-label': {
+                              whiteSpace: 'normal',
+                              lineHeight: 1.3,
+                              px: 1,
+                            },
+                          }}
+                        />
+                      </Box>
+                    )}
+                  </Box>
 
                   <Tooltip
                     title={!isOnline ? 'Nearby search needs service' : ''}
@@ -750,6 +1001,35 @@ export function Opportunities() {
                             </ListItem>
                           );
                         })}
+                        {/* Sentinel: when this scrolls into view (200px before
+                            actually visible), the next page of Google results
+                            loads automatically. Disconnects when nearbyPageToken
+                            is empty (Google has no more pages — capped at ~60). */}
+                        {nearbyPageToken && (
+                          <Box
+                            ref={nearbySentinelRef}
+                            sx={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              py: 1.5,
+                              gap: 1,
+                              color: 'text.secondary',
+                              fontSize: '0.8rem',
+                            }}
+                          >
+                            {loadingNearbyMore && <CircularProgress size={14} />}
+                            {loadingNearbyMore ? 'Loading more…' : 'Scroll for more'}
+                          </Box>
+                        )}
+                        {/* Done-state line so the marketer knows they've hit
+                            Google's cap (~60 places per query, per the Places
+                            API), not that the scroll is broken. */}
+                        {!nearbyPageToken && nearbyPlaces.length >= 20 && (
+                          <Box sx={{ textAlign: 'center', py: 1.5, color: 'text.secondary', fontSize: '0.75rem' }}>
+                            That's everything Google found. Try a different filter or address.
+                          </Box>
+                        )}
                       </List>
                       <Button
                         variant="contained"
@@ -778,6 +1058,21 @@ export function Opportunities() {
           setOpportunityToDismiss(null);
         }}
         onDismiss={handleDismissWithReason}
+      />
+
+      {/* Full filter directory. Opens from the "More…" chip on the
+          Generate tab. Picking a category fills `textQuery` and immediately
+          fires the search — same one-tap flow as the inline quick chips. */}
+      <FilterTypeDialog
+        open={filterDialogOpen}
+        currentValue={textQuery}
+        onClose={() => setFilterDialogOpen(false)}
+        onPick={(type) => {
+          setTextQuery(type);
+          if (isOnline && !loadingNearby) {
+            setTimeout(() => handleFindNearby(), 0);
+          }
+        }}
       />
     </Box>
   );
