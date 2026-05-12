@@ -4,9 +4,10 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore } from './lib/store-access.js';
 
-const NEARBY_RADIUS_M = 2000;
-const EXPANDED_RADIUS_M = 4000;
-const MAX_RADIUS_M = 8000;
+const METERS_PER_MILE = 1609.34;
+const NEARBY_RADIUS_M = Math.round(10 * METERS_PER_MILE);
+const EXPANDED_RADIUS_M = Math.round(25 * METERS_PER_MILE);
+const MAX_RADIUS_M = Math.round(50 * METERS_PER_MILE);
 const SEARCH_RADII_M = [NEARBY_RADIUS_M, EXPANDED_RADIUS_M, MAX_RADIUS_M] as const;
 const MAX_RESULTS = 20;
 const SAME_LOCATION_THRESHOLD_M = 50; // Filter out places within 50m of search center
@@ -163,11 +164,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     //     field, so it behaves exactly like manual input
     //
     // If the fresh search has no usable results after excluding existing
-    // businesses/opportunities, automatically widen from 2km -> 4km -> 8km.
+    // businesses/opportunities, automatically widen from 10mi -> 25mi -> 50mi.
     // Pagination must keep using the radius that produced the current page,
     // otherwise Google rejects the page token for mismatched parameters.
     const searchTerm = textQuery || DEFAULT_TEXT_QUERY;
-    const radiiToTry = pageToken ? [requestedRadiusM] : SEARCH_RADII_M;
+    const radiiToTry = pageToken
+      ? [requestedRadiusM]
+      : SEARCH_RADII_M.filter((radiusM) => radiusM >= requestedRadiusM);
     let searchRadiusM = requestedRadiusM;
 
     for (const radiusM of radiiToTry) {

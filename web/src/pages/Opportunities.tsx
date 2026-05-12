@@ -84,9 +84,21 @@ const QUICK_TYPE_FILTERS = [
   'Dentist',
 ] as const;
 
+const METERS_PER_MILE = 1609.34;
+const SEARCH_RADIUS_OPTIONS_M = [
+  Math.round(10 * METERS_PER_MILE),
+  Math.round(25 * METERS_PER_MILE),
+  Math.round(50 * METERS_PER_MILE),
+] as const;
+const INITIAL_SEARCH_RADIUS_M = SEARCH_RADIUS_OPTIONS_M[0];
+
+function getNextSearchRadiusM(current: number): number | undefined {
+  return SEARCH_RADIUS_OPTIONS_M.find((radius) => radius > current);
+}
+
 function formatDistance(meters?: number): string {
   if (meters == null) return '';
-  const miles = meters / 1609.34;
+  const miles = meters / METERS_PER_MILE;
   if (miles < 0.1) {
     const feet = Math.round(meters * 3.28084);
     return `${feet} ft`;
@@ -96,8 +108,8 @@ function formatDistance(meters?: number): string {
 
 function formatRadius(meters?: number): string {
   if (!meters) return '';
-  const miles = meters / 1609.34;
-  return miles < 1 ? `${Math.round(meters)} m` : `${miles.toFixed(1)} mi`;
+  const miles = meters / METERS_PER_MILE;
+  return miles < 1 ? `${Math.round(meters)} m` : `${Math.round(miles)} mi`;
 }
 
 /**
@@ -146,7 +158,7 @@ export function Opportunities() {
   // more pages" (server omits it in the response). We track it so the
   // infinite-scroll sentinel can trigger the next fetch with the right token.
   const [nearbyPageToken, setNearbyPageToken] = useState<string>('');
-  const [nearbySearchRadiusM, setNearbySearchRadiusM] = useState<number>(2000);
+  const [nearbySearchRadiusM, setNearbySearchRadiusM] = useState<number>(INITIAL_SEARCH_RADIUS_M);
   const [nearbyExpanded, setNearbyExpanded] = useState(false);
   const [loadingNearbyMore, setLoadingNearbyMore] = useState(false);
   const [selectedPlaceIds, setSelectedPlaceIds] = useState<Set<string>>(new Set());
@@ -243,6 +255,7 @@ export function Opportunities() {
     searchCity === storeAddressParts.city &&
     searchState === storeAddressParts.state &&
     searchZipCode === storeAddressParts.zipCode;
+  const nextNearbySearchRadiusM = getNextSearchRadiusM(nearbySearchRadiusM);
 
   const loadOpportunities = async () => {
     if (!storeId) return;
@@ -293,7 +306,7 @@ export function Opportunities() {
     setTextQuery('');
     setNearbyPlaces([]);
     setNearbyPageToken('');
-    setNearbySearchRadiusM(2000);
+    setNearbySearchRadiusM(INITIAL_SEARCH_RADIUS_M);
     setNearbyExpanded(false);
     setSelectedPlaceIds(new Set());
     setError('');
@@ -305,7 +318,7 @@ export function Opportunities() {
    * into `textQuery`, so blank, manual, and preset searches all submit
    * through this same path.
    */
-  const handleFindNearby = async () => {
+  const handleFindNearby = async (radiusM = INITIAL_SEARCH_RADIUS_M) => {
     if (!storeId) return;
     const address = buildAddressString();
     if (!address.trim()) {
@@ -319,22 +332,20 @@ export function Opportunities() {
     // to a different query and Google would reject it.
     setNearbyPlaces([]);
     setNearbyPageToken('');
-    setNearbySearchRadiusM(2000);
-    setNearbyExpanded(false);
+    setNearbySearchRadiusM(radiusM);
+    setNearbyExpanded(radiusM > INITIAL_SEARCH_RADIUS_M);
     setSelectedPlaceIds(new Set());
     const effectiveQuery = textQuery.trim();
     try {
-      const payload: { storeId: string; address: string; textQuery?: string } = { storeId, address: address.trim() };
+      const payload: { storeId: string; address: string; textQuery?: string; radiusM: number } = { storeId, address: address.trim(), radiusM };
       if (effectiveQuery) payload.textQuery = effectiveQuery;
       const res = await api.post<NearbyPlacesResponse>('/places-nearby', payload);
       setNearbyPlaces(res.places || []);
       setNearbyPageToken(res.nextPageToken || '');
-      setNearbySearchRadiusM(res.searchRadiusM || 2000);
+      setNearbySearchRadiusM(res.searchRadiusM || radiusM);
       setNearbyExpanded(!!res.expanded);
-      if (res.expanded && res.places?.length) {
-        setSuccess(`No matches in the immediate area, so we expanded to ${formatRadius(res.searchRadiusM)}.`);
-      } else if (!res.places?.length) {
-        setSuccess(`No new nearby places found within ${formatRadius(res.searchRadiusM || 8000)} (existing businesses and opportunities are excluded).`);
+      if (!res.places?.length) {
+        setSuccess(`No new nearby places found within ${formatRadius(res.searchRadiusM || radiusM)} (existing businesses and opportunities are excluded).`);
       }
     } catch (err: any) {
       setError(err.message || 'Failed to find nearby places');
@@ -1014,9 +1025,39 @@ export function Opportunities() {
                       </Typography>
                       {nearbyExpanded && (
                         <Alert severity="info" sx={{ mb: 1 }}>
-                          No matches in the immediate area, so we expanded the search to {formatRadius(nearbySearchRadiusM)}.
+                          Showing a broadened search radius of {formatRadius(nearbySearchRadiusM)}.
                         </Alert>
                       )}
+                      <Stack
+                        direction={{ xs: 'column', sm: 'row' }}
+                        spacing={1}
+                        alignItems={{ xs: 'stretch', sm: 'center' }}
+                        sx={{ mb: 1 }}
+                      >
+                        <Chip
+                          label={`Search radius: ${formatRadius(nearbySearchRadiusM)}`}
+                          size="small"
+                          sx={{ alignSelf: { xs: 'flex-start', sm: 'center' } }}
+                        />
+                        {nextNearbySearchRadiusM && (
+                          <Button
+                            variant="contained"
+                            onClick={() => handleFindNearby(nextNearbySearchRadiusM)}
+                            disabled={loadingNearby}
+                            startIcon={loadingNearby ? <CircularProgress size={16} color="inherit" /> : <ExploreIcon />}
+                            fullWidth={isMobile}
+                            sx={{
+                              textTransform: 'none',
+                              fontWeight: 700,
+                              bgcolor: 'warning.main',
+                              color: 'warning.contrastText',
+                              '&:hover': { bgcolor: 'warning.dark' },
+                            }}
+                          >
+                            Broaden search to {formatRadius(nextNearbySearchRadiusM)}
+                          </Button>
+                        )}
+                      </Stack>
                       <List
                         disablePadding
                         sx={{
