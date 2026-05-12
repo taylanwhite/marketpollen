@@ -203,9 +203,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let places: any[] = [];
     let nextPageToken: string | undefined;
 
-    // Common headers for both endpoints. We add `places.id` etc to the field
-    // mask so we don't pay for fields we don't render.
-    const fieldMask = 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,nextPageToken';
+    // Field masks: we keep them tight so we only pay for fields we render.
+    //
+    // IMPORTANT: `nextPageToken` is ONLY a valid response field on
+    // `places:searchText`. The `places:searchNearby` endpoint doesn't
+    // paginate (Google caps it at 20 results, no token), and including
+    // `nextPageToken` in its field mask makes Google reject the entire
+    // request with "Request contains an invalid argument" — which is
+    // exactly the symptom users hit on every chip tap.
+    const placeFields = 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location';
+    const textSearchFieldMask = `${placeFields},nextPageToken`;
+    const nearbyFieldMask = placeFields;
 
     // Decide which Google endpoint to hit based on the filter:
     //
@@ -251,7 +259,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': fieldMask,
+            'X-Goog-FieldMask': textSearchFieldMask,
           },
         }
       );
@@ -281,9 +289,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const includedTypes = mappedType ? [mappedType] : DEFAULT_BUSINESS_TYPES;
       console.log(
         'Using NEARBY SEARCH',
-        mappedType ? `(mapped "${textQuery}" -> ${mappedType})` : '(no text query, default types)',
-        pageToken ? '(page 2+)' : '(page 1)'
+        mappedType ? `(mapped "${textQuery}" -> ${mappedType})` : '(no text query, default types)'
       );
+      // NOTE: places:searchNearby does NOT support pagination in v1 — there's
+      // no `pageToken` request param and no `nextPageToken` response field.
+      // The client may still send a pageToken (it doesn't know which Google
+      // endpoint we'll route to), but we deliberately ignore it here and let
+      // the response carry an undefined nextPageToken so the UI's infinite
+      // scroll cleanly stops at "That's everything Google found."
       const reqBody: Record<string, unknown> = {
         locationRestriction: {
           circle: {
@@ -299,7 +312,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         rankPreference: 'DISTANCE',
         includedTypes,
       };
-      if (pageToken) reqBody.pageToken = pageToken;
       const nearbyRes = await axios.post(
         'https://places.googleapis.com/v1/places:searchNearby',
         reqBody,
@@ -307,12 +319,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': fieldMask,
+            'X-Goog-FieldMask': nearbyFieldMask,
           },
         }
       );
       places = nearbyRes.data?.places || [];
-      nextPageToken = nearbyRes.data?.nextPageToken || undefined;
+      nextPageToken = undefined;
     }
 
     const out: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; distanceM?: number }> = [];
