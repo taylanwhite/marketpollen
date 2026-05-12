@@ -5,6 +5,9 @@ import { getAuthUid } from './lib/auth.js';
 import { canAccessStore } from './lib/store-access.js';
 
 const NEARBY_RADIUS_M = 2000;
+const EXPANDED_RADIUS_M = 4000;
+const MAX_RADIUS_M = 8000;
+const SEARCH_RADII_M = [NEARBY_RADIUS_M, EXPANDED_RADIUS_M, MAX_RADIUS_M] as const;
 const MAX_RESULTS = 20;
 const SAME_LOCATION_THRESHOLD_M = 50; // Filter out places within 50m of search center
 
@@ -14,7 +17,7 @@ const DEFAULT_TEXT_QUERY = 'business';
 
 function buildBoundingBox(lat: number, lng: number, radiusM: number) {
   const latDelta = radiusM / 111_320;
-  const lngDelta = radiusM / (111_320 * Math.cos(lat * Math.PI / 180));
+  const lngDelta = radiusM / (111_320 * Math.max(Math.cos(lat * Math.PI / 180), 0.01));
 
   return {
     low: {
@@ -71,14 +74,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: 'Google Places API key is not configured' });
   }
 
-  const body = req.body as { storeId: string; address?: string; lat?: number; lng?: number; textQuery?: string; pageToken?: string };
+  const body = req.body as { storeId: string; address?: string; lat?: number; lng?: number; textQuery?: string; pageToken?: string; radiusM?: number };
   const storeId = body?.storeId?.trim();
   const textQuery = body?.textQuery?.trim();
   // Google Places v1 returns up to 20 results per call and a nextPageToken
   // we can echo back to grab the next batch (up to 60 total). The token is
   // opaque and short-lived (~2min), so the client treats it as ephemeral.
   const pageToken = typeof body?.pageToken === 'string' ? body.pageToken.trim() : '';
-  console.log('places-nearby request:', { storeId, textQuery, address: body.address, lat: body.lat, lng: body.lng, hasPageToken: !!pageToken });
+  const requestedRadiusM = typeof body.radiusM === 'number' && SEARCH_RADII_M.includes(body.radiusM as typeof SEARCH_RADII_M[number])
+    ? body.radiusM
+    : NEARBY_RADIUS_M;
+  console.log('places-nearby request:', { storeId, textQuery, address: body.address, lat: body.lat, lng: body.lng, hasPageToken: !!pageToken, requestedRadiusM });
   if (!storeId) return res.status(400).json({ error: 'storeId required' });
 
   const can = await canAccessStore(uid, storeId);
@@ -127,66 +133,82 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Field mask: keep it tight so we only pay for fields we render.
     const placeFields = 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location';
     const textSearchFieldMask = `${placeFields},nextPageToken`;
+    const out: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; distanceM?: number }> = [];
+    const addFilteredPlaces = (sourcePlaces: any[]) => {
+      for (const p of sourcePlaces) {
+        const placeId = placeIdFromName(p.name) || placeIdFromName(p.id) || (p.id && typeof p.id === 'string' ? p.id.replace(/^places\//, '') : null);
+        if (!placeId || existingSet.has(placeId)) continue;
+
+        const placeLat = p.location?.latitude;
+        const placeLng = p.location?.longitude;
+        let distanceM: number | undefined;
+        if (placeLat != null && placeLng != null && lat != null && lng != null) {
+          distanceM = distanceMeters(lat, lng, placeLat, placeLng);
+          // Filter out places at or very near the search location (the store's own address).
+          if (distanceM < SAME_LOCATION_THRESHOLD_M) continue;
+        }
+
+        existingSet.add(placeId);
+        const name = p.displayName?.text || p.displayName || 'Unknown';
+        const address = p.formattedAddress || undefined;
+        const { city, state, zipCode } = parseAddressComponents(p.addressComponents);
+        out.push({ placeId, name, address, city, state, zipCode, distanceM });
+      }
+    };
+
     // One predictable search path:
     //   - blank input: search for "business"
     //   - manual input: search exactly what the marketer typed
     //   - preset buttons: the UI just writes that button label into the
     //     field, so it behaves exactly like manual input
     //
-    // This avoids Google Places type enums entirely. Results are constrained
-    // around the selected store, and then sorted by computed distance below.
+    // If the fresh search has no usable results after excluding existing
+    // businesses/opportunities, automatically widen from 2km -> 4km -> 8km.
+    // Pagination must keep using the radius that produced the current page,
+    // otherwise Google rejects the page token for mismatched parameters.
     const searchTerm = textQuery || DEFAULT_TEXT_QUERY;
-    console.log('Using TEXT SEARCH with query:', searchTerm, pageToken ? '(page 2+)' : '(page 1)');
-    const reqBody: Record<string, unknown> = {
-      textQuery: searchTerm,
-      locationRestriction: {
-        rectangle: buildBoundingBox(lat!, lng!, NEARBY_RADIUS_M),
-      },
-      maxResultCount: MAX_RESULTS,
-      rankPreference: 'DISTANCE',
-    };
-    // Google requires the original textQuery + location restriction on every
-    // page request, AND the pageToken. Sending the token alone returns an error.
-    if (pageToken) reqBody.pageToken = pageToken;
-    const textRes = await axios.post(
-      'https://places.googleapis.com/v1/places:searchText',
-      reqBody,
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': apiKey,
-          'X-Goog-FieldMask': textSearchFieldMask,
+    const radiiToTry = pageToken ? [requestedRadiusM] : SEARCH_RADII_M;
+    let searchRadiusM = requestedRadiusM;
+
+    for (const radiusM of radiiToTry) {
+      searchRadiusM = radiusM;
+      console.log('Using TEXT SEARCH with query:', searchTerm, `${radiusM}m`, pageToken ? '(page 2+)' : '(fresh search)');
+      const reqBody: Record<string, unknown> = {
+        textQuery: searchTerm,
+        locationRestriction: {
+          rectangle: buildBoundingBox(lat!, lng!, radiusM),
         },
-      }
-    );
-    places = textRes.data?.places || [];
-    nextPageToken = textRes.data?.nextPageToken || undefined;
-
-    const out: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; distanceM?: number }> = [];
-    for (const p of places) {
-      const placeId = placeIdFromName(p.name) || placeIdFromName(p.id) || (p.id && typeof p.id === 'string' ? p.id.replace(/^places\//, '') : null);
-      if (!placeId || existingSet.has(placeId)) continue;
-
-      // Calculate distance from search center
-      const placeLat = p.location?.latitude;
-      const placeLng = p.location?.longitude;
-      let distanceM: number | undefined;
-      if (placeLat != null && placeLng != null && lat != null && lng != null) {
-        distanceM = distanceMeters(lat, lng, placeLat, placeLng);
-        // Filter out places at or very near the search location (the store's own address)
-        if (distanceM < SAME_LOCATION_THRESHOLD_M) continue;
-      }
-
-      existingSet.add(placeId);
-      const name = p.displayName?.text || p.displayName || 'Unknown';
-      const address = p.formattedAddress || undefined;
-      const { city, state, zipCode } = parseAddressComponents(p.addressComponents);
-      out.push({ placeId, name, address, city, state, zipCode, distanceM });
+        maxResultCount: MAX_RESULTS,
+        rankPreference: 'DISTANCE',
+      };
+      // Google requires the original textQuery + location restriction on every
+      // page request, AND the pageToken. Sending the token alone returns an error.
+      if (pageToken) reqBody.pageToken = pageToken;
+      const textRes = await axios.post(
+        'https://places.googleapis.com/v1/places:searchText',
+        reqBody,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': textSearchFieldMask,
+          },
+        }
+      );
+      places = textRes.data?.places || [];
+      nextPageToken = textRes.data?.nextPageToken || undefined;
+      addFilteredPlaces(places);
+      if (out.length > 0 || pageToken) break;
     }
 
     // Sort by distance
     out.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity));
-    return res.status(200).json({ places: out, nextPageToken });
+    return res.status(200).json({
+      places: out,
+      nextPageToken,
+      searchRadiusM,
+      expanded: !pageToken && searchRadiusM > NEARBY_RADIUS_M,
+    });
   } catch (err: any) {
     console.error('Places search error:', err?.response?.data || err);
     const msg = err?.response?.data?.error?.message || err?.message || 'Places search failed';

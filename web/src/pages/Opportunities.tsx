@@ -55,6 +55,13 @@ interface NearbyPlace {
   distanceM?: number;
 }
 
+interface NearbyPlacesResponse {
+  places: NearbyPlace[];
+  nextPageToken?: string;
+  searchRadiusM?: number;
+  expanded?: boolean;
+}
+
 /**
  * Common bakery prospect types, surfaced as quick-tap chips on the Generate
  * tab. These are the categories that historically convert best for our
@@ -85,6 +92,12 @@ function formatDistance(meters?: number): string {
     return `${feet} ft`;
   }
   return `${miles.toFixed(1)} mi`;
+}
+
+function formatRadius(meters?: number): string {
+  if (!meters) return '';
+  const miles = meters / 1609.34;
+  return miles < 1 ? `${Math.round(meters)} m` : `${miles.toFixed(1)} mi`;
 }
 
 /**
@@ -133,6 +146,8 @@ export function Opportunities() {
   // more pages" (server omits it in the response). We track it so the
   // infinite-scroll sentinel can trigger the next fetch with the right token.
   const [nearbyPageToken, setNearbyPageToken] = useState<string>('');
+  const [nearbySearchRadiusM, setNearbySearchRadiusM] = useState<number>(2000);
+  const [nearbyExpanded, setNearbyExpanded] = useState(false);
   const [loadingNearbyMore, setLoadingNearbyMore] = useState(false);
   const [selectedPlaceIds, setSelectedPlaceIds] = useState<Set<string>>(new Set());
   const [loadingStore, setLoadingStore] = useState(true);
@@ -278,6 +293,8 @@ export function Opportunities() {
     setTextQuery('');
     setNearbyPlaces([]);
     setNearbyPageToken('');
+    setNearbySearchRadiusM(2000);
+    setNearbyExpanded(false);
     setSelectedPlaceIds(new Set());
     setError('');
     setSuccess('');
@@ -302,15 +319,23 @@ export function Opportunities() {
     // to a different query and Google would reject it.
     setNearbyPlaces([]);
     setNearbyPageToken('');
+    setNearbySearchRadiusM(2000);
+    setNearbyExpanded(false);
     setSelectedPlaceIds(new Set());
     const effectiveQuery = textQuery.trim();
     try {
       const payload: { storeId: string; address: string; textQuery?: string } = { storeId, address: address.trim() };
       if (effectiveQuery) payload.textQuery = effectiveQuery;
-      const res = await api.post<{ places: NearbyPlace[]; nextPageToken?: string }>('/places-nearby', payload);
+      const res = await api.post<NearbyPlacesResponse>('/places-nearby', payload);
       setNearbyPlaces(res.places || []);
       setNearbyPageToken(res.nextPageToken || '');
-      if (!res.places?.length) setSuccess('No new nearby places found (existing businesses and opportunities are excluded).');
+      setNearbySearchRadiusM(res.searchRadiusM || 2000);
+      setNearbyExpanded(!!res.expanded);
+      if (res.expanded && res.places?.length) {
+        setSuccess(`No matches in the immediate area, so we expanded to ${formatRadius(res.searchRadiusM)}.`);
+      } else if (!res.places?.length) {
+        setSuccess(`No new nearby places found within ${formatRadius(res.searchRadiusM || 8000)} (existing businesses and opportunities are excluded).`);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to find nearby places');
     } finally {
@@ -336,19 +361,21 @@ export function Opportunities() {
     if (!address) return;
     setLoadingNearbyMore(true);
     try {
-      const payload: { storeId: string; address: string; textQuery?: string; pageToken: string } = {
+      const payload: { storeId: string; address: string; textQuery?: string; pageToken: string; radiusM: number } = {
         storeId,
         address,
         pageToken: nearbyPageToken,
+        radiusM: nearbySearchRadiusM,
       };
       if (textQuery.trim()) payload.textQuery = textQuery.trim();
-      const res = await api.post<{ places: NearbyPlace[]; nextPageToken?: string }>('/places-nearby', payload);
+      const res = await api.post<NearbyPlacesResponse>('/places-nearby', payload);
       const incoming = res.places || [];
       setNearbyPlaces((prev) => {
         const seen = new Set(prev.map((p) => p.placeId));
         return [...prev, ...incoming.filter((p) => !seen.has(p.placeId))];
       });
       setNearbyPageToken(res.nextPageToken || '');
+      setNearbySearchRadiusM(res.searchRadiusM || nearbySearchRadiusM);
     } catch (err: any) {
       // Stop trying — clear the token so the sentinel disconnects and the
       // marketer doesn't see repeated failures from the same dead token.
@@ -357,7 +384,7 @@ export function Opportunities() {
     } finally {
       setLoadingNearbyMore(false);
     }
-  }, [storeId, nearbyPageToken, loadingNearbyMore, loadingNearby, textQuery, searchAddress, searchCity, searchState, searchZipCode]);
+  }, [storeId, nearbyPageToken, nearbySearchRadiusM, loadingNearbyMore, loadingNearby, textQuery, searchAddress, searchCity, searchState, searchZipCode]);
 
   // Sentinel for the Generate-tab nearby places list. When it scrolls into
   // view we fetch the next page from Google.
@@ -985,6 +1012,11 @@ export function Opportunities() {
                       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                         Tap places to select, then add them as opportunities.
                       </Typography>
+                      {nearbyExpanded && (
+                        <Alert severity="info" sx={{ mb: 1 }}>
+                          No matches in the immediate area, so we expanded the search to {formatRadius(nearbySearchRadiusM)}.
+                        </Alert>
+                      )}
                       <List
                         disablePadding
                         sx={{
