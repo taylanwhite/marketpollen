@@ -266,7 +266,35 @@ export function Opportunities() {
     return parts.join(', ');
   };
 
-  const handleFindNearby = async () => {
+  /**
+   * Wipe the active discovery query and surface the filter UI again. Called
+   * from the pinned "Reset Search" button that takes over the spot held by
+   * the filter input + Find button while results are visible. Keeps the
+   * search address (and "search around X" pill) intact — marketers almost
+   * always want to keep searching near the same place, just with a
+   * different category filter.
+   */
+  const handleResetSearch = () => {
+    setTextQuery('');
+    setNearbyPlaces([]);
+    setNearbyPageToken('');
+    setSelectedPlaceIds(new Set());
+    setError('');
+    setSuccess('');
+  };
+
+  /**
+   * Fire a fresh nearby-business search.
+   *
+   * `overrideTextQuery` is critical for chip/dialog auto-fire flows: those
+   * call `setTextQuery(preset)` immediately followed by `handleFindNearby()`,
+   * but React hasn't re-rendered yet so the function still sees the OLD
+   * `textQuery` from its closure. Passing the value in directly bypasses
+   * the closure entirely. Pass `''` to explicitly mean "no filter".
+   * Pass `undefined` (the default) when the user is using the textfield's
+   * Find button, in which case the closure's `textQuery` is correct.
+   */
+  const handleFindNearby = async (overrideTextQuery?: string) => {
     if (!storeId) return;
     const address = buildAddressString();
     if (!address.trim()) {
@@ -281,9 +309,10 @@ export function Opportunities() {
     setNearbyPlaces([]);
     setNearbyPageToken('');
     setSelectedPlaceIds(new Set());
+    const effectiveQuery = (overrideTextQuery !== undefined ? overrideTextQuery : textQuery).trim();
     try {
       const payload: { storeId: string; address: string; textQuery?: string } = { storeId, address: address.trim() };
-      if (textQuery.trim()) payload.textQuery = textQuery.trim();
+      if (effectiveQuery) payload.textQuery = effectiveQuery;
       const res = await api.post<{ places: NearbyPlace[]; nextPageToken?: string }>('/places-nearby', payload);
       setNearbyPlaces(res.places || []);
       setNearbyPageToken(res.nextPageToken || '');
@@ -808,6 +837,54 @@ export function Opportunities() {
                     )}
                   </Box>
 
+                  {/* Filter UI (textfield + chips + Find button) lives ONLY
+                      while there are no results to show. Once a search lands,
+                      the entire block swaps for a single pinned "Reset Search"
+                      button that wipes the query and brings the filters back
+                      with one tap — keeps thumb-space focused on results. */}
+                  {nearbyPlaces.length > 0 ? (
+                    <Box
+                      sx={{
+                        // Position-sticky so the button stays glued to the
+                        // top of the form area as the marketer scrolls
+                        // through nearby results below — they can always
+                        // back out of a search in one tap, no scroll up.
+                        position: 'sticky',
+                        top: { xs: 0, sm: 8 },
+                        zIndex: 2,
+                        bgcolor: 'background.paper',
+                        py: 1,
+                        // Stretch the bg slightly past the form padding so
+                        // there's no visible seam when content scrolls underneath.
+                        mx: { xs: -1.5, sm: -2 },
+                        px: { xs: 1.5, sm: 2 },
+                        borderBottom: 1,
+                        borderColor: 'divider',
+                      }}
+                    >
+                      <Button
+                        variant="contained"
+                        color="secondary"
+                        onClick={handleResetSearch}
+                        startIcon={<RestoreIcon />}
+                        fullWidth
+                        sx={{
+                          py: { xs: 1.25, sm: 0.75 },
+                          fontSize: { xs: '1rem', sm: '0.875rem' },
+                          textTransform: 'none',
+                          fontWeight: 600,
+                        }}
+                      >
+                        Reset search
+                        {textQuery.trim() && (
+                          <Typography component="span" sx={{ ml: 0.75, opacity: 0.85, fontSize: '0.85rem', fontWeight: 400 }}>
+                            ({textQuery.trim()})
+                          </Typography>
+                        )}
+                      </Button>
+                    </Box>
+                  ) : (
+                    <>
                   <Box>
                     <TextField
                       label="Filter by type (optional)"
@@ -845,13 +922,14 @@ export function Opportunities() {
                                 setTextQuery(preset);
                                 // Auto-fire the search so the marketer's
                                 // intent ("show me real estate near me") is
-                                // a single tap away. They can still tap the
-                                // main button after typing custom text.
+                                // a single tap away. Pass the preset to
+                                // `handleFindNearby` explicitly — relying on
+                                // the just-set state would race React's
+                                // render and the request would go out
+                                // without `textQuery`, which Google rejects
+                                // with "Request contains an invalid argument".
                                 if (isOnline && !loadingNearby) {
-                                  // Defer one tick so the textQuery state
-                                  // update is visible to handleFindNearby
-                                  // when it builds its payload.
-                                  setTimeout(() => handleFindNearby(), 0);
+                                  handleFindNearby(preset);
                                 }
                               }}
                               sx={{
@@ -920,6 +998,8 @@ export function Opportunities() {
                       </Button>
                     </span>
                   </Tooltip>
+                    </>
+                  )}
                   {nearbyPlaces.length > 0 && (
                     <>
                       <Divider sx={{ my: 2 }} />
@@ -1069,8 +1149,12 @@ export function Opportunities() {
         onClose={() => setFilterDialogOpen(false)}
         onPick={(type) => {
           setTextQuery(type);
+          // Pass the picked type directly so the search uses it on the
+          // first attempt. The `setTextQuery` call above schedules a
+          // re-render, but `handleFindNearby` would otherwise capture the
+          // pre-update closure and send a payload with no `textQuery`.
           if (isOnline && !loadingNearby) {
-            setTimeout(() => handleFindNearby(), 0);
+            handleFindNearby(type);
           }
         }}
       />

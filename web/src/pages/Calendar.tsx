@@ -1016,44 +1016,83 @@ export function Calendar() {
       )}
 
       {/* Calendar Header */}
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <IconButton onClick={() => navigateMonth('prev')} size="small">
+      <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: { xs: 1, sm: 2 } }}>
+          {/* Title block: arrows hug the month label tightly on mobile so
+              there's more horizontal room. minWidth was hard-coded at 200px
+              which on a 360px phone screen left almost no space for the
+              Today button — replaced with a flexible width. */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 2 }, flex: 1, minWidth: 0 }}>
+            <IconButton onClick={() => navigateMonth('prev')} size="small" aria-label="Previous month">
               <ChevronLeftIcon />
             </IconButton>
-            <Typography variant="h6" sx={{ minWidth: 200, textAlign: 'center' }}>
+            <Typography
+              variant="h6"
+              sx={{
+                textAlign: 'center',
+                flex: 1,
+                fontSize: { xs: '1rem', sm: '1.25rem' },
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
               {monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}
             </Typography>
-            <IconButton onClick={() => navigateMonth('next')} size="small">
+            <IconButton onClick={() => navigateMonth('next')} size="small" aria-label="Next month">
               <ChevronRightIcon />
             </IconButton>
           </Box>
-          <Button
-            variant="outlined"
-            startIcon={<TodayIcon />}
-            onClick={goToToday}
-            size="small"
-          >
-            Today
-          </Button>
+          {/* Today button shrinks to icon-only on mobile to claim back the
+              ~70px the "Today" label was eating from the title row. */}
+          {isMobile ? (
+            <IconButton
+              onClick={goToToday}
+              size="small"
+              aria-label="Jump to today"
+              sx={{ ml: 0.5 }}
+            >
+              <TodayIcon />
+            </IconButton>
+          ) : (
+            <Button
+              variant="outlined"
+              startIcon={<TodayIcon />}
+              onClick={goToToday}
+              size="small"
+            >
+              Today
+            </Button>
+          )}
         </Box>
 
         {/* Calendar Grid */}
-        <Grid container spacing={0.5}>
-          {/* Day Headers */}
+        <Grid container spacing={isMobile ? 0.25 : 0.5}>
+          {/* Day Headers — single letter on mobile so the seven columns
+              don't have to fight a ~30px label, full name on desktop. */}
           {dayNames.map(day => (
             <Grid size={{ xs: 12 / 7 }} key={day}>
-              <Box sx={{ textAlign: 'center', py: 1, fontWeight: 600, color: 'text.secondary' }}>
-                {day}
+              <Box
+                sx={{
+                  textAlign: 'center',
+                  py: { xs: 0.5, sm: 1 },
+                  fontWeight: 600,
+                  color: 'text.secondary',
+                  fontSize: { xs: '0.7rem', sm: '0.875rem' },
+                }}
+              >
+                {isMobile ? day[0] : day}
               </Box>
             </Grid>
           ))}
 
-          {/* Calendar Days */}
+          {/* Calendar Days. Mobile uses a compact dot view (iOS-Calendar
+              style) because chip labels at ~50px column width were
+              truncating to garbage like "R…" / "Fo…". Desktop keeps the
+              existing chip-with-label view since there's room to breathe. */}
           {days.map((date, index) => {
             const dayEvents = date ? getEventsForDate(date) : [];
-            const isToday = date && 
+            const isToday = date &&
               date.getDate() === new Date().getDate() &&
               date.getMonth() === new Date().getMonth() &&
               date.getFullYear() === new Date().getFullYear();
@@ -1067,7 +1106,7 @@ export function Calendar() {
               <Grid size={{ xs: 12 / 7 }} key={index}>
                 <Card
                   sx={{
-                    minHeight: 100,
+                    minHeight: { xs: 56, sm: 100 },
                     cursor: date ? 'pointer' : 'default',
                     backgroundColor: isSelected ? 'action.selected' : isToday ? 'action.hover' : isPast ? 'action.disabledBackground' : 'background.paper',
                     border: isToday ? 2 : 1,
@@ -1082,58 +1121,138 @@ export function Calendar() {
                     }
                   }}
                 >
-                  <CardContent sx={{ p: 1, '&:last-child': { pb: 1 } }}>
+                  <CardContent sx={{ p: { xs: 0.5, sm: 1 }, '&:last-child': { pb: { xs: 0.5, sm: 1 } } }}>
                     {date && (
                       <>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-                          <Typography
-                            variant="body2"
+                        {isMobile ? (
+                          // ── Mobile cell: number on top, up to 4 colored
+                          // dots underneath (one per event, capped). When
+                          // more than 4 events, the 4th dot becomes a tiny
+                          // "+N" pill so the overflow is still visible.
+                          <Box
                             sx={{
-                              fontWeight: isToday ? 700 : 500,
-                              color: isToday ? 'primary.main' : 'text.primary',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              gap: 0.5,
                             }}
                           >
-                            {date.getDate()}
-                          </Typography>
-                          {dayEvents.length > 0 && (
-                            <Chip
-                              label={dayEvents.length}
-                              size="small"
-                              sx={{ height: 18, fontSize: '0.65rem' }}
-                            />
-                          )}
-                        </Box>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                          {dayEvents.slice(0, 2).map((event) => {
-                            const icon = getMethodIcon(event.type);
-                            return (
-                              <Tooltip key={event.id} title={event.title}>
-                                <Chip
-                                  label={event.title}
-                                  size="small"
-                                  icon={icon || undefined}
-                                  color={event.status === 'completed' ? 'success' : event.status === 'cancelled' ? 'default' : getMethodColor(event.type) as any}
-                                  variant={event.status === 'completed' ? 'outlined' : 'filled'}
-                                  sx={{
-                                    fontSize: '0.65rem',
-                                    height: 20,
-                                    '& .MuiChip-label': { px: 0.5 },
-                                  }}
-                                  onClick={(e: React.MouseEvent) => {
-                                    e.stopPropagation();
-                                    setSelectedDate(date);
-                                    openEditEventDialog(event);
-                                  }}
-                                />
-                              </Tooltip>
-                            );
-                          })}
-                          {dayEvents.length > 2 && (
-                            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
-                              +{dayEvents.length - 2} more
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                fontWeight: isToday ? 700 : 500,
+                                color: isToday ? 'primary.main' : 'text.primary',
+                                fontSize: '0.85rem',
+                                lineHeight: 1,
+                              }}
+                            >
+                              {date.getDate()}
                             </Typography>
-                          )}
-                        </Box>
+                            {dayEvents.length > 0 && (
+                              <Box
+                                sx={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: 0.4,
+                                  flexWrap: 'wrap',
+                                  maxWidth: '100%',
+                                }}
+                              >
+                                {dayEvents.slice(0, dayEvents.length > 4 ? 3 : 4).map((event) => {
+                                  const palette = event.status === 'completed'
+                                    ? 'success'
+                                    : event.status === 'cancelled'
+                                      ? 'default'
+                                      : getMethodColor(event.type);
+                                  // Map our palette key to a real CSS color via theme
+                                  const bg = palette === 'default'
+                                    ? theme.palette.text.disabled
+                                    : (theme.palette as any)[palette]?.main || theme.palette.primary.main;
+                                  return (
+                                    <Box
+                                      key={event.id}
+                                      sx={{
+                                        width: 6,
+                                        height: 6,
+                                        borderRadius: '50%',
+                                        bgcolor: bg,
+                                        opacity: event.status === 'cancelled' ? 0.4 : 1,
+                                      }}
+                                    />
+                                  );
+                                })}
+                                {dayEvents.length > 4 && (
+                                  <Typography
+                                    sx={{
+                                      fontSize: '0.6rem',
+                                      lineHeight: 1,
+                                      color: 'text.secondary',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    +{dayEvents.length - 3}
+                                  </Typography>
+                                )}
+                              </Box>
+                            )}
+                          </Box>
+                        ) : (
+                          // ── Desktop cell: number + count badge + chip
+                          // labels. Plenty of room here so the original
+                          // detailed view stays.
+                          <>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  fontWeight: isToday ? 700 : 500,
+                                  color: isToday ? 'primary.main' : 'text.primary',
+                                }}
+                              >
+                                {date.getDate()}
+                              </Typography>
+                              {dayEvents.length > 0 && (
+                                <Chip
+                                  label={dayEvents.length}
+                                  size="small"
+                                  sx={{ height: 18, fontSize: '0.65rem' }}
+                                />
+                              )}
+                            </Box>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                              {dayEvents.slice(0, 2).map((event) => {
+                                const icon = getMethodIcon(event.type);
+                                return (
+                                  <Tooltip key={event.id} title={event.title}>
+                                    <Chip
+                                      label={event.title}
+                                      size="small"
+                                      icon={icon || undefined}
+                                      color={event.status === 'completed' ? 'success' : event.status === 'cancelled' ? 'default' : getMethodColor(event.type) as any}
+                                      variant={event.status === 'completed' ? 'outlined' : 'filled'}
+                                      sx={{
+                                        fontSize: '0.65rem',
+                                        height: 20,
+                                        '& .MuiChip-label': { px: 0.5 },
+                                      }}
+                                      onClick={(e: React.MouseEvent) => {
+                                        e.stopPropagation();
+                                        setSelectedDate(date);
+                                        openEditEventDialog(event);
+                                      }}
+                                    />
+                                  </Tooltip>
+                                );
+                              })}
+                              {dayEvents.length > 2 && (
+                                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                  +{dayEvents.length - 2} more
+                                </Typography>
+                              )}
+                            </Box>
+                          </>
+                        )}
                       </>
                     )}
                   </CardContent>
@@ -1142,6 +1261,36 @@ export function Calendar() {
             );
           })}
         </Grid>
+        {/* Mobile-only dot legend so the colored circles aren't a mystery.
+            Hidden on desktop where the chips show full labels and icons. */}
+        {isMobile && (
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 1.5,
+              justifyContent: 'center',
+              mt: 1.5,
+              pt: 1.5,
+              borderTop: 1,
+              borderColor: 'divider',
+            }}
+          >
+            {[
+              { key: 'meeting', label: 'Visit', color: theme.palette.warning.main },
+              { key: 'call', label: 'Call', color: theme.palette.success.main },
+              { key: 'email', label: 'Email', color: theme.palette.primary.main },
+              { key: 'text', label: 'Text', color: theme.palette.info.main },
+            ].map((item) => (
+              <Box key={item.key} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: item.color }} />
+                <Typography sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>
+                  {item.label}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        )}
       </Paper>
 
       {/* Selected Date Events */}
