@@ -12,6 +12,22 @@ const SAME_LOCATION_THRESHOLD_M = 50; // Filter out places within 50m of search 
 // search text so blank, manual, and button searches all follow one path.
 const DEFAULT_TEXT_QUERY = 'business';
 
+function buildBoundingBox(lat: number, lng: number, radiusM: number) {
+  const latDelta = radiusM / 111_320;
+  const lngDelta = radiusM / (111_320 * Math.cos(lat * Math.PI / 180));
+
+  return {
+    low: {
+      latitude: lat - latDelta,
+      longitude: lng - lngDelta,
+    },
+    high: {
+      latitude: lat + latDelta,
+      longitude: lng + lngDelta,
+    },
+  };
+}
+
 /** Calculate distance between two lat/lng points in meters using Haversine formula */
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000; // Earth's radius in meters
@@ -124,10 +140,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const reqBody: Record<string, unknown> = {
       textQuery: searchTerm,
       locationRestriction: {
-        circle: {
-          center: { latitude: lat, longitude: lng },
-          radius: NEARBY_RADIUS_M,
-        },
+        rectangle: buildBoundingBox(lat!, lng!, NEARBY_RADIUS_M),
       },
       maxResultCount: MAX_RESULTS,
       rankPreference: 'DISTANCE',
