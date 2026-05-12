@@ -284,17 +284,11 @@ export function Opportunities() {
   };
 
   /**
-   * Fire a fresh nearby-business search.
-   *
-   * `overrideTextQuery` is critical for chip/dialog auto-fire flows: those
-   * call `setTextQuery(preset)` immediately followed by `handleFindNearby()`,
-   * but React hasn't re-rendered yet so the function still sees the OLD
-   * `textQuery` from its closure. Passing the value in directly bypasses
-   * the closure entirely. Pass `''` to explicitly mean "no filter".
-   * Pass `undefined` (the default) when the user is using the textfield's
-   * Find button, in which case the closure's `textQuery` is correct.
+   * Fire a fresh nearby-business search. Preset filter buttons only write
+   * into `textQuery`, so blank, manual, and preset searches all submit
+   * through this same path.
    */
-  const handleFindNearby = async (overrideTextQuery?: string) => {
+  const handleFindNearby = async () => {
     if (!storeId) return;
     const address = buildAddressString();
     if (!address.trim()) {
@@ -309,7 +303,7 @@ export function Opportunities() {
     setNearbyPlaces([]);
     setNearbyPageToken('');
     setSelectedPlaceIds(new Set());
-    const effectiveQuery = (overrideTextQuery !== undefined ? overrideTextQuery : textQuery).trim();
+    const effectiveQuery = textQuery.trim();
     try {
       const payload: { storeId: string; address: string; textQuery?: string } = { storeId, address: address.trim() };
       if (effectiveQuery) payload.textQuery = effectiveQuery;
@@ -895,12 +889,10 @@ export function Opportunities() {
                       fullWidth
                     />
                     {/* Quick-tap chips for the most common bakery prospect
-                        categories. Tapping a chip both fills the field AND
-                        kicks off the search immediately — one-tap discovery
-                        for the field marketer. We hide the entire row once
-                        results load so the chips don't compete with them
-                        for thumb-space (the "minimal/no screen space when
-                        loaded" requirement). */}
+                        categories. Tapping a chip only fills the text field;
+                        the marketer then taps Find, which behaves exactly
+                        like manual input. We hide the row once results load
+                        so the chips don't compete for thumb-space. */}
                     {nearbyPlaces.length === 0 && !loadingNearby && (
                       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1 }}>
                         {QUICK_TYPE_FILTERS.map((preset) => {
@@ -920,17 +912,6 @@ export function Opportunities() {
                                   return;
                                 }
                                 setTextQuery(preset);
-                                // Auto-fire the search so the marketer's
-                                // intent ("show me real estate near me") is
-                                // a single tap away. Pass the preset to
-                                // `handleFindNearby` explicitly — relying on
-                                // the just-set state would race React's
-                                // render and the request would go out
-                                // without `textQuery`, which Google rejects
-                                // with "Request contains an invalid argument".
-                                if (isOnline && !loadingNearby) {
-                                  handleFindNearby(preset);
-                                }
                               }}
                               sx={{
                                 cursor: 'pointer',
@@ -948,9 +929,7 @@ export function Opportunities() {
                         })}
                         {/* Escape hatch: tap "More…" to open the full
                             filter directory dialog. Visually distinct from
-                            the quick chips (icon + dashed-style outline)
-                            so marketers don't mistake it for another
-                            preset that auto-fires a search. */}
+                            the quick chips (icon + dashed-style outline). */}
                         <Chip
                           icon={<MoreFiltersIcon sx={{ fontSize: 14, ml: 0.5 }} />}
                           label="More…"
@@ -1141,21 +1120,14 @@ export function Opportunities() {
       />
 
       {/* Full filter directory. Opens from the "More…" chip on the
-          Generate tab. Picking a category fills `textQuery` and immediately
-          fires the search — same one-tap flow as the inline quick chips. */}
+          Generate tab. Picking a category fills `textQuery`; the Find button
+          then runs the same flow as manual input. */}
       <FilterTypeDialog
         open={filterDialogOpen}
         currentValue={textQuery}
         onClose={() => setFilterDialogOpen(false)}
         onPick={(type) => {
           setTextQuery(type);
-          // Pass the picked type directly so the search uses it on the
-          // first attempt. The `setTextQuery` call above schedules a
-          // re-render, but `handleFindNearby` would otherwise capture the
-          // pre-update closure and send a payload with no `textQuery`.
-          if (isOnline && !loadingNearby) {
-            handleFindNearby(type);
-          }
         }}
       />
     </Box>
