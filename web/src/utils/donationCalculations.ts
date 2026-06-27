@@ -89,7 +89,7 @@ export function getReachoutsWithDonations(
   results.sort((a, b) => {
     const dateA = a.reachout.date instanceof Date ? a.reachout.date : new Date(a.reachout.date);
     const dateB = b.reachout.date instanceof Date ? b.reachout.date : new Date(b.reachout.date);
-    return dateB.getTime() - dateA.getTime();
+    return dateA.getTime() - dateB.getTime();
   });
 
   return results;
