@@ -37,6 +37,27 @@ export interface ExtractProduct {
   mouthValue: number;
 }
 
+export interface ExtractedBusinessCard {
+  firstName?: string;
+  lastName?: string;
+  businessName?: string;
+  title?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
+  website?: string;
+  personalDetails?: string;
+  reachoutNote: string;
+  suggestedFollowUpDays: number;
+}
+
+export async function extractBusinessCardInfo(imageDataUrl: string): Promise<ExtractedBusinessCard> {
+  return api.post<ExtractedBusinessCard>('/extract-business-card', { imageDataUrl });
+}
+
 export async function extractContactInfo(transcript: string, products?: ExtractProduct[]): Promise<{
   firstName?: string;
   lastName?: string;

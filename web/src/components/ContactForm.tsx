@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useVoiceInput } from '../hooks/useVoiceInput';
-import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
+import { extractBusinessCardInfo, extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
 import { Reachout, DonationData, Business, SLUG_TO_FIELD } from '../types';
 import { createEmptyDonation, calculateMouths } from '../utils/donationCalculations';
 import { useCampaign } from '../contexts/CampaignContext';
@@ -49,6 +49,7 @@ import {
   Clear as ClearIcon,
   Business as BusinessIcon,
   Person as PersonIcon,
+  Badge as BusinessCardIcon,
 } from '@mui/icons-material';
 
 type ReachoutType = 'meeting' | 'call' | 'email' | 'text' | 'other';
@@ -91,6 +92,37 @@ function splitName(full: string): { firstName: string; lastName: string } {
   return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
 }
 
+function readBusinessCardImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(new Error('Could not read business card image'));
+    reader.onload = () => {
+      image.onerror = () => reject(new Error('Could not load business card image'));
+      image.onload = () => {
+        const maxSide = 1600;
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        const width = Math.round(image.width * scale);
+        const height = Math.round(image.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Could not prepare business card image'));
+          return;
+        }
+        ctx.drawImage(image, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      image.src = String(reader.result || '');
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
 export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) {
   const { userId } = useAuth();
   const { products } = useCampaign();
@@ -117,9 +149,13 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
 
   const [rawNotes, setRawNotes] = useState('');
   const [hasExtracted, setHasExtracted] = useState(false);
+  const [businessCardProcessing, setBusinessCardProcessing] = useState(false);
+  const [businessCardMessage, setBusinessCardMessage] = useState('');
+  const [hasBusinessCardDraft, setHasBusinessCardDraft] = useState(false);
   // Snapshot of whatever the user had typed when they last started dictating,
   // so the live transcript appends instead of overwriting their text.
   const typedPrefixRef = useRef<string>('');
+  const businessCardInputRef = useRef<HTMLInputElement | null>(null);
 
   const [form, setForm] = useState<FormState>({
     name: '',
@@ -299,13 +335,133 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         }
       }
 
+      setHasBusinessCardDraft(false);
       setHasExtracted(true);
     } catch (err) {
       console.error('AI extraction error:', err);
       setError('AI processing failed. You can fill the fields in manually below.');
+      setHasBusinessCardDraft(false);
       setHasExtracted(true);
     } finally {
       setAiProcessing(false);
+    }
+  };
+
+  const stageBusinessFromExtractedCard = async (extracted: {
+    businessName?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    zipCode?: string;
+  }) => {
+    if (!extracted.businessName) return;
+
+    const target = extracted.businessName.toLowerCase();
+    const match = businesses.find((b) => {
+      const n = b.name.toLowerCase();
+      return n === target || n.includes(target) || target.includes(n);
+    });
+
+    if (match) {
+      setSelectedBusinessId(match.id);
+      setShowNewBusiness(false);
+      setBusinessCardMessage(`Matched existing business: ${match.name}`);
+      return;
+    }
+
+    setSelectedBusinessId('');
+    setShowNewBusiness(true);
+    setNewBusinessName(extracted.businessName);
+    setNewBusinessAddress({
+      address: extracted.address || '',
+      city: extracted.city || '',
+      state: extracted.state || '',
+      zipCode: extracted.zipCode || '',
+    });
+    setNewBusinessPlaceId(null);
+
+    try {
+      const lookup = await api.post<{ places: PlaceResult[] }>('/places-lookup', {
+        name: extracted.businessName,
+        address: extracted.address || undefined,
+        city: extracted.city || undefined,
+        state: extracted.state || undefined,
+        zipCode: extracted.zipCode || undefined,
+      });
+      const place = lookup.places?.[0];
+      if (!place) {
+        setBusinessCardMessage(`Ready to create new business: ${extracted.businessName}`);
+        return;
+      }
+      setNewBusinessName(place.name || extracted.businessName);
+      setNewBusinessPlaceId(place.placeId);
+      setNewBusinessAddress({
+        address: place.address || extracted.address || '',
+        city: place.city || extracted.city || '',
+        state: place.state || extracted.state || '',
+        zipCode: place.zipCode || extracted.zipCode || '',
+      });
+      setBusinessCardMessage(`Found Google Place for ${place.name}. It will be linked when you save.`);
+    } catch (err) {
+      console.warn('Business card place lookup failed:', err);
+      setBusinessCardMessage(`Ready to create new business: ${extracted.businessName}`);
+    }
+  };
+
+  const handleBusinessCardUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('Upload a photo or image of a business card.');
+      return;
+    }
+    if (!isOnline) {
+      setError('Business card upload needs service. You can still type the details manually.');
+      setHasExtracted(true);
+      return;
+    }
+
+    setError('');
+    setBusinessCardMessage('');
+    setBusinessCardProcessing(true);
+    try {
+      const imageDataUrl = await readBusinessCardImage(file);
+      const extracted = await extractBusinessCardInfo(imageDataUrl);
+      const combinedName = [extracted.firstName, extracted.lastName].filter(Boolean).join(' ').trim();
+      const noteParts = [
+        extracted.reachoutNote || 'Business card uploaded.',
+        extracted.title ? `Title: ${extracted.title}.` : '',
+        extracted.website ? `Website: ${extracted.website}.` : '',
+      ].filter(Boolean);
+
+      const cardNotes = noteParts.join(' ');
+      setRawNotes((prev) => {
+        const existing = prev.trim();
+        return existing ? `${cardNotes}\n\nAdditional notes: ${existing}` : `${cardNotes}\n\nAdditional notes: `;
+      });
+      setForm((prev) => ({
+        ...prev,
+        name: combinedName || prev.name,
+        email: extracted.email || prev.email,
+        phone: extracted.phone || prev.phone,
+        personalDetails: extracted.personalDetails || prev.personalDetails,
+        reachoutNote: noteParts.join(' ') || prev.reachoutNote,
+        reachoutType: 'other',
+        followUpDays: extracted.suggestedFollowUpDays || prev.followUpDays,
+      }));
+      setIncludeDonation(false);
+      setDonationData(createEmptyDonation(products));
+      await stageBusinessFromExtractedCard(extracted);
+      setHasBusinessCardDraft(true);
+      setHasExtracted(false);
+      setBusinessCardMessage('Business card extracted. Add any notes by typing or dictating, then tap Extract with AI.');
+    } catch (err) {
+      console.error('Business card extraction error:', err);
+      setError('Could not read that business card. You can type the details manually below.');
+      setHasExtracted(true);
+    } finally {
+      setBusinessCardProcessing(false);
     }
   };
 
@@ -324,6 +480,8 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     setIncludeDonation(false);
     setDonationData(createEmptyDonation(products));
     setError('');
+    setBusinessCardMessage('');
+    setHasBusinessCardDraft(false);
     setSuccess(false);
     setSelectedBusinessId(defaultBusinessId || '');
     setShowNewBusiness(false);
@@ -348,43 +506,54 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     setShowPlacePicker(true);
   };
 
+  const createBusinessRecord = async (placeId?: string): Promise<string> => {
+    if (!newBusinessName.trim()) {
+      throw new Error('Business name is required');
+    }
+    if (!permissions.currentStoreId) {
+      throw new Error('Please select a store first');
+    }
+    const storeId = permissions.currentStoreId;
+    // Generate the id client-side so the queued POST is idempotent on retry
+    // and we can keep working offline.
+    const newId = crypto.randomUUID();
+    const optimistic: Business = {
+      id: newId,
+      storeId,
+      name: newBusinessName.trim(),
+      address: newBusinessAddress.address || undefined,
+      city: newBusinessAddress.city || undefined,
+      state: newBusinessAddress.state || undefined,
+      zipCode: newBusinessAddress.zipCode || undefined,
+      placeId: placeId || newBusinessPlaceId || undefined,
+      createdAt: new Date(),
+      createdBy: userId || '',
+    };
+
+    await api.queuePost(`/businesses?storeId=${storeId}`, {
+      id: newId,
+      name: optimistic.name,
+      address: optimistic.address,
+      city: optimistic.city,
+      state: optimistic.state,
+      zipCode: optimistic.zipCode,
+      placeId: optimistic.placeId,
+    }, { label: `New business · ${optimistic.name}` });
+
+    // Optimistically add the business to the picker so the user can keep
+    // working before the server replies.
+    setBusinesses((prev) => {
+      if (prev.some((b) => b.id === newId)) return prev;
+      return [...prev, optimistic].sort((a, b) => a.name.localeCompare(b.name));
+    });
+    return newId;
+  };
+
   const finishCreateBusiness = async (placeId?: string) => {
     setCreatingBusiness(true);
     setError('');
     try {
-      const storeId = permissions.currentStoreId!;
-      // Generate the id client-side so the queued POST is idempotent on retry
-      // and we can keep working offline.
-      const newId = crypto.randomUUID();
-      const optimistic: Business = {
-        id: newId,
-        storeId,
-        name: newBusinessName.trim(),
-        address: newBusinessAddress.address || undefined,
-        city: newBusinessAddress.city || undefined,
-        state: newBusinessAddress.state || undefined,
-        zipCode: newBusinessAddress.zipCode || undefined,
-        placeId: placeId || newBusinessPlaceId || undefined,
-        createdAt: new Date(),
-        createdBy: userId || '',
-      };
-
-      await api.queuePost(`/businesses?storeId=${storeId}`, {
-        id: newId,
-        name: optimistic.name,
-        address: optimistic.address,
-        city: optimistic.city,
-        state: optimistic.state,
-        zipCode: optimistic.zipCode,
-        placeId: optimistic.placeId,
-      }, { label: `New business · ${optimistic.name}` });
-
-      // Optimistically add the business to the picker so the user can keep
-      // working before the server replies.
-      setBusinesses((prev) => {
-        if (prev.some((b) => b.id === newId)) return prev;
-        return [...prev, optimistic].sort((a, b) => a.name.localeCompare(b.name));
-      });
+      const newId = await createBusinessRecord(placeId);
       setSelectedBusinessId(newId);
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
@@ -407,10 +576,6 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       setError('You must be logged in to save a visit');
       return;
     }
-    if (!selectedBusinessId) {
-      setError('Pick or create a business for this contact first');
-      return;
-    }
     if (!permissions.currentStoreId) {
       setError('Please select a store first');
       return;
@@ -421,6 +586,18 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       const now = new Date();
       const { firstName, lastName } = splitName(form.name);
       const storeId = permissions.currentStoreId;
+      let businessIdForSave = selectedBusinessId;
+      if (!businessIdForSave && showNewBusiness && newBusinessName.trim()) {
+        businessIdForSave = await createBusinessRecord(newBusinessPlaceId || undefined);
+        setSelectedBusinessId(businessIdForSave);
+        setNewBusinessName('');
+        setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+        setNewBusinessPlaceId(null);
+        setShowNewBusiness(false);
+      }
+      if (!businessIdForSave) {
+        throw new Error('Pick or create a business for this contact first');
+      }
       const contactName = `${firstName} ${lastName}`.trim() || form.email || 'New contact';
 
       // Client-generate everything that previously required server-side ids,
@@ -487,7 +664,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       // immediately (even offline) referencing this id.
       await api.queuePost(`/contacts?storeId=${storeId}`, {
         id: newContactId,
-        businessId: selectedBusinessId,
+        businessId: businessIdForSave,
         firstName: firstName || null,
         lastName: lastName || null,
         email: form.email || null,
@@ -518,7 +695,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           date: normalizedNow.toISOString(),
           type: 'reachout',
           contactId: newContactId,
-          businessId: selectedBusinessId,
+          businessId: businessIdForSave,
           priority: 'medium',
           status: 'completed',
           createdBy: userId,
@@ -536,7 +713,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           date: normalizedDate.toISOString(),
           type: 'followup',
           contactId: newContactId,
-          businessId: selectedBusinessId,
+          businessId: businessIdForSave,
           priority: suggestedFollowUpPriority || 'medium',
           status: 'scheduled',
           createdBy: userId,
@@ -621,12 +798,44 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         onSelect={handleNearbyPlaceTap}
       />
 
+      <Box>
+        <input
+          ref={businessCardInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          onChange={handleBusinessCardUpload}
+        />
+        <Button
+          variant="outlined"
+          fullWidth
+          startIcon={businessCardProcessing ? <CircularProgress size={18} /> : <BusinessCardIcon />}
+          onClick={() => businessCardInputRef.current?.click()}
+          disabled={!isOnline || loading || aiProcessing || businessCardProcessing}
+          sx={{
+            borderColor: 'rgba(245, 200, 66, 0.8)',
+            color: '#2d2d2d',
+            fontWeight: 700,
+            py: 1.25,
+            '&:hover': { borderColor: '#e8b923', bgcolor: 'rgba(245, 200, 66, 0.12)' },
+          }}
+        >
+          {businessCardProcessing ? 'Reading business card…' : 'Upload business card'}
+        </Button>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+          Snap or upload a card, then add notes by typing or dictating before review.
+        </Typography>
+      </Box>
+
       {/* Step 1: dictate / type the visit */}
       <Box>
         <TextField
           value={rawNotes}
           onChange={(e) => setRawNotes(e.target.value)}
-          placeholder='e.g. "Visited Sarah at Lewis Bank, dropped off a sample tray. She loves hiking. Wants to chat about a corporate order next week."'
+          placeholder={hasBusinessCardDraft
+            ? 'Add notes about this contact, conversation, donation, or next step.'
+            : 'e.g. "Visited Sarah at Lewis Bank, dropped off a sample tray. She loves hiking. Wants to chat about a corporate order next week."'}
           multiline
           minRows={4}
           maxRows={10}
@@ -731,13 +940,19 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             '&.Mui-disabled': { bgcolor: 'rgba(0,0,0,0.08)' },
           }}
         >
-          {aiProcessing ? 'Extracting…' : 'Extract with AI'}
+          {aiProcessing ? 'Extracting…' : hasBusinessCardDraft ? 'Extract card & notes with AI' : 'Extract with AI'}
         </Button>
       )}
 
       {error && (
         <Alert severity="error" onClose={() => setError('')}>
           {error}
+        </Alert>
+      )}
+
+      {businessCardMessage && !error && (
+        <Alert severity="info" onClose={() => setBusinessCardMessage('')}>
+          {businessCardMessage}
         </Alert>
       )}
 

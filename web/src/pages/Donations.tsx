@@ -5,7 +5,16 @@ import { useDonation } from '../contexts/DonationContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { useTheme } from '@mui/material/styles';
 import { useMediaQuery } from '@mui/material';
-import { Contact, Reachout, DonationData, CampaignProduct, SLUG_TO_FIELD } from '../types';
+import { Business, Contact, DonationData } from '../types';
+import {
+  buildDonationExportSheet,
+  formatBusinessAddress,
+  getDonationExportFilename,
+  getDonationExportSheetName,
+  getOrgDonationExportFilename,
+  getDonationExportProducts,
+  type DonationExportRow,
+} from '../utils/donationExport';
 import { PullToRefreshIndicator } from '../components/PullToRefreshIndicator';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { haptics } from '../utils/haptics';
@@ -60,12 +69,7 @@ import {
   FileDownload as FileDownloadIcon,
 } from '@mui/icons-material';
 
-interface DonationRow {
-  contact: Contact;
-  reachout: Reachout;
-  mouths: number;
-  businessName: string;
-}
+type DonationRow = DonationExportRow;
 
 const shimmer = keyframes`
   0% { background-position: -200% center; }
@@ -146,13 +150,15 @@ export function Donations() {
       const storeId = permissions.currentStoreId;
 
       const [businessList, contactsList] = await Promise.all([
-        api.get<Array<{ id: string; name: string }>>(`/businesses?storeId=${storeId}`),
+        api.get<Business[]>(`/businesses?storeId=${storeId}`),
         api.get<Contact[]>(`/contacts?storeId=${storeId}`),
       ]);
 
-      const businessMap = new Map<string, string>();
-      businessList.forEach((b) => businessMap.set(b.id, b.name));
-      setBusinesses(businessMap);
+      const businessMap = new Map<string, { name: string; address: string }>();
+      businessList.forEach((b) =>
+        businessMap.set(b.id, { name: b.name, address: formatBusinessAddress(b) }),
+      );
+      setBusinesses(new Map([...businessMap.entries()].map(([id, b]) => [id, b.name])));
 
       const contacts: Contact[] = contactsList.map((c) => ({
         ...c,
@@ -167,10 +173,14 @@ export function Donations() {
         quarterDate: new Date(),
       }, products);
 
-      const donationRows: DonationRow[] = donationsWithData.map(d => ({
-        ...d,
-        businessName: businessMap.get(d.contact.businessId) || d.contact.businessId,
-      }));
+      const donationRows: DonationRow[] = donationsWithData.map(d => {
+        const business = businessMap.get(d.contact.businessId);
+        return {
+          ...d,
+          businessName: business?.name || d.contact.businessId,
+          businessAddress: business?.address || '',
+        };
+      });
 
       setDonations(donationRows);
 
@@ -255,72 +265,22 @@ export function Donations() {
     setEditError('');
   };
 
-  const buildExportRows = (rows: DonationRow[], activeProducts: CampaignProduct[]) => {
-    return rows.map((row) => {
-      const donation = row.reachout.donation;
-      const contactName = `${row.contact.firstName || ''} ${row.contact.lastName || ''}`.trim() || '-';
+  const getExportProducts = () =>
+    getDonationExportProducts(currentOrg?.products?.length ? currentOrg.products : products);
 
-      const base: Record<string, string | number> = {
-        'Date': formatDate(row.reachout.date),
-        'Business Name': row.businessName,
-        'Contact First Name': row.contact.firstName || '',
-        'Contact Last Name': row.contact.lastName || '',
-        'Contact Name': contactName,
-        'Phone': row.contact.phone || '',
-        'Email': row.contact.email || '',
-        'Mouths': row.mouths,
-      };
-
-      for (const p of activeProducts) {
-        const field = SLUG_TO_FIELD[p.slug];
-        if (field && donation) {
-          base[p.name] = (donation[field] as number) || 0;
-        } else if (donation?.customItems) {
-          base[p.name] = donation.customItems[p.id] || 0;
-        } else {
-          base[p.name] = 0;
-        }
-      }
-
-      base['Donation Notes'] = donation?.cakesDonatedNotes || '';
-      base['Followed Up'] = donation?.followedUp ? 'Yes' : 'No';
-      base['Ordered From Us'] = donation?.orderedFromUs ? 'Yes' : 'No';
-      base['Reachout Type'] = row.reachout.type || '';
-      base['Reachout Note'] = row.reachout.note || '';
-
-      return base;
-    });
-  };
-
-  const buildSheet = (
-    XLSX: typeof import('xlsx'),
-    rows: Record<string, string | number>[],
-    activeProducts: CampaignProduct[]
-  ) => {
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const colWidths = [
-      { wch: 12 }, { wch: 25 }, { wch: 15 }, { wch: 15 },
-      { wch: 20 }, { wch: 15 }, { wch: 25 }, { wch: 8 },
-      ...activeProducts.map(() => ({ wch: 14 })),
-      { wch: 30 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 40 },
-    ];
-    ws['!cols'] = colWidths;
-    return ws;
-  };
+  const getCurrentStoreName = () =>
+    currentOrg?.stores.find((store) => store.id === permissions.currentStoreId)?.name || 'store';
 
   const handleExportToExcel = async () => {
     // Lazy-load xlsx (~400KB) only when the user actually clicks Export
     const XLSX = await import('xlsx');
-    const activeProducts = products.filter(p => p.isActive);
-    const exportData = buildExportRows(filteredDonations, activeProducts);
-
-    const ws = buildSheet(XLSX, exportData, activeProducts);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Donations');
-
     const quarterLabel = getCurrentQuarterLabel();
-    const dateStr = new Date().toISOString().split('T')[0];
-    XLSX.writeFile(wb, `Donations_${quarterLabel}_${dateStr}.xlsx`);
+    const exportProducts = getExportProducts();
+    const ws = buildDonationExportSheet(XLSX, donations, exportProducts);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, getDonationExportSheetName(quarterLabel));
+
+    XLSX.writeFile(wb, getDonationExportFilename(donations, getCurrentStoreName()));
   };
 
   const [orgExporting, setOrgExporting] = useState(false);
@@ -331,17 +291,21 @@ export function Donations() {
 
     try {
       const XLSX = await import('xlsx');
-      const activeProducts = products.filter(p => p.isActive);
+      const quarterLabel = getCurrentQuarterLabel();
+      const exportProducts = getExportProducts();
       const wb = XLSX.utils.book_new();
+      const allRows: DonationRow[] = [];
 
       for (const store of currentOrg.stores) {
         const [businessList, contactsList] = await Promise.all([
-          api.get<Array<{ id: string; name: string }>>(`/businesses?storeId=${store.id}`),
+          api.get<Business[]>(`/businesses?storeId=${store.id}`),
           api.get<Contact[]>(`/contacts?storeId=${store.id}`),
         ]);
 
-        const businessMap = new Map<string, string>();
-        businessList.forEach((b) => businessMap.set(b.id, b.name));
+        const businessMap = new Map<string, { name: string; address: string }>();
+        businessList.forEach((b) =>
+          businessMap.set(b.id, { name: b.name, address: formatBusinessAddress(b) }),
+        );
 
         const contacts: Contact[] = contactsList.map((c) => ({
           ...c,
@@ -354,22 +318,24 @@ export function Donations() {
 
         const donationsWithData = getReachoutsWithDonations(contacts, {
           quarterDate: new Date(),
-        }, activeProducts);
+        }, products);
 
-        const rows: DonationRow[] = donationsWithData.map(d => ({
-          ...d,
-          businessName: businessMap.get(d.contact.businessId) || d.contact.businessId,
-        }));
+        const rows: DonationRow[] = donationsWithData.map(d => {
+          const business = businessMap.get(d.contact.businessId);
+          return {
+            ...d,
+            businessName: business?.name || d.contact.businessId,
+            businessAddress: business?.address || '',
+          };
+        });
 
-        const exportData = buildExportRows(rows, activeProducts);
-        const ws = buildSheet(XLSX, exportData, activeProducts);
+        const ws = buildDonationExportSheet(XLSX, rows, exportProducts);
         const sheetName = store.name.slice(0, 31).replace(/[\\/*?[\]:]/g, '');
         XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        allRows.push(...rows);
       }
 
-      const quarterLabel = getCurrentQuarterLabel();
-      const dateStr = new Date().toISOString().split('T')[0];
-      XLSX.writeFile(wb, `${currentOrg.name}_Donations_${quarterLabel}_${dateStr}.xlsx`);
+      XLSX.writeFile(wb, getOrgDonationExportFilename(allRows));
     } catch (error) {
       console.error('Error exporting org donations:', error);
     } finally {
@@ -569,7 +535,7 @@ export function Donations() {
               size="small"
               startIcon={<FileDownloadIcon />}
               onClick={handleExportToExcel}
-              disabled={filteredDonations.length === 0}
+              disabled={donations.length === 0}
             >
               Export Store
             </Button>
