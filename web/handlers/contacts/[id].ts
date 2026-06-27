@@ -30,6 +30,20 @@ function reachoutToJson(r: any) {
   };
 }
 
+function fileToJson(f: any) {
+  return {
+    id: f.id,
+    contactId: f.contact_id,
+    name: f.name,
+    storagePath: f.storage_path,
+    downloadUrl: f.download_url,
+    size: Number(f.size),
+    mimeType: f.mime_type,
+    uploadedAt: f.uploaded_at,
+    uploadedBy: f.uploaded_by,
+  };
+}
+
 function contactToJson(c: any) {
   return {
     id: c.id,
@@ -51,6 +65,7 @@ function contactToJson(c: any) {
     createdAt: c.created_at,
     createdBy: c.created_by,
     reachouts: (c.reachouts || []).map(reachoutToJson),
+    contactFiles: (c.contact_files || []).map(fileToJson),
   };
 }
 
@@ -63,7 +78,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const contact = await prisma.contact.findUnique({
     where: { id },
-    include: { reachouts: { orderBy: { date: 'desc' } } },
+    include: {
+      reachouts: { orderBy: { date: 'desc' } },
+      contact_files: { orderBy: { uploaded_at: 'desc' } },
+    },
   });
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
@@ -155,7 +173,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const updated = await prisma.contact.findUnique({
       where: { id },
-      include: { reachouts: { orderBy: { date: 'desc' } } },
+      include: {
+        reachouts: { orderBy: { date: 'desc' } },
+        contact_files: { orderBy: { uploaded_at: 'desc' } },
+      },
     });
     return res.status(200).json(contactToJson(updated!));
   }

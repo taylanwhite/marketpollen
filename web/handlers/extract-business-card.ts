@@ -64,10 +64,8 @@ function cleanExtracted(value: unknown): ExtractedBusinessCard {
     ? Math.min(Math.round(followUpDays), 30)
     : 3;
 
-  const contactName = [firstName, lastName].filter(Boolean).join(' ').trim() || email || phone || 'contact';
   const noteParts = [
-    `Business card uploaded for ${contactName}.`,
-    businessName ? `Business: ${businessName}.` : '',
+    'Contact was created via uploaded business card.',
     title ? `Title: ${title}.` : '',
     website ? `Website: ${website}.` : '',
   ].filter(Boolean);
@@ -134,7 +132,7 @@ Return valid JSON only with these optional fields when visible:
 - zipCode
 - website
 - personalDetails: short useful sales note only if the card includes something relevant
-- reachoutNote: one concise sentence saying the contact was created from a business card and preserving title/website/address context
+- reachoutNote: include "Contact was created via uploaded business card." and add concise context from the card when useful, such as title or website
 - suggestedFollowUpDays: usually 3
 
 Do not invent missing fields. If multiple people appear, extract the most prominent named person.`,

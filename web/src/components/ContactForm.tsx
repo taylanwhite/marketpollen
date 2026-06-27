@@ -11,6 +11,7 @@ import { useDonation } from '../contexts/DonationContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { DonationProductFields } from './DonationProductFields';
 import { OnlineOnlyNotice } from './OnlineOnlyNotice';
+import { dataUrlToPendingContactFile, type PendingContactFile } from '../utils/contactFiles';
 import {
   Box,
   Button,
@@ -152,6 +153,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   const [businessCardProcessing, setBusinessCardProcessing] = useState(false);
   const [businessCardMessage, setBusinessCardMessage] = useState('');
   const [hasBusinessCardDraft, setHasBusinessCardDraft] = useState(false);
+  const [pendingBusinessCardFile, setPendingBusinessCardFile] = useState<PendingContactFile | null>(null);
   // Snapshot of whatever the user had typed when they last started dictating,
   // so the live transcript appends instead of overwriting their text.
   const typedPrefixRef = useRef<string>('');
@@ -251,8 +253,13 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   );
 
   const handleProcess = async () => {
-    if (!rawNotes.trim()) {
+    if (!rawNotes.trim() && !hasBusinessCardDraft) {
       setError('Tell me about your visit first — type or dictate above.');
+      return;
+    }
+    if (!rawNotes.trim() && hasBusinessCardDraft) {
+      setHasBusinessCardDraft(false);
+      setHasExtracted(true);
       return;
     }
     setError('');
@@ -430,7 +437,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       const extracted = await extractBusinessCardInfo(imageDataUrl);
       const combinedName = [extracted.firstName, extracted.lastName].filter(Boolean).join(' ').trim();
       const noteParts = [
-        extracted.reachoutNote || 'Business card uploaded.',
+        extracted.reachoutNote || 'Contact was created via uploaded business card.',
         extracted.title ? `Title: ${extracted.title}.` : '',
         extracted.website ? `Website: ${extracted.website}.` : '',
       ].filter(Boolean);
@@ -438,8 +445,15 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       const cardNotes = noteParts.join(' ');
       setRawNotes((prev) => {
         const existing = prev.trim();
-        return existing ? `${cardNotes}\n\nAdditional notes: ${existing}` : `${cardNotes}\n\nAdditional notes: `;
+        if (cardNotes && existing) return `${cardNotes}\n\n${existing}`;
+        return cardNotes || existing;
       });
+      setPendingBusinessCardFile(dataUrlToPendingContactFile({
+        name: file.name || 'Business card.jpg',
+        dataUrl: imageDataUrl,
+        mimeType: 'image/jpeg',
+        size: file.size,
+      }));
       setForm((prev) => ({
         ...prev,
         name: combinedName || prev.name,
@@ -482,6 +496,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     setError('');
     setBusinessCardMessage('');
     setHasBusinessCardDraft(false);
+    setPendingBusinessCardFile(null);
     setSuccess(false);
     setSelectedBusinessId(defaultBusinessId || '');
     setShowNewBusiness(false);
@@ -673,6 +688,16 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         status: 'new',
       }, { label: `New contact · ${contactName}` });
 
+      if (pendingBusinessCardFile) {
+        await api.queuePost(`/contacts/${newContactId}/files`, {
+          id: pendingBusinessCardFile.id,
+          name: pendingBusinessCardFile.name,
+          dataUrl: pendingBusinessCardFile.dataUrl,
+          mimeType: pendingBusinessCardFile.mimeType,
+          size: pendingBusinessCardFile.size,
+        }, { label: `Attach file · ${pendingBusinessCardFile.name}` });
+      }
+
       // Step 3 — attach the initial reachout + follow-up suggestion. PATCH
       // bodies send the full reachouts array, which makes them idempotent.
       await api.queuePatch(`/contacts/${newContactId}`, {
@@ -760,7 +785,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   };
 
   // Whether the user has dictated/typed at least *something* worth processing
-  const hasNotes = rawNotes.trim().length > 0;
+  const hasNotes = rawNotes.trim().length > 0 || hasBusinessCardDraft;
 
   const handleNearbyPlaceTap = (place: NearbyPlace) => {
     // Pre-fill: drop the business name into the raw notes so AI extraction will
@@ -940,7 +965,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             '&.Mui-disabled': { bgcolor: 'rgba(0,0,0,0.08)' },
           }}
         >
-          {aiProcessing ? 'Extracting…' : hasBusinessCardDraft ? 'Extract card & notes with AI' : 'Extract with AI'}
+          {aiProcessing ? 'Extracting…' : hasBusinessCardDraft ? 'Review card & notes' : 'Extract with AI'}
         </Button>
       )}
 

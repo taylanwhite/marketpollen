@@ -1,6 +1,6 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense, type ChangeEvent } from 'react';
 import { api } from '../api/client';
-import { Contact, Reachout, DonationData } from '../types';
+import { Contact, Reachout, DonationData, type ContactFile } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
@@ -8,6 +8,7 @@ import { useCampaign } from '../contexts/CampaignContext';
 import { DonationProductFields } from './DonationProductFields';
 import { AddressPicker, AddressData } from './AddressPicker';
 import { PlaceMatchPicker, type PlaceResult } from './PlaceMatchPicker';
+import { fileToPendingContactFile } from '../utils/contactFiles';
 import {
   Dialog,
   DialogTitle,
@@ -54,6 +55,8 @@ import {
   Business as BusinessIcon,
   Warning as WarningIcon,
   AutoAwesome as AIIcon,
+  AttachFile as AttachFileIcon,
+  OpenInNew as OpenInNewIcon,
 } from '@mui/icons-material';
 const GenerateEmailDialog = lazy(() =>
   import('./GenerateEmailDialog').then((m) => ({ default: m.GenerateEmailDialog }))
@@ -126,6 +129,9 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   });
   const [creatingBusiness, setCreatingBusiness] = useState(false);
   const [showPlacePicker, setShowPlacePicker] = useState(false);
+  const [attachments, setAttachments] = useState<ContactFile[]>(contact.contactFiles || []);
+  const [attachmentLoading, setAttachmentLoading] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const loadBusinesses = async () => {
@@ -141,6 +147,25 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     };
     loadBusinesses();
   }, [permissions.currentStoreId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const files = await api.get<ContactFile[]>(`/contacts/${contact.id}/files`);
+        if (cancelled) return;
+        setAttachments(files.map((file) => ({
+          ...file,
+          uploadedAt: file.uploadedAt instanceof Date ? file.uploadedAt : new Date(file.uploadedAt),
+        })));
+      } catch (err) {
+        console.error('Error loading attachments:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [contact.id]);
 
   // Note: Voice input transcript handling removed - it was part of the "Add Reachout" tab that was removed
 
@@ -366,6 +391,43 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     }
   };
 
+  const handleAttachmentUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setAttachmentLoading(true);
+    setError('');
+    setSuccess('');
+    try {
+      const pending = await fileToPendingContactFile(file);
+      const saved = await api.post<ContactFile>(`/contacts/${contact.id}/files`, {
+        id: pending.id,
+        name: pending.name,
+        dataUrl: pending.dataUrl,
+        mimeType: pending.mimeType,
+        size: pending.size,
+      });
+      setAttachments((prev) => [
+        { ...saved, uploadedAt: saved.uploadedAt instanceof Date ? saved.uploadedAt : new Date(saved.uploadedAt) },
+        ...prev.filter((existing) => existing.id !== saved.id),
+      ]);
+      setSuccess('Attachment saved!');
+      bumpDataVersion();
+    } catch (err: any) {
+      console.error('Error uploading attachment:', err);
+      setError(err.message || 'Failed to upload attachment');
+    } finally {
+      setAttachmentLoading(false);
+    }
+  };
+
+  const formatFileSize = (size: number) => {
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   return (
     <Dialog open onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}>
@@ -426,6 +488,12 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
             </MenuItem>
             <MenuItem value={3}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
+                <AttachFileIcon fontSize="small" />
+                <Typography>Attachments ({attachments.length})</Typography>
+              </Box>
+            </MenuItem>
+            <MenuItem value={4}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <SettingsIcon fontSize="small" />
                 <Typography>Settings</Typography>
               </Box>
@@ -447,6 +515,11 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
             <Tab 
               label={`Donations (${contact.reachouts.filter(r => r.donation).length})`}
               icon={<CakeIcon sx={{ fontSize: 16 }} />}
+              iconPosition="start"
+            />
+            <Tab 
+              label={`Attachments (${attachments.length})`}
+              icon={<AttachFileIcon sx={{ fontSize: 16 }} />}
               iconPosition="start"
             />
             <Tab 
@@ -863,8 +936,71 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           })()}
         </TabPanel>
 
-        {/* Tab 3: Settings */}
+        {/* Tab 3: Attachments */}
         <TabPanel value={tabValue} index={3}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Box>
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                hidden
+                onChange={handleAttachmentUpload}
+              />
+              <Button
+                variant="contained"
+                startIcon={attachmentLoading ? <CircularProgress size={18} color="inherit" /> : <AttachFileIcon />}
+                disabled={attachmentLoading}
+                onClick={() => attachmentInputRef.current?.click()}
+              >
+                {attachmentLoading ? 'Uploading...' : 'Upload Attachment'}
+              </Button>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Save business cards, photos, PDFs, or other contact files.
+              </Typography>
+            </Box>
+
+            {attachments.length === 0 ? (
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <AttachFileIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
+                <Typography color="text.secondary">No attachments saved yet</Typography>
+              </Box>
+            ) : (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {attachments.map((file) => (
+                  <Card key={file.id} variant="outlined">
+                    <CardContent sx={{ py: 1.5 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <AttachFileIcon color="action" />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 600 }} noWrap>
+                            {file.name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {file.mimeType} · {formatFileSize(file.size)} · {new Date(file.uploadedAt).toLocaleDateString()}
+                          </Typography>
+                        </Box>
+                        <Button
+                          size="small"
+                          component="a"
+                          href={file.downloadUrl}
+                          download={file.name}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          startIcon={<OpenInNewIcon />}
+                        >
+                          Open
+                        </Button>
+                      </Box>
+                    </CardContent>
+                  </Card>
+                ))}
+              </Box>
+            )}
+          </Box>
+        </TabPanel>
+
+        {/* Tab 4: Settings */}
+        <TabPanel value={tabValue} index={4}>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             <Alert severity="info" icon={<SettingsIcon />}>
               <Typography variant="body2">

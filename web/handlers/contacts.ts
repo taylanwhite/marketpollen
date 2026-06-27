@@ -33,6 +33,20 @@ function reachoutToJson(r: any) {
   };
 }
 
+function fileToJson(f: any) {
+  return {
+    id: f.id,
+    contactId: f.contact_id,
+    name: f.name,
+    storagePath: f.storage_path,
+    downloadUrl: f.download_url,
+    size: Number(f.size),
+    mimeType: f.mime_type,
+    uploadedAt: f.uploaded_at,
+    uploadedBy: f.uploaded_by,
+  };
+}
+
 function contactToJson(c: any) {
   return {
     id: c.id,
@@ -54,6 +68,7 @@ function contactToJson(c: any) {
     createdAt: c.created_at,
     createdBy: c.created_by,
     reachouts: (c.reachouts || []).map(reachoutToJson),
+    contactFiles: (c.contact_files || []).map(fileToJson),
   };
 }
 
@@ -71,7 +86,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const rows = await prisma.contact.findMany({
         where: { store_id: storeId },
-        include: { reachouts: { orderBy: { date: 'desc' } } },
+        include: {
+          reachouts: { orderBy: { date: 'desc' } },
+          contact_files: { orderBy: { uploaded_at: 'desc' } },
+        },
         orderBy: [{ last_reachout_date: 'desc' }, { created_at: 'desc' }],
       });
       return res.status(200).json(rows.map(contactToJson));
@@ -104,7 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!UUID_RE.test(body.id)) return res.status(400).json({ error: 'id must be a UUID' });
       const existing = await prisma.contact.findUnique({
         where: { id: body.id },
-        include: { reachouts: true },
+        include: { reachouts: true, contact_files: true },
       });
       if (existing) {
         if (existing.store_id !== storeId) {
@@ -131,7 +149,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           status: body.status ?? 'new',
           created_by: uid,
         },
-        include: { reachouts: true },
+        include: { reachouts: true, contact_files: true },
       });
       return res.status(201).json(contactToJson(row));
     } catch (err) {
@@ -140,7 +158,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (err.code === 'P2002' && body.id) {
           const existing = await prisma.contact.findUnique({
             where: { id: body.id },
-            include: { reachouts: true },
+            include: { reachouts: true, contact_files: true },
           });
           if (existing) return res.status(200).json(contactToJson(existing));
         }

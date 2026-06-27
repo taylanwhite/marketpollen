@@ -101,6 +101,7 @@ export function Dashboard() {
   const [followUpLoading, setFollowUpLoading] = useState(false);
   const [copyToastOpen, setCopyToastOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showNoDonationsOnly, setShowNoDonationsOnly] = useState(false);
   
   // Quick reachout dialog
   const [quickReachoutContact, setQuickReachoutContact] = useState<Contact | null>(null);
@@ -158,6 +159,10 @@ export function Dashboard() {
     if (businessFilter) {
       filtered = filtered.filter(c => c.businessId === businessFilter);
     }
+
+    if (showNoDonationsOnly) {
+      filtered = filtered.filter(c => !c.reachouts.some(r => !!r.donation));
+    }
     
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
@@ -175,7 +180,7 @@ export function Dashboard() {
     }
     
     setFilteredContacts(filtered);
-  }, [businessFilter, contacts, searchTerm, businesses]);
+  }, [businessFilter, contacts, searchTerm, businesses, showNoDonationsOnly]);
 
   // When the user taps Record, snapshot whatever they had already typed so
   // the dictated transcript appends to it instead of clobbering it.
@@ -606,6 +611,18 @@ export function Dashboard() {
               variant="outlined"
             />
           )}
+
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={showNoDonationsOnly}
+                onChange={(e) => setShowNoDonationsOnly(e.target.checked)}
+                size="small"
+              />
+            }
+            label="No donations"
+            sx={{ mr: 'auto' }}
+          />
           
           {canEdit() && (
             <Button

@@ -138,6 +138,18 @@ export interface Reachout {
   donation?: DonationData; // Optional donation data
 }
 
+export interface ContactFile {
+  id: string;
+  contactId: string;
+  name: string;
+  storagePath: string;
+  downloadUrl: string;
+  size: number;
+  mimeType: string;
+  uploadedAt: Date;
+  uploadedBy: string;
+}
+
 // Contact types
 export interface Contact {
   id: string;
@@ -150,6 +162,7 @@ export interface Contact {
   phone?: string | null;
   employeeCount?: number | null; // Number of employees at the business
   reachouts: Reachout[]; // History of all interactions
+  contactFiles?: ContactFile[];
   personalDetails?: string | null; // AI-extracted personal info (hobbies, family, interests)
   suggestedFollowUpDate?: Date | null; // AI-suggested next follow-up date
   suggestedFollowUpMethod?: 'email' | 'call' | 'meeting' | 'text' | 'other' | null; // AI-suggested follow-up method

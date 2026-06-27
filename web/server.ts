@@ -15,6 +15,7 @@ import opportunitiesIdHandler from './dist-handlers/opportunities/[id].js';
 import opportunitiesConvertHandler from './dist-handlers/opportunities/[id]/convert.js';
 import contactsHandler from './dist-handlers/contacts.js';
 import contactsIdHandler from './dist-handlers/contacts/[id].js';
+import contactsFilesHandler from './dist-handlers/contacts/[id]/files.js';
 import invitesHandler from './dist-handlers/invites.js';
 import invitesIdHandler from './dist-handlers/invites/[id].js';
 import calendarEventsHandler from './dist-handlers/calendar-events.js';
@@ -92,6 +93,8 @@ app.post('/api/opportunities/:id/convert', withId(opportunitiesConvertHandler));
 // Contacts
 app.get('/api/contacts', route(contactsHandler));
 app.post('/api/contacts', route(contactsHandler));
+app.get('/api/contacts/:id/files', withId(contactsFilesHandler));
+app.post('/api/contacts/:id/files', withId(contactsFilesHandler));
 app.all('/api/contacts/:id', withId(contactsIdHandler));
 
 // Invites

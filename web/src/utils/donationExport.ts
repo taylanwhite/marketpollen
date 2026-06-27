@@ -46,6 +46,27 @@ const COLUMN_HEADERS = [
   'Followed up?',
 ];
 
+const COLUMN_WIDTHS = [
+  12, // Date
+  24, // Business Name
+  16, // Contact Last Name
+  16, // Contact First Name
+  34, // Business Address
+  16, // Phone #
+  30, // Email
+  12, // # of Employees
+  14, // FREE Bundtlet Card
+  14, // Dozen Bundtinis
+  14, // 8" Cake
+  14, // 10" Cake
+  14, // Sample Tray
+  16, // Bundtlet or Tower
+  32, // Cakes Donated Notes
+  48, // Notes
+  14, // Ordered from us?
+  14, // Followed up?
+];
+
 /** Active built-in products in display order — maps to columns I–N in the tracker. */
 export function getDonationExportProducts(products: CampaignProduct[]): CampaignProduct[] {
   return products
@@ -78,6 +99,11 @@ export function dateToExcelSerial(date: Date): number {
   return Math.floor((utc - excelEpoch) / (24 * 60 * 60 * 1000));
 }
 
+function formatDisplayDate(date: Date): string {
+  const d = date instanceof Date ? date : new Date(date);
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+}
+
 function qtyOrBlank(donation: DonationData, product: CampaignProduct): number | string {
   const field = SLUG_TO_FIELD[product.slug];
   const qty = field
@@ -103,7 +129,7 @@ function buildDataRow(
   }
 
   return [
-    dateToExcelSerial(reachoutDate),
+    formatDisplayDate(reachoutDate),
     row.businessName,
     contact.lastName || '',
     contact.firstName || '',
@@ -117,6 +143,37 @@ function buildDataRow(
     donation.orderedFromUs ? 'yes!' : '',
     donation.followedUp ? 'Yes' : '',
   ];
+}
+
+function formatWorksheet(
+  XLSX: XLSXModule,
+  ws: ReturnType<XLSXModule['utils']['aoa_to_sheet']>,
+  rowCount: number,
+) {
+  ws['!cols'] = COLUMN_WIDTHS.map((wch) => ({ wch }));
+  ws['!rows'] = Array.from({ length: rowCount }, (_, index) => {
+    if (index === 0) return { hpt: 18 };
+    if (index === 3) return { hpt: 48 };
+    if (index === 5) return { hpt: 42 };
+    return { hpt: 36 };
+  });
+
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:R1');
+  for (let row = range.s.r; row <= range.e.r; row += 1) {
+    for (let col = range.s.c; col <= range.e.c; col += 1) {
+      const address = XLSX.utils.encode_cell({ r: row, c: col });
+      const cell = ws[address] as any;
+      if (!cell) continue;
+      cell.s = {
+        ...(cell.s || {}),
+        alignment: {
+          ...(cell.s?.alignment || {}),
+          wrapText: true,
+          vertical: 'top',
+        },
+      };
+    }
+  }
 }
 
 /**
@@ -150,7 +207,9 @@ export function buildDonationExportSheet(
     ...sorted.map((row) => buildDataRow(row, exportProducts)),
   ];
 
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  formatWorksheet(XLSX, ws, aoa.length);
+  return ws;
 }
 
 export function getDonationExportSheetName(quarterLabel: string): string {
