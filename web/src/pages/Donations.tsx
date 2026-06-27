@@ -291,7 +291,6 @@ export function Donations() {
 
     try {
       const XLSX = await import('xlsx');
-      const quarterLabel = getCurrentQuarterLabel();
       const exportProducts = getExportProducts();
       const wb = XLSX.utils.book_new();
       const allRows: DonationRow[] = [];
