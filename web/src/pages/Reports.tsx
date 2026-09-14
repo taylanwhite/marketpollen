@@ -338,72 +338,102 @@ export function Reports() {
           flexDirection: { xs: 'column', sm: 'row' },
           alignItems: { xs: 'stretch', sm: 'flex-end' },
           justifyContent: 'space-between',
-          gap: 2,
-          mb: 3,
+          gap: { xs: 1.5, sm: 2 },
+          mb: { xs: 2, sm: 3 },
         }}
       >
         <Box>
-          <Typography variant="h4" sx={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography
+            variant="h4"
+            sx={{
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              fontSize: { xs: '1.5rem', sm: '2.125rem' },
+            }}
+          >
             <InsightsIcon sx={{ color: '#d4a017' }} />
             Reports
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {storeScope === 'all'
-              ? `All stores${currentOrg?.name ? ` in ${currentOrg.name}` : ''}. Click any chart to see the records behind it.`
-              : 'Click any chart to see the contacts, visits, or events behind it.'}
+              ? `All stores${currentOrg?.name ? ` in ${currentOrg.name}` : ''}.${isMobile ? ' Tap a card for the records behind it.' : ' Click any chart to see the records behind it.'}`
+              : isMobile
+                ? 'Tap a card to see the contacts, visits, or events behind it.'
+                : 'Click any chart to see the contacts, visits, or events behind it.'}
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+        {!isMobile && (
+          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+            {canRollup && (
+              <>
+                <FilterChip
+                  label="All stores"
+                  selected={storeScope === 'all'}
+                  onClick={() => setStoreScope('all')}
+                />
+                {reportStores.map((store) => (
+                  <FilterChip
+                    key={store.id}
+                    label={store.name}
+                    selected={storeScope === store.id}
+                    onClick={() => setStoreScope(store.id)}
+                  />
+                ))}
+              </>
+            )}
+            {RANGE_OPTIONS.map((option) => (
+              <FilterChip
+                key={option.key}
+                label={option.label}
+                selected={rangeKey === option.key}
+                onClick={() => setRangeKey(option.key)}
+              />
+            ))}
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<SyncIcon />}
+              onClick={() => setSyncOpen(true)}
+            >
+              Google Calendar
+            </Button>
+          </Box>
+        )}
+      </Box>
+
+      {isMobile && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
           {canRollup && (
-            <>
-              <Chip
+            <ScrollRow>
+              <FilterChip
                 label="All stores"
+                selected={storeScope === 'all'}
                 onClick={() => setStoreScope('all')}
-                sx={{
-                  fontWeight: storeScope === 'all' ? 700 : 500,
-                  bgcolor: storeScope === 'all' ? 'rgba(245, 200, 66, 0.28)' : 'transparent',
-                  border: '1px solid',
-                  borderColor: storeScope === 'all' ? 'rgba(245, 200, 66, 0.7)' : 'rgba(0,0,0,0.12)',
-                }}
               />
               {reportStores.map((store) => (
-                <Chip
+                <FilterChip
                   key={store.id}
                   label={store.name}
+                  selected={storeScope === store.id}
                   onClick={() => setStoreScope(store.id)}
-                  sx={{
-                    fontWeight: storeScope === store.id ? 700 : 500,
-                    bgcolor: storeScope === store.id ? 'rgba(245, 200, 66, 0.28)' : 'transparent',
-                    border: '1px solid',
-                    borderColor: storeScope === store.id ? 'rgba(245, 200, 66, 0.7)' : 'rgba(0,0,0,0.12)',
-                  }}
                 />
               ))}
-            </>
+            </ScrollRow>
           )}
-          {RANGE_OPTIONS.map((option) => (
-            <Chip
-              key={option.key}
-              label={option.label}
-              onClick={() => setRangeKey(option.key)}
-              sx={{
-                fontWeight: rangeKey === option.key ? 700 : 500,
-                bgcolor: rangeKey === option.key ? 'rgba(245, 200, 66, 0.28)' : 'transparent',
-                border: '1px solid',
-                borderColor: rangeKey === option.key ? 'rgba(245, 200, 66, 0.7)' : 'rgba(0,0,0,0.12)',
-              }}
-            />
-          ))}
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<SyncIcon />}
-            onClick={() => setSyncOpen(true)}
-          >
-            Google Calendar
-          </Button>
+          <ScrollRow>
+            {RANGE_OPTIONS.map((option) => (
+              <FilterChip
+                key={option.key}
+                label={option.label}
+                selected={rangeKey === option.key}
+                onClick={() => setRangeKey(option.key)}
+              />
+            ))}
+          </ScrollRow>
         </Box>
-      </Box>
+      )}
 
       <Card
         sx={{
@@ -420,7 +450,7 @@ export function Reports() {
                 <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, letterSpacing: 0.6 }}>
                   {getCurrentQuarterLabel()} goal
                 </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                <Typography variant="h4" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2.125rem' } }}>
                   {quarterProgress.totalMouths.toLocaleString()}
                   <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
                     / {quarterProgress.goal.toLocaleString()} mouths
@@ -519,6 +549,7 @@ export function Reports() {
           label="Overdue"
           value={overdue.length}
           hint="Still scheduled, date passed"
+          wide
           onClick={() =>
             openDrilldown({
               title: 'Overdue events',
@@ -989,31 +1020,78 @@ function UpcomingList({
   );
 }
 
+function ScrollRow({ children }: { children: ReactNode }) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        gap: 0.75,
+        overflowX: 'auto',
+        flexWrap: 'nowrap',
+        mx: -1.5,
+        px: 1.5,
+        pb: 0.25,
+        WebkitOverflowScrolling: 'touch',
+        scrollbarWidth: 'none',
+        '&::-webkit-scrollbar': { display: 'none' },
+        '& > *': { flexShrink: 0 },
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+function FilterChip({
+  label,
+  selected,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Chip
+      label={label}
+      onClick={onClick}
+      sx={{
+        fontWeight: selected ? 700 : 500,
+        bgcolor: selected ? 'rgba(245, 200, 66, 0.28)' : 'transparent',
+        border: '1px solid',
+        borderColor: selected ? 'rgba(245, 200, 66, 0.7)' : 'rgba(0,0,0,0.12)',
+      }}
+    />
+  );
+}
+
 function KpiCard({
   icon,
   label,
   value,
   hint,
   onClick,
+  wide = false,
 }: {
   icon: ReactNode;
   label: string;
   value: number;
   hint: string;
   onClick: () => void;
+  wide?: boolean;
 }) {
   return (
-    <Grid size={{ xs: 6, sm: 4, md: 'grow' }}>
+    <Grid size={{ xs: wide ? 12 : 6, sm: 4, md: 'grow' }}>
       <Card sx={{ height: '100%', '&:hover': { borderColor: 'rgba(245, 200, 66, 0.5)' } }}>
         <CardActionArea onClick={onClick} sx={{ height: '100%', alignItems: 'stretch' }}>
-          <CardContent sx={{ py: 1.75, px: 2 }}>
+          <CardContent sx={{ py: { xs: 1.5, sm: 1.75 }, px: { xs: 1.5, sm: 2 } }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, color: 'text.secondary', mb: 0.75 }}>
               <Box sx={{ display: 'flex', '& svg': { fontSize: 18, color: '#d4a017' } }}>{icon}</Box>
               <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 0.4 }}>
                 {label}
               </Typography>
             </Box>
-            <Typography variant="h3" sx={{ fontWeight: 800, lineHeight: 1.1 }}>
+            <Typography variant="h3" sx={{ fontWeight: 800, lineHeight: 1.1, fontSize: { xs: '1.75rem', sm: '3rem' } }}>
               {value.toLocaleString()}
             </Typography>
             <Typography variant="caption" color="text.secondary">

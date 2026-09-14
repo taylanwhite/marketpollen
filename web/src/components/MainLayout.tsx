@@ -171,9 +171,9 @@ export function MainLayout({ children }: MainLayoutProps) {
             srcSet="/assets/nav-title-440x80@2x.png 2x"
             alt="Market Pollen"
             sx={{
-              height: { xs: 26, sm: 36 },
+              height: { xs: 22, sm: 36 },
               width: 'auto',
-              maxWidth: { xs: 130, sm: 200 },
+              maxWidth: { xs: 108, sm: 200 },
               objectFit: 'contain',
               flexShrink: 0,
             }}
@@ -181,7 +181,7 @@ export function MainLayout({ children }: MainLayoutProps) {
 
           {/* Mobile-only inline goal tracker for at-a-glance progress */}
           <Box sx={{ flex: 1, display: { xs: 'flex', sm: 'none' }, minWidth: 0, alignItems: 'center' }}>
-            <BundtiniTracker />
+            <BundtiniTracker compact />
           </Box>
 
           {/* Desktop spacer */}

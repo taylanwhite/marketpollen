@@ -86,14 +86,16 @@ export function OfflineIndicator() {
   }
 
   if (!pill) {
-    // Everything's fine; render a tiny tooltip-only icon so the user can still
-    // peek at status if they want
+    // Everything's fine. Hide the idle check on phones — it just crowds the
+    // header next to the goal tracker. Desktop keeps the peekable icon.
     return (
-      <Tooltip title="All changes saved">
-        <IconButton size="small" onClick={handleOpen} sx={{ color: '#4caf50' }} aria-label="Sync status">
-          <CloudDoneIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
+      <Box sx={{ display: { xs: 'none', sm: 'inline-flex' } }}>
+        <Tooltip title="All changes saved">
+          <IconButton size="small" onClick={handleOpen} sx={{ color: '#4caf50' }} aria-label="Sync status">
+            <CloudDoneIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Box>
     );
   }
 

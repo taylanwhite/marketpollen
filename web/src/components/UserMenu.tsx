@@ -14,7 +14,6 @@ import {
   Avatar,
   Typography,
   Box,
-  Chip,
 } from '@mui/material';
 import {
   SwapHoriz as SwapIcon,
@@ -115,24 +114,24 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
         }}
       >
         {currentStore && (
-          <Box sx={{ px: 2, py: 1.5 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 1 }}>
+          <Box sx={{ px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: 'block', textTransform: 'uppercase', letterSpacing: 1 }}
+            >
               Current store
             </Typography>
-            <Chip
-              icon={<LocationIcon sx={{ color: '#2d2d2d !important', fontSize: 16 }} />}
-              label={currentStore.name}
-              size="small"
+            <Typography
+              variant="body2"
               sx={{
-                mt: 0.5,
-                bgcolor: 'rgba(245, 200, 66, 0.15)',
-                color: '#2d2d2d',
-                border: '1px solid rgba(245, 200, 66, 0.5)',
-                fontWeight: 500,
-                maxWidth: '100%',
-                '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' },
+                fontWeight: 600,
+                lineHeight: 1.3,
+                wordBreak: 'break-word',
               }}
-            />
+            >
+              {currentStore.name}
+            </Typography>
           </Box>
         )}
 
