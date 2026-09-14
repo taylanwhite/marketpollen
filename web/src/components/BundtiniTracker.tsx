@@ -174,23 +174,27 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
         sx={{
           display: 'flex',
           alignItems: 'center',
-          gap: compact ? 0.75 : 1,
-          bgcolor: isGold ? 'rgba(245, 200, 66, 0.25)' : 'rgba(0,0,0,0.06)',
+          gap: compact ? 0 : 1,
+          bgcolor: compact
+            ? 'transparent'
+            : isGold
+              ? 'rgba(245, 200, 66, 0.25)'
+              : 'rgba(0,0,0,0.06)',
           borderRadius: 2,
-          px: compact ? 1 : 1.5,
-          py: compact ? 0.5 : 0.75,
+          px: compact ? 0 : 1.5,
+          py: compact ? 0 : 0.75,
           minWidth: compact ? 0 : 180,
           width: '100%',
           position: 'relative',
           transition: 'background-color 0.3s ease',
-          ...(goalReached && !isCelebrating && {
+          ...(goalReached && !isCelebrating && !compact && {
             boxShadow: '0 0 8px rgba(255, 215, 0, 0.4)',
             border: '1px solid rgba(255, 215, 0, 0.3)',
           }),
-          animation: isCelebrating ? `${pulseGlow} 0.8s ease-in-out infinite` : 'none',
+          animation: isCelebrating && !compact ? `${pulseGlow} 0.8s ease-in-out infinite` : 'none',
         }}
       >
-        {isCelebrating && (
+        {isCelebrating && !compact && (
           <>
             <CelebrationIcon
               sx={{
@@ -230,10 +234,10 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
               variant="caption"
               sx={{
                 color: '#2d2d2d',
-                fontWeight: isGold ? 700 : 500,
+                fontWeight: compact ? 500 : isGold ? 700 : 500,
                 fontSize: compact ? '0.7rem' : isGold ? '0.85rem' : '0.75rem',
                 transition: 'all 0.3s ease',
-                textShadow: isGold ? '0 0 10px rgba(255,215,0,0.8)' : 'none',
+                textShadow: isGold && !compact ? '0 0 10px rgba(255,215,0,0.8)' : 'none',
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -246,7 +250,19 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
                 </Box>
               )}
             </Typography>
-            {!compact && (
+            {compact && isCelebrating && lastDonationMouths > 0 ? (
+              <Typography
+                variant="caption"
+                sx={{
+                  color: '#2d2d2d',
+                  fontWeight: 700,
+                  fontSize: '0.7rem',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                +{lastDonationMouths}
+              </Typography>
+            ) : !compact ? (
               <Typography
                 variant="caption"
                 sx={{
@@ -257,15 +273,15 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
               >
                 / {(progress.goal / 1000).toFixed(0)}k
               </Typography>
-            )}
+            ) : null}
           </Box>
           <LinearProgress
             variant="determinate"
             value={Math.min(progress.percentage, 100)}
             sx={{
-              height: isGold ? 8 : 6,
+              height: compact ? 4 : isGold ? 8 : 6,
               borderRadius: 3,
-              bgcolor: 'rgba(0,0,0,0.1)',
+              bgcolor: 'rgba(0,0,0,0.08)',
               transition: 'height 0.3s ease',
               '& .MuiLinearProgress-bar': {
                 borderRadius: 3,
@@ -281,22 +297,24 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
             }}
           />
         </Box>
-        <Chip
-          label={isCelebrating && lastDonationMouths > 0 ? `+${lastDonationMouths}` : `${progress.percentage.toFixed(0)}%`}
-          size="small"
-          sx={{
-            height: compact ? 18 : 20,
-            fontSize: compact ? '0.65rem' : '0.7rem',
-            bgcolor: isGold ? '#FFD700' : colorMap[color],
-            color: '#2d2d2d',
-            fontWeight: 600,
-            flexShrink: 0,
-            animation: isCelebrating ? `${bounce} 0.5s ease-in-out infinite 0.2s` : 'none',
-            '& .MuiChip-label': {
-              px: compact ? 0.75 : 1,
-            },
-          }}
-        />
+        {!compact && (
+          <Chip
+            label={isCelebrating && lastDonationMouths > 0 ? `+${lastDonationMouths}` : `${progress.percentage.toFixed(0)}%`}
+            size="small"
+            sx={{
+              height: 20,
+              fontSize: '0.7rem',
+              bgcolor: isGold ? '#FFD700' : colorMap[color],
+              color: '#2d2d2d',
+              fontWeight: 600,
+              flexShrink: 0,
+              animation: isCelebrating ? `${bounce} 0.5s ease-in-out infinite 0.2s` : 'none',
+              '& .MuiChip-label': {
+                px: 1,
+              },
+            }}
+          />
+        )}
       </Box>
     </Tooltip>
   );
