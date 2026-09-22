@@ -553,6 +553,7 @@ export default async function handler(
         cakes_donated_notes: d.cakesDonatedNotes ?? null,
         ordered_from_us: d.orderedFromUs === true,
         followed_up: d.followedUp === true,
+        no_follow_up: false,
       },
     });
 

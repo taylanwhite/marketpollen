@@ -28,6 +28,7 @@ function reachoutToJson(r: any) {
           cakesDonatedNotes: r.cakes_donated_notes ?? undefined,
           orderedFromUs: r.ordered_from_us ?? false,
           followedUp: r.followed_up ?? false,
+          noFollowUp: r.no_follow_up ?? false,
         }
       : undefined,
   };

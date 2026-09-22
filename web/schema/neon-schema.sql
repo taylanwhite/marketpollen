@@ -116,7 +116,8 @@ CREATE TABLE reachouts (
   bundtlet_tower INTEGER NOT NULL DEFAULT 0,
   cakes_donated_notes TEXT,
   ordered_from_us BOOLEAN NOT NULL DEFAULT FALSE,
-  followed_up BOOLEAN NOT NULL DEFAULT FALSE
+  followed_up BOOLEAN NOT NULL DEFAULT FALSE,
+  no_follow_up BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX idx_reachouts_contact_id ON reachouts(contact_id);

@@ -209,6 +209,7 @@ model Reachout {
   cakes_donated_notes String?
   ordered_from_us    Boolean  @default(false)
   followed_up        Boolean  @default(false)
+  no_follow_up       Boolean  @default(false)
   custom_donations   Json?
 
   contact Contact @relation(fields: [contact_id], references: [id], onDelete: Cascade)

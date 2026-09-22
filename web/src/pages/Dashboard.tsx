@@ -511,6 +511,7 @@ export function Dashboard() {
             cakesDonatedNotes: (d.cakesDonatedNotes as string) || '',
             orderedFromUs: (d.orderedFromUs as boolean) ?? false,
             followedUp: (d.followedUp as boolean) ?? false,
+            noFollowUp: false,
           });
         } else if (hasDonationKeywords) {
           setDonationData(prev => ({
@@ -873,7 +874,7 @@ export function Dashboard() {
                   disabled={quickReachoutLoading}
                 />
 
-                <Box sx={{ display: 'flex', gap: 2 }}>
+                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                   <FormControlLabel
                     control={
                       <Checkbox
@@ -888,13 +889,34 @@ export function Dashboard() {
                     control={
                       <Checkbox
                         checked={donationData.followedUp}
-                        onChange={(e) => setDonationData(prev => ({ ...prev, followedUp: e.target.checked }))}
+                        onChange={(e) => setDonationData(prev => ({
+                          ...prev,
+                          followedUp: e.target.checked,
+                          noFollowUp: e.target.checked ? false : prev.noFollowUp,
+                        }))}
                         disabled={quickReachoutLoading}
                       />
                     }
                     label="Followed up?"
                   />
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={donationData.noFollowUp === true}
+                        onChange={(e) => setDonationData(prev => ({
+                          ...prev,
+                          noFollowUp: e.target.checked,
+                          followedUp: e.target.checked ? false : prev.followedUp,
+                        }))}
+                        disabled={quickReachoutLoading}
+                      />
+                    }
+                    label="No follow-up needed"
+                  />
                 </Box>
+                <Typography variant="caption" color="text.secondary">
+                  No follow-up needed clears any pending reminder for this contact.
+                </Typography>
               </Box>
             </Collapse>
           </Box>

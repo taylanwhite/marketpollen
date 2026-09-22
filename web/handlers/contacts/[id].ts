@@ -25,6 +25,7 @@ function reachoutToJson(r: any) {
           cakesDonatedNotes: r.cakes_donated_notes ?? undefined,
           orderedFromUs: r.ordered_from_us ?? false,
           followedUp: r.followed_up ?? false,
+          noFollowUp: r.no_follow_up ?? false,
         }
       : undefined,
   };
@@ -106,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastReachoutDate?: string | Date | null;
       status?: string | null;
       businessId?: string;
-      reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; customItems?: Record<string, number>; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean } }>;
+      reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; customItems?: Record<string, number>; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean; noFollowUp?: boolean } }>;
     };
 
     const updateData: Parameters<typeof prisma.contact.update>[0]['data'] = {};
@@ -129,13 +130,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (Array.isArray(body.reachouts)) {
-      const existingCount = await prisma.reachout.count({ where: { contact_id: id } });
-      const isNewReachout = body.reachouts.length > existingCount;
+      const existing = await prisma.reachout.findMany({
+        where: { contact_id: id },
+        select: { no_follow_up: true },
+      });
+      const previousNoFollowUp = existing.filter((r) => r.no_follow_up).length;
+      const isNewReachout = body.reachouts.length > existing.length;
 
       await prisma.reachout.deleteMany({ where: { contact_id: id } });
       for (const r of body.reachouts) {
         const d = r.donation || {};
         const date = r.date instanceof Date ? r.date : new Date(r.date);
+        const noFollowUp = d.noFollowUp === true;
         await prisma.reachout.create({
           data: {
             contact_id: id,
@@ -152,8 +158,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             bundtlet_tower: d.bundtletTower ?? 0,
             cakes_donated_notes: d.cakesDonatedNotes ?? null,
             ordered_from_us: d.orderedFromUs === true,
-            followed_up: d.followedUp === true,
+            followed_up: noFollowUp ? false : d.followedUp === true,
+            no_follow_up: noFollowUp,
             custom_donations: d.customItems && Object.keys(d.customItems).length > 0 ? d.customItems : undefined,
+          },
+        });
+      }
+
+      const nextNoFollowUp = body.reachouts.filter((r) => r.donation?.noFollowUp === true).length;
+      if (nextNoFollowUp > previousNoFollowUp) {
+        await prisma.calendarEvent.updateMany({
+          where: {
+            contact_id: id,
+            type: 'followup',
+            status: 'scheduled',
+          },
+          data: {
+            status: 'cancelled',
+            cancelled_at: new Date(),
+          },
+        });
+        await prisma.contact.update({
+          where: { id },
+          data: {
+            suggested_follow_up_date: null,
+            suggested_follow_up_method: null,
+            suggested_follow_up_note: null,
+            suggested_follow_up_priority: null,
           },
         });
       }

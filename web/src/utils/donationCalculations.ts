@@ -144,6 +144,7 @@ export function createEmptyDonation(products?: CampaignProduct[]): DonationData 
     cakesDonatedNotes: '',
     orderedFromUs: false,
     followedUp: false,
+    noFollowUp: false,
   };
 
   if (products) {

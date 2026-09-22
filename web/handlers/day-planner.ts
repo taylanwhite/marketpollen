@@ -8,6 +8,38 @@ import { canViewStore } from './lib/store-access.js';
 const MAX_EMAIL_DRAFTS = 5;
 const MAX_OPPORTUNITIES_IN_PLAN = 10;
 
+function donationSkipsFollowUp(contact: {
+  reachouts?: Array<{
+    date: Date;
+    no_follow_up: boolean;
+    free_bundlet_card: number;
+    dozen_bundtinis: number;
+    cake_8inch: number;
+    cake_10inch: number;
+    sample_tray: number;
+    bundtlet_tower: number;
+    cakes_donated_notes: string | null;
+    custom_donations: unknown;
+  }>;
+}): boolean {
+  const donations = (contact.reachouts || []).filter((r) => {
+    const custom = r.custom_donations as Record<string, number> | null;
+    return (
+      r.free_bundlet_card ||
+      r.dozen_bundtinis ||
+      r.cake_8inch ||
+      r.cake_10inch ||
+      r.sample_tray ||
+      r.bundtlet_tower ||
+      r.cakes_donated_notes ||
+      (custom && Object.keys(custom).length > 0)
+    );
+  });
+  if (donations.length === 0) return false;
+  donations.sort((a, b) => b.date.getTime() - a.date.getTime());
+  return donations[0].no_follow_up === true;
+}
+
 /** Haversine distance in meters */
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000;
@@ -174,6 +206,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!contactId || taskContactIds.has(contactId)) continue;
       const contact = contactMap.get(contactId);
       if (!contact) continue;
+      if (type === 'followup' && donationSkipsFollowUp(contact)) continue;
       taskContactIds.add(contactId);
       const contactName =
         [contact.first_name, contact.last_name].filter(Boolean).join(' ').trim() ||
@@ -198,6 +231,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const normalizedTarget = dayStart.getTime();
     for (const contact of contacts) {
       if (taskContactIds.has(contact.id)) continue;
+      if (donationSkipsFollowUp(contact)) continue;
       const suggestedDate = contact.suggested_follow_up_date;
       if (!suggestedDate) continue;
       const suggestedNorm = new Date(suggestedDate.getFullYear(), suggestedDate.getMonth(), suggestedDate.getDate()).getTime();

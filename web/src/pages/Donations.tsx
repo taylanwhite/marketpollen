@@ -42,6 +42,7 @@ import {
   TextField,
   InputAdornment,
   FormControl,
+  FormControlLabel,
   InputLabel,
   Select,
   MenuItem,
@@ -68,6 +69,34 @@ import {
 } from '@mui/icons-material';
 
 type DonationRow = DonationExportRow;
+type FollowUpStatus = 'yes' | 'no' | 'none';
+
+function followUpStatus(donation?: { followedUp?: boolean; noFollowUp?: boolean } | null): FollowUpStatus {
+  if (donation?.noFollowUp) return 'none';
+  if (donation?.followedUp) return 'yes';
+  return 'no';
+}
+
+function FollowUpSelect({
+  value,
+  onChange,
+}: {
+  value: FollowUpStatus;
+  onChange: (value: FollowUpStatus) => void;
+}) {
+  return (
+    <Select
+      size="small"
+      value={value}
+      onChange={(e) => onChange(e.target.value as FollowUpStatus)}
+      sx={{ minWidth: 168 }}
+    >
+      <MenuItem value="no">Needs follow-up</MenuItem>
+      <MenuItem value="yes">Followed up</MenuItem>
+      <MenuItem value="none">No follow-up</MenuItem>
+    </Select>
+  );
+}
 
 function donationHasProduct(row: DonationRow, productKey: string, products: CampaignProduct[]): boolean {
   const donation = row.reachout.donation;
@@ -98,7 +127,7 @@ export function Donations() {
   const [filteredDonations, setFilteredDonations] = useState<DonationRow[]>([]);
   const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterFollowedUp, setFilterFollowedUp] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterFollowedUp, setFilterFollowedUp] = useState<'all' | FollowUpStatus>('all');
   const [filterOrdered, setFilterOrdered] = useState<'all' | 'yes' | 'no'>('all');
 
   // Edit modal state
@@ -137,9 +166,7 @@ export function Donations() {
     }
 
     if (filterFollowedUp !== 'all') {
-      filtered = filtered.filter(d => 
-        filterFollowedUp === 'yes' ? d.reachout.donation?.followedUp : !d.reachout.donation?.followedUp
-      );
+      filtered = filtered.filter(d => followUpStatus(d.reachout.donation) === filterFollowedUp);
     }
 
     if (filterOrdered !== 'all') {
@@ -228,8 +255,9 @@ export function Donations() {
     }
   };
 
-  const handleToggleFollowedUp = async (row: DonationRow) => {
+  const handleSetFollowUp = async (row: DonationRow, status: FollowUpStatus) => {
     if (!row.reachout.donation) return;
+    if (followUpStatus(row.reachout.donation) === status) return;
 
     haptics.tap();
     try {
@@ -239,7 +267,8 @@ export function Donations() {
             ...r,
             donation: {
               ...r.donation,
-              followedUp: !r.donation.followedUp,
+              followedUp: status === 'yes',
+              noFollowUp: status === 'none',
             },
           };
         }
@@ -248,12 +277,12 @@ export function Donations() {
 
       await api.queuePatch(`/contacts/${row.contact.id}`, {
         reachouts: updatedReachouts,
-      }, { label: 'Toggle followed-up' });
+      }, { label: status === 'none' ? 'Mark no follow-up' : 'Update follow-up' });
 
       bumpDataVersion();
       loadDonations();
     } catch (error) {
-      console.error('Error updating followed up status:', error);
+      console.error('Error updating follow-up status:', error);
     }
   };
 
@@ -527,16 +556,17 @@ export function Donations() {
           />
 
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-            <FormControl size="small" sx={{ minWidth: 140, flex: { xs: 1, sm: 'unset' } }}>
-              <InputLabel>Followed Up</InputLabel>
+            <FormControl size="small" sx={{ minWidth: 180, flex: { xs: 1, sm: 'unset' } }}>
+              <InputLabel>Follow-up</InputLabel>
               <Select
                 value={filterFollowedUp}
-                label="Followed Up"
-                onChange={(e) => setFilterFollowedUp(e.target.value as any)}
+                label="Follow-up"
+                onChange={(e) => setFilterFollowedUp(e.target.value as 'all' | FollowUpStatus)}
               >
                 <MenuItem value="all">All</MenuItem>
-                <MenuItem value="yes">Yes</MenuItem>
-                <MenuItem value="no">No</MenuItem>
+                <MenuItem value="no">Needs follow-up</MenuItem>
+                <MenuItem value="yes">Followed up</MenuItem>
+                <MenuItem value="none">No follow-up</MenuItem>
               </Select>
             </FormControl>
 
@@ -599,7 +629,7 @@ export function Donations() {
               <TableCell>Phone</TableCell>
               <TableCell>Email</TableCell>
               <TableCell align="center">Mouths</TableCell>
-              <TableCell align="center">Followed Up</TableCell>
+              <TableCell align="center">Follow-up</TableCell>
               <TableCell align="center">Ordered</TableCell>
               <TableCell align="center">Actions</TableCell>
             </TableRow>
@@ -627,14 +657,10 @@ export function Donations() {
                     <Chip label={row.mouths} size="small" color="primary" />
                   </TableCell>
                   <TableCell align="center">
-                    <Tooltip title="Toggle followed up">
-                      <Checkbox
-                        checked={row.reachout.donation?.followedUp || false}
-                        onChange={() => handleToggleFollowedUp(row)}
-                        icon={<CancelIcon color="disabled" />}
-                        checkedIcon={<CheckCircleIcon color="success" />}
-                      />
-                    </Tooltip>
+                    <FollowUpSelect
+                      value={followUpStatus(row.reachout.donation)}
+                      onChange={(status) => handleSetFollowUp(row, status)}
+                    />
                   </TableCell>
                   <TableCell align="center">
                     <Tooltip title="Toggle ordered from us">
@@ -669,7 +695,6 @@ export function Donations() {
         ) : (
           filteredDonations.map((row, index) => {
             const contactName = `${row.contact.firstName || ''} ${row.contact.lastName || ''}`.trim() || 'Contact';
-            const followedUp = row.reachout.donation?.followedUp || false;
             const ordered = row.reachout.donation?.orderedFromUs || false;
             return (
               <Card
@@ -707,18 +732,9 @@ export function Donations() {
 
                   {/* Toggleable status chips */}
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 1.5 }}>
-                    <Chip
-                      icon={followedUp ? <CheckCircleIcon /> : <CancelIcon />}
-                      label={followedUp ? 'Followed up' : 'Not followed up'}
-                      size="small"
-                      clickable
-                      onClick={() => handleToggleFollowedUp(row)}
-                      sx={{
-                        bgcolor: followedUp ? 'rgba(46, 204, 113, 0.15)' : 'rgba(0,0,0,0.05)',
-                        color: followedUp ? '#27ae60' : 'rgba(0,0,0,0.6)',
-                        fontWeight: 600,
-                        '& .MuiChip-icon': { color: 'inherit' },
-                      }}
+                    <FollowUpSelect
+                      value={followUpStatus(row.reachout.donation)}
+                      onChange={(status) => handleSetFollowUp(row, status)}
                     />
                     <Chip
                       icon={ordered ? <CheckCircleIcon /> : <CancelIcon />}
@@ -810,6 +826,37 @@ export function Donations() {
                 onChange={(e) => setEditDonationData(prev => prev ? { ...prev, cakesDonatedNotes: e.target.value } : null)}
                 disabled={editLoading}
               />
+
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editDonationData.followedUp}
+                      onChange={(e) => setEditDonationData(prev => prev ? {
+                        ...prev,
+                        followedUp: e.target.checked,
+                        noFollowUp: e.target.checked ? false : prev.noFollowUp,
+                      } : null)}
+                      disabled={editLoading}
+                    />
+                  }
+                  label="Followed up"
+                />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editDonationData.noFollowUp === true}
+                      onChange={(e) => setEditDonationData(prev => prev ? {
+                        ...prev,
+                        noFollowUp: e.target.checked,
+                        followedUp: e.target.checked ? false : prev.followedUp,
+                      } : null)}
+                      disabled={editLoading}
+                    />
+                  }
+                  label="No follow-up needed"
+                />
+              </Box>
             </Box>
           )}
         </DialogContent>

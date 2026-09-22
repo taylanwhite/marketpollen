@@ -49,6 +49,7 @@ import {
   Cake as CakeIcon,
   CheckCircle as CheckCircleIcon,
   Cancel as CancelIcon,
+  Block as BlockIcon,
   Edit as EditIcon,
   Delete as DeleteIcon,
   Settings as SettingsIcon,
@@ -717,7 +718,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                                 disabled={loading}
                               />
 
-                              <Box sx={{ display: 'flex', gap: 2 }}>
+                              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                                 <FormControlLabel
                                   control={
                                     <Checkbox
@@ -732,11 +733,29 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                                   control={
                                     <Checkbox
                                       checked={editingReachoutDonation?.followedUp || false}
-                                      onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, followedUp: e.target.checked } : createEmptyDonation(products))}
+                                      onChange={(e) => setEditingReachoutDonation(prev => prev ? {
+                                        ...prev,
+                                        followedUp: e.target.checked,
+                                        noFollowUp: e.target.checked ? false : prev.noFollowUp,
+                                      } : createEmptyDonation(products))}
                                       disabled={loading}
                                     />
                                   }
                                   label="Followed up?"
+                                />
+                                <FormControlLabel
+                                  control={
+                                    <Checkbox
+                                      checked={editingReachoutDonation?.noFollowUp === true}
+                                      onChange={(e) => setEditingReachoutDonation(prev => prev ? {
+                                        ...prev,
+                                        noFollowUp: e.target.checked,
+                                        followedUp: e.target.checked ? false : prev.followedUp,
+                                      } : createEmptyDonation(products))}
+                                      disabled={loading}
+                                    />
+                                  }
+                                  label="No follow-up needed"
                                 />
                               </Box>
                             </Box>
@@ -917,13 +936,15 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                             </Typography>
                           </Box>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            {reachout.donation!.followedUp ? (
+                            {reachout.donation!.noFollowUp ? (
+                              <BlockIcon fontSize="small" color="disabled" />
+                            ) : reachout.donation!.followedUp ? (
                               <CheckCircleIcon fontSize="small" color="success" />
                             ) : (
                               <CancelIcon fontSize="small" color="disabled" />
                             )}
                             <Typography variant="caption" color="text.secondary">
-                              Followed Up
+                              {reachout.donation!.noFollowUp ? 'No follow-up' : 'Followed Up'}
                             </Typography>
                           </Box>
                         </Box>

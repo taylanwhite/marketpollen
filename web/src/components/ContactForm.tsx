@@ -338,6 +338,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             cakesDonatedNotes: (d.cakesDonatedNotes as string) || '',
             orderedFromUs: (d.orderedFromUs as boolean) ?? false,
             followedUp: (d.followedUp as boolean) ?? false,
+            noFollowUp: false,
           });
         }
       }
@@ -619,7 +620,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       // so the entire save chain can survive a network drop.
       const newContactId = crypto.randomUUID();
       const reachoutLogEventId = crypto.randomUUID();
-      const followUpEventId = crypto.randomUUID();
+      const skipFollowUp = includeDonation && donationData.noFollowUp === true;
       const initialReachout: Reachout = {
         id: `reach-${Date.now()}`,
         date: now,
@@ -627,51 +628,61 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         rawNotes: rawNotes || null,
         createdBy: userId,
         type: form.reachoutType,
-        donation: includeDonation ? donationData : undefined,
+        donation: includeDonation
+          ? {
+              ...donationData,
+              noFollowUp: skipFollowUp,
+              followedUp: skipFollowUp ? false : donationData.followedUp,
+            }
+          : undefined,
       };
 
       // Step 1 — try AI follow-up suggestion online. If it fails for any
       // reason (offline, slow, API down), fall back to the user-picked
-      // "follow up in N days" preset. Either way, we never block saving.
-      let suggestedFollowUpDate: Date;
-      let suggestedFollowUpMethod: 'email' | 'call' | 'meeting' | 'text' | 'other' | null;
+      // "follow up in N days" preset. A donation marked "no follow-up"
+      // skips this entirely so we don't schedule a reminder or email anyone.
+      let suggestedFollowUpDate: Date | null = null;
+      let suggestedFollowUpMethod: 'email' | 'call' | 'meeting' | 'text' | 'other' | null = null;
       let suggestedFollowUpNote: string | null = null;
-      let suggestedFollowUpPriority: 'low' | 'medium' | 'high' | null = 'medium';
+      let suggestedFollowUpPriority: 'low' | 'medium' | 'high' | null = null;
       let aiSuggestionApplied = false;
 
-      try {
-        if (navigator.onLine) {
-          const aiSuggestion = await generateFollowUpSuggestion({
-            firstName: firstName || undefined,
-            lastName: lastName || undefined,
-            reachouts: [
-              {
-                date: initialReachout.date,
-                note: initialReachout.note || '',
-                type: initialReachout.type || 'other',
-                donation: initialReachout.donation,
-              },
-            ],
-            personalDetails: form.personalDetails || undefined,
-            status: 'new',
-            email: form.email || undefined,
-            phone: form.phone || undefined,
-          });
-          suggestedFollowUpDate = new Date(aiSuggestion.suggestedDate);
-          suggestedFollowUpMethod = aiSuggestion.suggestedMethod || null;
-          suggestedFollowUpNote = aiSuggestion.message || null;
-          suggestedFollowUpPriority = aiSuggestion.priority || 'medium';
-          aiSuggestionApplied = true;
-        } else {
-          throw new Error('offline');
+      if (!skipFollowUp) {
+        suggestedFollowUpPriority = 'medium';
+        try {
+          if (navigator.onLine) {
+            const aiSuggestion = await generateFollowUpSuggestion({
+              firstName: firstName || undefined,
+              lastName: lastName || undefined,
+              reachouts: [
+                {
+                  date: initialReachout.date,
+                  note: initialReachout.note || '',
+                  type: initialReachout.type || 'other',
+                  donation: initialReachout.donation,
+                },
+              ],
+              personalDetails: form.personalDetails || undefined,
+              status: 'new',
+              email: form.email || undefined,
+              phone: form.phone || undefined,
+            });
+            suggestedFollowUpDate = new Date(aiSuggestion.suggestedDate);
+            suggestedFollowUpMethod = aiSuggestion.suggestedMethod || null;
+            suggestedFollowUpNote = aiSuggestion.message || null;
+            suggestedFollowUpPriority = aiSuggestion.priority || 'medium';
+            aiSuggestionApplied = true;
+          } else {
+            throw new Error('offline');
+          }
+        } catch (aiErr) {
+          if ((aiErr as Error)?.message !== 'offline') {
+            console.warn('AI follow-up generation failed, using fallback:', aiErr);
+          }
+          suggestedFollowUpDate = new Date(now);
+          suggestedFollowUpDate.setDate(suggestedFollowUpDate.getDate() + form.followUpDays);
+          suggestedFollowUpMethod = form.email ? 'email' : form.phone ? 'call' : 'meeting';
         }
-      } catch (aiErr) {
-        if ((aiErr as Error)?.message !== 'offline') {
-          console.warn('AI follow-up generation failed, using fallback:', aiErr);
-        }
-        suggestedFollowUpDate = new Date(now);
-        suggestedFollowUpDate.setDate(suggestedFollowUpDate.getDate() + form.followUpDays);
-        suggestedFollowUpMethod = form.email ? 'email' : form.phone ? 'call' : 'meeting';
       }
 
       // Step 2 — create the contact. Pass a client-generated UUID so the
@@ -701,7 +712,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       // Step 3 — attach the initial reachout + follow-up suggestion. PATCH
       // bodies send the full reachouts array, which makes them idempotent.
       await api.queuePatch(`/contacts/${newContactId}`, {
-        suggestedFollowUpDate: suggestedFollowUpDate.toISOString(),
+        suggestedFollowUpDate: suggestedFollowUpDate ? suggestedFollowUpDate.toISOString() : null,
         suggestedFollowUpMethod: suggestedFollowUpMethod || null,
         suggestedFollowUpNote: suggestedFollowUpNote || null,
         suggestedFollowUpPriority: suggestedFollowUpPriority || null,
@@ -727,8 +738,10 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         }, { label: `Reachout log · ${contactName}` });
       }
 
-      // Step 5 — schedule the follow-up event
-      {
+      // Step 5 — schedule the follow-up event. Creating this event is what
+      // emails the marketer, so a "no follow-up" donation must not post it.
+      if (!skipFollowUp && suggestedFollowUpDate) {
+        const followUpEventId = crypto.randomUUID();
         const normalizedDate = new Date(suggestedFollowUpDate);
         normalizedDate.setHours(0, 0, 0, 0);
         await api.queuePost(`/calendar-events?storeId=${storeId}`, {
@@ -765,9 +778,11 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         parts.push(`${totalMouths} mouths logged`);
       }
       parts.push(
-        aiSuggestionApplied
-          ? 'follow-up scheduled'
-          : `follow-up in ${form.followUpDays} day${form.followUpDays === 1 ? '' : 's'}`
+        skipFollowUp
+          ? 'no follow-up'
+          : aiSuggestionApplied
+            ? 'follow-up scheduled'
+            : `follow-up in ${form.followUpDays} day${form.followUpDays === 1 ? '' : 's'}`
       );
       setSuccessMessage(parts.join(' · '));
       setSuccess(true);
@@ -1260,24 +1275,50 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                   sx={{ mt: 2 }}
                   disabled={loading}
                 />
+                <FormControlLabel
+                  sx={{ mt: 1, alignItems: 'flex-start' }}
+                  control={
+                    <Switch
+                      checked={donationData.noFollowUp === true}
+                      onChange={(e) => setDonationData((prev) => ({
+                        ...prev,
+                        noFollowUp: e.target.checked,
+                        followedUp: e.target.checked ? false : prev.followedUp,
+                      }))}
+                      disabled={loading}
+                    />
+                  }
+                  label={
+                    <Box>
+                      <Typography>No follow-up needed</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Nothing else to do. Skips the calendar reminder and the email.
+                      </Typography>
+                    </Box>
+                  }
+                />
               </Box>
             </Collapse>
           </Box>
 
           {/* Follow-up preset chips */}
-          <Box>
+          <Box sx={{ opacity: includeDonation && donationData.noFollowUp ? 0.45 : 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
               Follow up in
             </Typography>
             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
               {FOLLOW_UP_PRESETS.map((preset) => {
-                const active = form.followUpDays === preset.days;
+                const skipFollowUp = includeDonation && donationData.noFollowUp === true;
+                const active = !skipFollowUp && form.followUpDays === preset.days;
                 return (
                   <Chip
                     key={preset.days}
                     label={preset.label}
-                    clickable
-                    onClick={() => setForm((p) => ({ ...p, followUpDays: preset.days }))}
+                    clickable={!skipFollowUp}
+                    onClick={() => {
+                      if (skipFollowUp) return;
+                      setForm((p) => ({ ...p, followUpDays: preset.days }));
+                    }}
                     variant={active ? 'filled' : 'outlined'}
                     sx={{
                       bgcolor: active ? '#f5c842' : 'transparent',
@@ -1291,7 +1332,9 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
               })}
             </Stack>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-              AI may pick a smarter date based on the visit context.
+              {includeDonation && donationData.noFollowUp
+                ? 'No reminder will be scheduled, and no follow-up email will be sent.'
+                : 'AI may pick a smarter date based on the visit context.'}
             </Typography>
           </Box>
 

@@ -101,6 +101,8 @@ export interface DonationData {
   cakesDonatedNotes?: string;
   orderedFromUs: boolean;
   followedUp: boolean;
+  /** True when this donation does not need a reminder or follow-up email. */
+  noFollowUp?: boolean;
 }
 
 /** @deprecated Use CampaignProduct from org config instead */

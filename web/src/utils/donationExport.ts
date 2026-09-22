@@ -141,7 +141,7 @@ function buildDataRow(
     donation.cakesDonatedNotes || '',
     reachout.note || '',
     donation.orderedFromUs ? 'yes!' : '',
-    donation.followedUp ? 'Yes' : '',
+    donation.noFollowUp ? 'No follow-up' : donation.followedUp ? 'Yes' : '',
   ];
 }
 
