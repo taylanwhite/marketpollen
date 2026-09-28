@@ -1,6 +1,7 @@
 import {
   calculateMouths,
   getCurrentQuarterLabel,
+  getFiscalQuarter,
   getQuarterDateRange,
 } from './donationCalculations';
 import {
@@ -249,7 +250,8 @@ function startOfDay(date: Date): Date {
 
 function startOfWeek(date: Date): Date {
   const d = startOfDay(date);
-  d.setDate(d.getDate() - d.getDay());
+  const daysFromMonday = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - daysFromMonday);
   return d;
 }
 
@@ -258,7 +260,7 @@ function startOfMonth(date: Date): Date {
 }
 
 function startOfQuarter(date: Date): Date {
-  return new Date(date.getFullYear(), Math.floor(date.getMonth() / 3) * 3, 1, 0, 0, 0, 0);
+  return getFiscalQuarter(date).start;
 }
 
 function monthSpan(start: Date, end: Date): number {
@@ -335,17 +337,16 @@ export function buildPeriodBuckets(
   if (rangeKey === 'all' && monthSpan(start, end) > 24) {
     let cursor = startOfQuarter(start);
     while (cursor <= end) {
-      const next = new Date(cursor.getFullYear(), cursor.getMonth() + 3, 1);
-      const quarter = Math.floor(cursor.getMonth() / 3) + 1;
+      const quarter = getFiscalQuarter(cursor);
       buckets.push({
-        key: `${cursor.getFullYear()}-Q${quarter}`,
-        label: `Q${quarter} ${String(cursor.getFullYear()).slice(2)}`,
-        start: new Date(cursor),
-        end: new Date(next.getTime() - 1),
+        key: `${quarter.year}-Q${quarter.quarter}`,
+        label: `Q${quarter.quarter} ${String(quarter.year).slice(2)}`,
+        start: quarter.start,
+        end: quarter.end,
         mouths: 0,
         count: 0,
       });
-      cursor = next;
+      cursor = new Date(quarter.end.getTime() + 1);
     }
     return buckets;
   }

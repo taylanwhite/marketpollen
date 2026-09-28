@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { getAccessibleStores } from './lib/store-access.js';
+import { getQuarterDateRange } from './lib/fiscal-quarter.js';
 
 interface ProductConfig {
   id: string;
@@ -17,17 +18,6 @@ const SLUG_TO_FIELD: Record<string, string> = {
   sampleTray: 'sample_tray',
   bundtletTower: 'bundtlet_tower',
 };
-
-function getQuarterRange(date: Date): { start: Date; end: Date } {
-  const year = date.getFullYear();
-  const quarter = Math.floor(date.getMonth() / 3);
-  const startMonth = quarter * 3;
-  const endMonth = startMonth + 2;
-  return {
-    start: new Date(year, startMonth, 1, 0, 0, 0, 0),
-    end: new Date(year, endMonth + 1, 0, 23, 59, 59, 999),
-  };
-}
 
 function calculateReachoutMouths(r: any, products: ProductConfig[]): number {
   let total = 0;
@@ -72,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     const orgMap = new Map(orgs.map(o => [o.id, o]));
 
-    const { start, end } = getQuarterRange(new Date());
+    const { start, end } = getQuarterDateRange(new Date());
 
     const contacts = await prisma.contact.findMany({
       where: { store_id: { in: storeIds } },

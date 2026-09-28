@@ -1,4 +1,11 @@
 import { DonationData, MOUTH_VALUES, QUARTERLY_GOAL, Reachout, Contact, CampaignProduct, SLUG_TO_FIELD } from '../types';
+import {
+  getCurrentQuarterLabel,
+  getFiscalQuarter,
+  getQuarterDateRange,
+} from '../../handlers/lib/fiscal-quarter';
+
+export { getCurrentQuarterLabel, getFiscalQuarter, getQuarterDateRange };
 
 /**
  * Calculate total mouths for a single donation using dynamic product config.
@@ -31,25 +38,6 @@ export function calculateMouths(donation: DonationData, products?: CampaignProdu
     total += qty * product.mouthValue;
   }
   return total;
-}
-
-export function getQuarterDateRange(date: Date = new Date()): { start: Date; end: Date } {
-  const year = date.getFullYear();
-  const month = date.getMonth();
-  const quarter = Math.floor(month / 3);
-  
-  const startMonth = quarter * 3;
-  const endMonth = startMonth + 2;
-  
-  const start = new Date(year, startMonth, 1, 0, 0, 0, 0);
-  const end = new Date(year, endMonth + 1, 0, 23, 59, 59, 999);
-  
-  return { start, end };
-}
-
-export function getCurrentQuarterLabel(date: Date = new Date()): string {
-  const quarter = Math.floor(date.getMonth() / 3) + 1;
-  return `Q${quarter} ${date.getFullYear()}`;
 }
 
 export function isInCurrentQuarter(date: Date, referenceDate: Date = new Date()): boolean {
