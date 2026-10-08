@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import { prisma } from './db.js';
 import { appUrl } from './app-url.js';
 import { GRACE_MS } from './org-billing-access.js';
+import { getStripe } from './stripe.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -9,7 +10,23 @@ function fromEmail(): string {
   return process.env.RESEND_FROM_EMAIL || 'MarketPollen <onboarding@resend.dev>';
 }
 
-async function recipientEmails(orgId: string, createdBy: string): Promise<string[]> {
+async function billingContactEmail(stripeCustomerId: string | null): Promise<string | null> {
+  if (!stripeCustomerId || !process.env.STRIPE_SECRET_KEY) return null;
+  try {
+    const customer = await getStripe().customers.retrieve(stripeCustomerId);
+    if (customer.deleted) return null;
+    const email = customer.email?.trim();
+    return email || null;
+  } catch (err) {
+    console.error('Could not load billing contact for payment reminder', err);
+    return null;
+  }
+}
+
+async function recipientEmails(orgId: string, createdBy: string, stripeCustomerId: string | null): Promise<string[]> {
+  const billingEmail = await billingContactEmail(stripeCustomerId);
+  if (billingEmail) return [billingEmail];
+
   const members = await prisma.organizationMember.findMany({
     where: { org_id: orgId, is_admin: true },
     select: { user: { select: { email: true, is_global_admin: true } } },
@@ -27,7 +44,7 @@ async function recipientEmails(orgId: string, createdBy: string): Promise<string
 async function sendPaymentEmail(orgId: string, kind: 'start' | 'final'): Promise<boolean> {
   const org = await prisma.organization.findUnique({
     where: { id: orgId },
-    select: { name: true, created_by: true, payment_failed_at: true },
+    select: { name: true, created_by: true, payment_failed_at: true, stripe_customer_id: true },
   });
   if (!org?.payment_failed_at) return false;
   const apiKey = process.env.RESEND_API_KEY;
@@ -35,7 +52,7 @@ async function sendPaymentEmail(orgId: string, kind: 'start' | 'final'): Promise
     console.error('RESEND_API_KEY is not configured; payment reminder was not sent');
     return false;
   }
-  const emails = await recipientEmails(orgId, org.created_by);
+  const emails = await recipientEmails(orgId, org.created_by, org.stripe_customer_id);
   if (emails.length === 0) return false;
 
   const graceEnd = new Date(org.payment_failed_at.getTime() + GRACE_MS);
