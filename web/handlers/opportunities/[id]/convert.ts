@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../../lib/db.js';
 import { getAuthUid } from '../../lib/auth.js';
-import { canAccessStore } from '../../lib/store-access.js';
+import { canAccessStore, rejectIfStoreLocked } from '../../lib/store-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -20,6 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const can = await canAccessStore(uid, opportunity.store_id);
   if (!can) return res.status(404).json({ error: 'Opportunity not found' });
+  if (await rejectIfStoreLocked(res, opportunity.store_id)) return;
 
   const body = req.body as { name?: string; address?: string; city?: string; state?: string; zipCode?: string } | undefined;
   const name = (body?.name ?? opportunity.name) || opportunity.name;

@@ -111,6 +111,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdAt: s.created_at,
       createdBy: s.created_by,
       organizationId: s.organization_id ?? undefined,
+      billingStatus: s.billing_status,
+      pauseOn: s.pause_on,
     })),
     organizations,
   });

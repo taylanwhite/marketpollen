@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { isOrgAdmin, isOrgMember } from '../lib/org-access.js';
+import { billingView } from '../lib/billing.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
@@ -49,6 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         displayName: m.user.display_name,
         isAdmin: m.is_admin,
       })),
+      billing: await billingView(id),
     });
   }
 

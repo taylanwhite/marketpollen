@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
-import { canAccessStore, canViewStore } from '../lib/store-access.js';
+import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
 
 function reachoutToJson(r: any) {
   const customDonations = r.custom_donations as Record<string, number> | null;
@@ -91,6 +91,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') return res.status(200).json(contactToJson(contact));
 
   if (!(await canAccessStore(uid, contact.store_id))) return res.status(404).json({ error: 'Contact not found' });
+  if (await rejectIfStoreLocked(res, contact.store_id)) return;
 
   if (req.method === 'PATCH') {
     const body = req.body as {

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { CampaignProduct } from '../types';
@@ -12,6 +13,20 @@ import {
   Delete as DeleteIcon, Save as SaveIcon,
 } from '@mui/icons-material';
 
+interface BillingInfo {
+  enabled: boolean;
+  status: string | null;
+  paidQuantity: number;
+  monthlyLabel: string;
+  nextMonthlyLabel: string;
+  currentPeriodEnd: string | null;
+  alert: string | null;
+  needsCheckout: boolean;
+  minimumQuantity: number;
+  configured: boolean;
+  unitLabel: string;
+}
+
 interface OrgData {
   id: string;
   name: string;
@@ -19,6 +34,7 @@ interface OrgData {
   stores: Array<{ id: string; name: string }>;
   products: CampaignProduct[];
   members: Array<{ userId: string; email: string; displayName: string | null; isAdmin: boolean }>;
+  billing: BillingInfo | null;
 }
 
 export function OrgSettings() {
@@ -35,8 +51,40 @@ export function OrgSettings() {
   const [editingProduct, setEditingProduct] = useState<CampaignProduct | null>(null);
   const [productForm, setProductForm] = useState({ name: '', slug: '', mouthValue: 1 });
   const [productSaving, setProductSaving] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [storeQuantity, setStoreQuantity] = useState(1);
+  const [billingBusy, setBillingBusy] = useState(false);
 
-  useEffect(() => { if (currentOrg) loadOrgData(); }, [currentOrg?.id]);
+  useEffect(() => {
+    if (!currentOrg) return;
+    const sessionId = searchParams.get('session_id');
+    const finish = () => {
+      if (searchParams.get('billing') || sessionId) {
+        const next = new URLSearchParams(searchParams);
+        next.delete('billing');
+        next.delete('session_id');
+        setSearchParams(next, { replace: true });
+      }
+    };
+    if (searchParams.get('billing') === 'success' && sessionId) {
+      setSuccess('Payment received. The monthly bill will show here once it is confirmed.');
+      api.post<{ status: string | null }>(`/organizations/${currentOrg.id}/billing`, { action: 'sync_checkout', sessionId })
+        .then((billing) => setSuccess(billing.status === 'active'
+          ? 'Your monthly bill is active. You can add stores now.'
+          : 'Payment received. If the bill is not shown yet, refresh this page in a moment.'))
+        .catch((err: Error) => setError(err.message || 'The payment is still processing. Refresh this page in a moment.'))
+        .finally(() => {
+          finish();
+          loadOrgData();
+        });
+      return;
+    }
+    if (searchParams.get('billing') === 'cancel') {
+      setError('The monthly bill was not started.');
+      finish();
+    }
+    loadOrgData();
+  }, [currentOrg?.id]);
 
   const loadOrgData = async () => {
     if (!currentOrg) return;
@@ -45,6 +93,9 @@ export function OrgSettings() {
       const data = await api.get<OrgData>(`/organizations/${currentOrg.id}`);
       setOrgData(data);
       setGoalValue(data.quarterlyGoal);
+      if (data.billing?.minimumQuantity) {
+        setStoreQuantity((current) => Math.max(current, data.billing!.minimumQuantity));
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load organization');
     } finally {
@@ -172,6 +223,109 @@ export function OrgSettings() {
           )}
         </CardContent>
       </Card>
+
+      {(isAdmin() || orgData.billing?.enabled) && (
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Monthly bill</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Each store is {orgData.billing?.unitLabel || '$65.00'} a month.
+            </Typography>
+            {orgData.billing?.alert && <Alert severity="warning" sx={{ mb: 2 }}>{orgData.billing.alert}</Alert>}
+            {isAdmin() && orgData.billing?.status !== 'active' && (
+              <FormControlLabel
+                sx={{ mb: 1, display: 'block' }}
+                control={
+                  <Switch
+                    checked={!!orgData.billing?.enabled}
+                    disabled={billingBusy}
+                    onChange={async (event) => {
+                      setBillingBusy(true);
+                      setError('');
+                      try {
+                        await api.post(`/organizations/${orgData.id}/billing`, { action: 'enable', enabled: event.target.checked });
+                        await loadOrgData();
+                      } catch (err: any) {
+                        setError(err.message || 'Could not update billing');
+                      } finally {
+                        setBillingBusy(false);
+                      }
+                    }}
+                  />
+                }
+                label="Require a monthly bill before new stores can be added"
+              />
+            )}
+            {orgData.billing?.needsCheckout && (
+              <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+                <TextField
+                  label="How many stores are you starting with?"
+                  type="number"
+                  size="small"
+                  value={storeQuantity}
+                  onChange={(event) => setStoreQuantity(Math.max(orgData.billing?.minimumQuantity || 1, parseInt(event.target.value, 10) || 1))}
+                  slotProps={{ htmlInput: { min: orgData.billing.minimumQuantity || 1 } }}
+                  sx={{ width: 280 }}
+                />
+                <Button
+                  variant="contained"
+                  disabled={billingBusy || orgData.billing.configured === false}
+                  onClick={async () => {
+                    setBillingBusy(true);
+                    setError('');
+                    try {
+                      const result = await api.post<{ url: string }>(`/organizations/${orgData.id}/billing`, {
+                        action: 'checkout',
+                        quantity: storeQuantity,
+                      });
+                      window.location.href = result.url;
+                    } catch (err: any) {
+                      setError(err.message || 'Could not start the bill');
+                      setBillingBusy(false);
+                    }
+                  }}
+                >
+                  {billingBusy ? <CircularProgress size={16} color="inherit" /> : `Start at $${storeQuantity * 65} a month`}
+                </Button>
+                <Typography variant="body2" color="text.secondary">
+                  You'll pay for the full month today. Adding another store later charges only the days left in that month.
+                </Typography>
+              </Box>
+            )}
+            {orgData.billing?.status === 'active' && (
+              <Box>
+                <Typography sx={{ mb: 1 }}>
+                  You're paying {orgData.billing.monthlyLabel} a month
+                  {orgData.billing.paidQuantity ? ` for ${orgData.billing.paidQuantity} ${orgData.billing.paidQuantity === 1 ? 'store' : 'stores'}` : ''}.
+                  {orgData.billing.currentPeriodEnd && orgData.billing.nextMonthlyLabel !== orgData.billing.monthlyLabel && (
+                    <> On {new Date(orgData.billing.currentPeriodEnd).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} the bill goes to {orgData.billing.nextMonthlyLabel}.</>
+                  )}
+                </Typography>
+                <Button
+                  variant="outlined"
+                  disabled={billingBusy}
+                  onClick={async () => {
+                    setBillingBusy(true);
+                    setError('');
+                    try {
+                      const result = await api.post<{ url: string }>(`/organizations/${orgData.id}/billing`, { action: 'portal' });
+                      window.location.href = result.url;
+                    } catch (err: any) {
+                      setError(err.message || 'Could not open billing');
+                      setBillingBusy(false);
+                    }
+                  }}
+                >
+                  Update card
+                </Button>
+              </Box>
+            )}
+            {orgData.billing?.enabled && orgData.billing.configured === false && (
+              <Alert severity="info" sx={{ mt: 2 }}>Monthly billing isn't configured yet.</Alert>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Products */}
       <Card>

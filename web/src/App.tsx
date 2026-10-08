@@ -97,7 +97,7 @@ function AppRoutes() {
             <Route
               path="/stores"
               element={
-                <ProtectedRoute requireAdmin={true}>
+                <ProtectedRoute>
                   <Stores />
                 </ProtectedRoute>
               }

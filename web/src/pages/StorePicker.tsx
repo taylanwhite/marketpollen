@@ -139,15 +139,19 @@ export function StorePicker() {
                 You don't have access to any stores yet.
               </Typography>
               
-              {isAdmin() && (
-                <Button
-                  variant="contained"
-                  startIcon={<AddIcon />}
-                  onClick={() => navigate('/stores')}
-                  sx={{ mb: 2 }}
-                >
-                  Create First Store
-                </Button>
+              {(isAdmin() || isOrgAdminFn()) && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, mb: 2 }}>
+                  <Button
+                    variant="contained"
+                    startIcon={<AddIcon />}
+                    onClick={() => navigate('/stores')}
+                  >
+                    Create First Store
+                  </Button>
+                  <Button variant="text" onClick={() => navigate('/org-settings')}>
+                    Organization settings
+                  </Button>
+                </Box>
               )}
               
               <Box>
@@ -239,6 +243,12 @@ export function StorePicker() {
                             <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                               {store.city}, {store.state}
                             </Typography>
+                          )}
+                          {store.billingStatus === 'paused' && (
+                            <Chip size="small" color="warning" label="Paused" sx={{ mt: 1, alignSelf: 'center' }} />
+                          )}
+                          {store.billingStatus === 'pause_scheduled' && (
+                            <Chip size="small" label="Pauses at the end of this month" sx={{ mt: 1, alignSelf: 'center' }} />
                           )}
                         </Box>
                         {(() => {

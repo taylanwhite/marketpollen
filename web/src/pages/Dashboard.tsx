@@ -88,6 +88,7 @@ export function Dashboard() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const businessFilter = searchParams.get('business');
+  const openNewContact = searchParams.get('new') === '1';
   const contactFilter = searchParams.get('contact');
   const openedContactRef = useRef<string | null>(null);
   
@@ -95,7 +96,7 @@ export function Dashboard() {
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
   const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(openNewContact && !!businessFilter);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [followUpSuggestions, setFollowUpSuggestions] = useState<FollowUpSuggestion[]>([]);
   const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false);

@@ -7,6 +7,7 @@ import { UserMenu } from './UserMenu';
 import { QuickAddDialog } from './QuickAddDialog';
 import { OfflineIndicator } from './OfflineIndicator';
 import { OfflineBanner } from './OnlineOnlyNotice';
+import { isStoreLocked } from '../utils/storeLock';
 import { Store } from '../types';
 import { api } from '../api/client';
 import { prefetchOfflineAssets } from '../utils/prefetchOfflineAssets';
@@ -21,6 +22,8 @@ import {
   ListItemText,
   Toolbar,
   Divider,
+  Alert,
+  Button,
 } from '@mui/material';
 import {
   Assignment as PlanIcon,
@@ -40,7 +43,7 @@ interface MainLayoutProps {
 export function MainLayout({ children }: MainLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { permissions } = usePermissions();
+  const { permissions, isAdmin, isOrgAdminFn } = usePermissions();
 
   const [currentStore, setCurrentStore] = useState<Store | null>(null);
   const [hasMultipleStores, setHasMultipleStores] = useState(false);
@@ -236,6 +239,19 @@ export function MainLayout({ children }: MainLayoutProps) {
         }}
       >
         <Toolbar />
+        {currentStore?.statusMessage && (
+          <Alert
+            severity={isStoreLocked(currentStore) ? 'warning' : 'info'}
+            sx={{ mb: 2 }}
+            action={(isAdmin() || isOrgAdminFn()) ? (
+              <Button color="inherit" size="small" onClick={() => navigate('/stores')}>
+                {isStoreLocked(currentStore) ? 'Turn back on' : 'Keep open'}
+              </Button>
+            ) : undefined}
+          >
+            {currentStore.statusMessage}
+          </Alert>
+        )}
         {/* Persistent, sticky no-signal banner directly under the AppBar.
             The pill in the top bar is easy to miss on a busy page; this
             ribbon is unmissable and tells marketers exactly what's degraded. */}
@@ -248,7 +264,7 @@ export function MainLayout({ children }: MainLayoutProps) {
           on currentStoreId being set. */}
       {permissions.currentStoreId && location.pathname !== '/select-store' && (
         <>
-          <MobileBottomNav onQuickAdd={() => setQuickAddOpen(true)} />
+          <MobileBottomNav onQuickAdd={() => { if (!isStoreLocked(currentStore)) setQuickAddOpen(true); }} />
           <QuickAddDialog open={quickAddOpen} onClose={() => setQuickAddOpen(false)} />
         </>
       )}

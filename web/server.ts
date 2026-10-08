@@ -43,9 +43,17 @@ import generateEmailHandler from './dist-handlers/generate-email.js';
 import storeProgressHandler from './dist-handlers/store-progress.js';
 import calendarFeedPublicHandler from './dist-handlers/calendar-feed.js';
 import storeCalendarFeedHandler from './dist-handlers/stores/[id]/calendar-feed.js';
+import stripeWebhookHandler from './dist-handlers/stripe-webhook.js';
+import orgBillingHandler from './dist-handlers/organizations/[id]/billing.js';
+import storeBillingHandler from './dist-handlers/stores/[id]/billing.js';
 
 
 const app = express();
+app.post(
+  '/api/stripe/webhook',
+  express.raw({ type: 'application/json' }),
+  (req, res) => stripeWebhookHandler(req, res),
+);
 app.use(express.json({ limit: '10mb' }));
 
 type Handler = (req: express.Request, res: express.Response) => Promise<unknown>;
@@ -81,6 +89,7 @@ app.post('/api/stores', route(storesHandler));
 app.get('/api/store-progress', route(storeProgressHandler));
 app.get('/api/stores/:id/calendar-feed', withId(storeCalendarFeedHandler));
 app.post('/api/stores/:id/calendar-feed', withId(storeCalendarFeedHandler));
+app.all('/api/stores/:id/billing', withId(storeBillingHandler));
 app.all('/api/stores/:id', withId(storesIdHandler));
 app.get('/api/calendar-feed/:id', withId(calendarFeedPublicHandler));
 app.head('/api/calendar-feed/:id', withId(calendarFeedPublicHandler));
@@ -145,6 +154,7 @@ app.all('/api/organizations/:id/products/:pid', withIdPid(orgProductIdHandler));
 app.get('/api/organizations/:id/products', withId(orgProductsHandler));
 app.post('/api/organizations/:id/products', withId(orgProductsHandler));
 
+app.all('/api/organizations/:id/billing', withId(orgBillingHandler));
 app.all('/api/organizations/:id', withId(organizationsIdHandler));
 
 export default app;

@@ -83,7 +83,10 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     return <Navigate to="/dashboard" replace />;
   }
 
-  if (!permissions.currentStoreId && location.pathname !== '/select-store') {
+  const storeOptional = location.pathname === '/select-store'
+    || location.pathname === '/stores'
+    || location.pathname === '/org-settings';
+  if (!permissions.currentStoreId && !storeOptional) {
     return <Navigate to="/select-store" replace />;
   }
 

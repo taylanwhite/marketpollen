@@ -33,11 +33,22 @@ model User {
 }
 
 model Organization {
-  id             String   @id @default(uuid()) @db.Uuid
-  name           String
-  quarterly_goal Int      @default(10000)
-  created_at     DateTime @default(now())
-  created_by     String
+  id                          String    @id @default(uuid()) @db.Uuid
+  name                        String
+  quarterly_goal              Int       @default(10000)
+  created_at                  DateTime  @default(now())
+  created_by                  String
+  billing_enabled             Boolean   @default(false)
+  stripe_customer_id          String?   @unique
+  stripe_subscription_id      String?   @unique
+  stripe_subscription_item_id String?
+  stripe_schedule_id          String?
+  stripe_price_id             String?
+  subscription_status         String?
+  paid_quantity               Int       @default(0)
+  renewal_quantity            Int?
+  current_period_end          DateTime?
+  billing_alert               String?
 
   creator  User                 @relation("OrgCreatedBy", fields: [created_by], references: [id])
   stores   Store[]
@@ -84,6 +95,8 @@ model Store {
   zip_code        String?
   organization_id String?  @db.Uuid
   calendar_feed_token String? @unique
+  billing_status  String   @default("active")
+  pause_on        DateTime?
   created_at      DateTime @default(now())
   created_by      String
 

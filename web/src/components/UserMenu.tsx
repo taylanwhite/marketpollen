@@ -171,7 +171,7 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
                 <ListItemText>Org settings</ListItemText>
               </MenuItem>
             )}
-            {isAdmin() && (
+            {(isAdmin() || isOrgAdminFn()) && (
               <MenuItem onClick={() => go('/stores')} selected={isActive('/stores')}>
                 <ListItemIcon>
                   <LocationIcon fontSize="small" />

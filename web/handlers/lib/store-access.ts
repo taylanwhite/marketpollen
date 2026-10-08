@@ -1,5 +1,29 @@
 import { prisma } from './db.js';
 import { isOrgAdmin } from './org-access.js';
+import { STORE_PAUSED_MESSAGE } from './billing-copy.js';
+
+type JsonResponse = { status: (code: number) => { json: (body: unknown) => unknown } };
+
+/**
+ * A paused store can still be opened and read. Writes wait until it is turned back on.
+ * If the pause date has passed, lock it here even when the renewal webhook has not arrived.
+ */
+export async function rejectIfStoreLocked(res: JsonResponse, storeId: string): Promise<boolean> {
+  const store = await prisma.store.findUnique({
+    where: { id: storeId },
+    select: { billing_status: true, pause_on: true },
+  });
+  if (!store) return false;
+  const due = store.billing_status === 'pause_scheduled' && !!store.pause_on && store.pause_on.getTime() <= Date.now();
+  if (due) {
+    await prisma.store.update({ where: { id: storeId }, data: { billing_status: 'paused' } });
+  }
+  if (store.billing_status === 'paused' || due) {
+    res.status(403).json({ error: STORE_PAUSED_MESSAGE });
+    return true;
+  }
+  return false;
+}
 
 /**
  * Check if user can mutate store data. Global admin or an explicit store permission.

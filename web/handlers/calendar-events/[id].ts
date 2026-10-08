@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
-import { canAccessStore, canViewStore } from '../lib/store-access.js';
+import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
 
 function toEventJson(r: { id: string; store_id: string; title: string; description: string | null; date: Date; start_time: string | null; end_time: string | null; type: string; contact_id: string | null; business_id: string | null; priority: string | null; status: string | null; created_by: string; created_at: Date; completed_at: Date | null }) {
   return {
@@ -38,6 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') return res.status(200).json(toEventJson(event));
 
   if (!(await canAccessStore(uid, event.store_id))) return res.status(404).json({ error: 'Event not found' });
+  if (await rejectIfStoreLocked(res, event.store_id)) return;
 
   if (req.method === 'PATCH') {
     const body = req.body as {

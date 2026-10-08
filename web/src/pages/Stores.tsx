@@ -4,6 +4,7 @@ import { usePermissions } from '../contexts/PermissionContext';
 import { useNavigate } from 'react-router-dom';
 import { Store } from '../types';
 import { AddressPicker } from '../components/AddressPicker';
+import { BillingQuote, BillingQuoteDialog } from '../components/BillingQuoteDialog';
 import {
   Box,
   Typography,
@@ -22,6 +23,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  MenuItem,
+  Chip,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -30,10 +33,13 @@ import {
   LocationOn as LocationIcon,
   Edit as EditIcon,
   Save as SaveIcon,
+  Pause as PauseIcon,
+  Delete as DeleteIcon,
+  PlayArrow as PlayIcon,
 } from '@mui/icons-material';
 
 export function Stores() {
-  const { isAdmin } = usePermissions();
+  const { isAdmin, isOrgAdminFn, currentOrg, permissions } = usePermissions();
   const navigate = useNavigate();
   
   const [stores, setStores] = useState<Store[]>([]);
@@ -62,14 +68,24 @@ export function Stores() {
     state: '',
     zipCode: ''
   });
+  const [organizationId, setOrganizationId] = useState(currentOrg?.id ?? '');
+  const [quote, setQuote] = useState<BillingQuote | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [pendingAction, setPendingAction] = useState<
+    | { type: 'create' }
+    | { type: 'pause' | 'keep_open' | 'resume' | 'delete'; store: Store }
+    | null
+  >(null);
+
+  const canManage = isAdmin() || isOrgAdminFn();
 
   useEffect(() => {
-    if (!isAdmin()) {
+    if (!canManage) {
       navigate('/dashboard');
       return;
     }
     loadStores();
-  }, [isAdmin, navigate]);
+  }, [canManage, navigate]);
 
   useEffect(() => {
     if (searchTerm.trim()) {
@@ -104,6 +120,26 @@ export function Stores() {
     }
   };
 
+  const targetOrgId = organizationId || currentOrg?.id || '';
+
+  const createStore = async (confirmCharge: boolean, dueTodayCents?: number) => {
+    await api.post<Store>(`/stores`, {
+      name: formData.name.trim(),
+      address: formData.address.trim() || undefined,
+      city: formData.city.trim() || undefined,
+      state: formData.state.trim().toUpperCase() || undefined,
+      zipCode: formData.zipCode.trim() || undefined,
+      organizationId: targetOrgId || undefined,
+      confirmCharge,
+      expectedDueCents: dueTodayCents,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    setSuccess('Store created.');
+    setFormData({ name: '', address: '', city: '', state: '', zipCode: '' });
+    setShowForm(false);
+    await loadStores();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -115,20 +151,89 @@ export function Stores() {
     }
 
     try {
-      await api.post<Store>(`/stores`, {
-        name: formData.name.trim(),
-        address: formData.address.trim() || undefined,
-        city: formData.city.trim() || undefined,
-        state: formData.state.trim().toUpperCase() || undefined,
-        zipCode: formData.zipCode.trim() || undefined
+      if (!targetOrgId) {
+        await createStore(false);
+        return;
+      }
+      const preview = await api.post<{ quote: BillingQuote | null }>(`/organizations/${targetOrgId}/billing`, {
+        action: 'preview',
+        intent: 'add_store',
+        storeName: formData.name.trim(),
       });
-
-      setSuccess('Store created successfully!');
-      setFormData({ name: '', address: '', city: '', state: '', zipCode: '' });
-      setShowForm(false);
-      await loadStores();
+      if (!preview.quote) {
+        await createStore(false);
+        return;
+      }
+      setPendingAction({ type: 'create' });
+      setQuote(preview.quote);
     } catch (err: any) {
       setError(err.message || 'Failed to create store');
+    }
+  };
+
+  const openStoreQuote = async (store: Store, intent: 'pause_store' | 'keep_open' | 'resume_store' | 'delete_store') => {
+    if (!store.organizationId) {
+      if (intent === 'delete_store') {
+        setPendingAction({ type: 'delete', store });
+        setQuote({
+          intent: 'delete_store',
+          needsCharge: false,
+          needsCheckout: false,
+          message: `Remove ${store.name}? The store and everything in it are deleted now. This cannot be undone.`,
+          dueTodayCents: 0,
+        });
+      }
+      return;
+    }
+    setError('');
+    try {
+      const preview = await api.post<{ quote: BillingQuote }>(`/organizations/${store.organizationId}/billing`, {
+        action: 'preview',
+        intent,
+        storeId: store.id,
+        storeName: store.name,
+      });
+      const type = intent === 'pause_store' ? 'pause' : intent === 'keep_open' ? 'keep_open' : intent === 'resume_store' ? 'resume' : 'delete';
+      setPendingAction({ type, store });
+      setQuote(preview.quote);
+    } catch (err: any) {
+      setError(err.message || 'Could not prepare that change');
+    }
+  };
+
+  const confirmQuote = async () => {
+    if (!quote || !pendingAction) return;
+    setQuoteLoading(true);
+    setError('');
+    try {
+      if (pendingAction.type === 'create') {
+        await createStore(quote.needsCharge, quote.dueTodayCents);
+      } else if (pendingAction.type === 'delete') {
+        await api.delete(`/stores/${pendingAction.store.id}?confirm=1`);
+        setSuccess(`${pendingAction.store.name} was removed.`);
+        await loadStores();
+      } else {
+        await api.post(`/stores/${pendingAction.store.id}/billing`, {
+          action: pendingAction.type,
+          confirmCharge: quote.needsCharge,
+          expectedDueCents: quote.dueTodayCents,
+          idempotencyKey: crypto.randomUUID(),
+        });
+        setSuccess(
+          pendingAction.type === 'pause'
+            ? `${pendingAction.store.name} will pause at the end of this month.`
+            : pendingAction.type === 'keep_open'
+              ? `${pendingAction.store.name} stays open.`
+              : `${pendingAction.store.name} is open again.`
+        );
+        await loadStores();
+      }
+      setQuote(null);
+      setPendingAction(null);
+    } catch (err: any) {
+      setError(err.message || 'That change did not go through');
+    } finally {
+      setQuoteLoading(false);
     }
   };
 
@@ -221,11 +326,32 @@ export function Stores() {
       {/* Create Form */}
       <Collapse in={showForm}>
         <Paper sx={{ p: 3, mb: 3 }}>
-          <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+          <Typography variant="h6" sx={{ mb: 1, fontWeight: 600 }}>
             Create New Store
           </Typography>
+          {permissions.organizations.find((org) => org.id === targetOrgId) && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              This store will be added to {permissions.organizations.find((org) => org.id === targetOrgId)?.name}.
+            </Typography>
+          )}
           <Box component="form" onSubmit={handleSubmit}>
             <Grid container spacing={2}>
+              {permissions.organizations.length > 1 && (
+                <Grid size={{ xs: 12 }}>
+                  <TextField
+                    select
+                    label="Organization"
+                    value={targetOrgId}
+                    onChange={(e) => setOrganizationId(e.target.value)}
+                    fullWidth
+                    required
+                  >
+                    {permissions.organizations.map((org) => (
+                      <MenuItem key={org.id} value={org.id}>{org.name}</MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
+              )}
               <Grid size={{ xs: 12 }}>
                 <TextField
                   label="Store Name"
@@ -315,6 +441,17 @@ export function Stores() {
                   <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
                     {store.name}
                   </Typography>
+                  {store.billingStatus === 'pause_scheduled' && (
+                    <Chip size="small" label="Pauses at the end of this month" sx={{ mb: 1 }} />
+                  )}
+                  {store.billingStatus === 'paused' && (
+                    <Chip size="small" color="warning" label="Paused" sx={{ mb: 1 }} />
+                  )}
+                  {store.statusMessage && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                      {store.statusMessage}
+                    </Typography>
+                  )}
                   {(store.address || store.city) && (
                     <Box sx={{ color: 'text.secondary', mb: 2 }}>
                       {store.address && (
@@ -329,7 +466,25 @@ export function Stores() {
                     Created: {store.createdAt.toLocaleDateString()}
                   </Typography>
                 </CardContent>
-                <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
+                <CardActions sx={{ justifyContent: 'flex-end', pt: 0, flexWrap: 'wrap' }}>
+                  {store.billingActive && store.billingStatus !== 'paused' && store.billingStatus !== 'pause_scheduled' && (
+                    <Button size="small" startIcon={<PauseIcon />} onClick={() => openStoreQuote(store, 'pause_store')}>
+                      Pause
+                    </Button>
+                  )}
+                  {store.billingStatus === 'pause_scheduled' && (
+                    <Button size="small" startIcon={<PlayIcon />} onClick={() => openStoreQuote(store, 'keep_open')}>
+                      Keep open
+                    </Button>
+                  )}
+                  {store.billingStatus === 'paused' && (
+                    <Button size="small" startIcon={<PlayIcon />} onClick={() => openStoreQuote(store, 'resume_store')}>
+                      Turn back on
+                    </Button>
+                  )}
+                  <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => openStoreQuote(store, 'delete_store')}>
+                    Remove
+                  </Button>
                   <Button
                     size="small"
                     startIcon={<EditIcon />}
@@ -415,6 +570,15 @@ export function Stores() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <BillingQuoteDialog
+        quote={quote}
+        open={!!quote}
+        loading={quoteLoading}
+        onClose={() => { if (!quoteLoading) { setQuote(null); setPendingAction(null); } }}
+        onConfirm={confirmQuote}
+        onSetupBilling={() => navigate('/org-settings')}
+      />
     </Box>
   );
 }

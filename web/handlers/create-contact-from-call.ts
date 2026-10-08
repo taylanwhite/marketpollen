@@ -1,6 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import OpenAI from 'openai';
 import { prisma } from './lib/db.js';
+import { rejectIfStoreLocked } from './lib/store-access.js';
 import type { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
@@ -452,6 +453,7 @@ export default async function handler(
         error: `Store "${storeName}" not found. Please check the store name.` 
       });
     }
+    if (await rejectIfStoreLocked(res, finalStoreId)) return;
 
     // Step 2: Extract contact info and donations from notes
     const extracted = await extractContactInfoFromNotes(notes);

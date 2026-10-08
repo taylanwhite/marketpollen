@@ -336,6 +336,17 @@ export function Businesses() {
                       </Box>
                     </CardContent>
                   </CardActionArea>
+                  {canEdit(business.storeId) && (
+                    <Box sx={{ px: 2, pb: 2 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => navigate(`/dashboard?business=${business.id}&new=1`)}
+                      >
+                        Add contact
+                      </Button>
+                    </Box>
+                  )}
                 </Box>
               </Card>
             </Grid>

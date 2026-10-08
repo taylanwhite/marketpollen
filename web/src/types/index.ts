@@ -32,6 +32,10 @@ export interface Store {
   state?: string;
   zipCode?: string;
   organizationId?: string;
+  billingStatus?: 'active' | 'pause_scheduled' | 'paused' | string;
+  pauseOn?: string | Date | null;
+  statusMessage?: string | null;
+  billingActive?: boolean;
   createdAt: Date;
   createdBy: string; // user uid
 }

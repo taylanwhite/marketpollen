@@ -2,12 +2,13 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { useAuth } from './AuthContext';
 import { StorePermission, Store, Organization } from '../types';
 import { api } from '../api/client';
+import { isStoreLocked } from '../utils/storeLock';
 
 interface UserPermissions {
   isGlobalAdmin: boolean;
   isOrgAdmin: boolean;
   storePermissions: StorePermission[];
-  accessibleStores: Array<{ id: string; name: string }>;
+  accessibleStores: Array<{ id: string; name: string; billingStatus?: string; pauseOn?: string | Date | null }>;
   currentStoreId: string | null;
   organizations: Organization[];
 }
@@ -98,7 +99,12 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
       })).filter(p => p.storeId);
 
       const stores = (me.stores || []) as Store[];
-      const accessibleStores = stores.map((store) => ({ id: store.id, name: store.name }));
+      const accessibleStores = stores.map((store) => ({
+        id: store.id,
+        name: store.name,
+        billingStatus: store.billingStatus,
+        pauseOn: store.pauseOn,
+      }));
       const isGlobalAdmin = me.user?.isGlobalAdmin === true;
       const orgs = (me.organizations || []) as Organization[];
       const orgAdmin = isGlobalAdmin || orgs.some(o => o.isAdmin);
@@ -172,8 +178,10 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   };
 
   const canEdit = (storeId?: string): boolean => {
-    if (permissions.isGlobalAdmin) return true;
     const targetStoreId = storeId || permissions.currentStoreId;
+    const listed = permissions.accessibleStores.find((store) => store.id === targetStoreId);
+    if (isStoreLocked(listed)) return false;
+    if (permissions.isGlobalAdmin) return true;
     if (!targetStoreId) return false;
     const perm = permissions.storePermissions.find(p => p.storeId === targetStoreId);
     return perm?.canEdit || false;

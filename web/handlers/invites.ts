@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
-import { canAccessStore } from './lib/store-access.js';
+import { canAccessStore, rejectIfStoreLocked } from './lib/store-access.js';
 
 function toInviteJson(r: { id: string; email: string; store_id: string; can_edit: boolean; invited_by: string; invited_at: Date; status: string; is_global_admin: boolean }) {
   return {
@@ -56,6 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!body?.email || !body?.storeId) return res.status(400).json({ error: 'email and storeId required' });
     const can = await canAccessStore(uid, body.storeId);
     if (!can) return res.status(404).json({ error: 'Store not found' });
+    if (await rejectIfStoreLocked(res, body.storeId)) return;
 
     const row = await prisma.invite.create({
       data: {

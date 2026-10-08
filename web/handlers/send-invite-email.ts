@@ -35,17 +35,35 @@ export default async function handler(
 
     // Resolve the app's public URL for the signup link, preferring a clean,
     // stable domain over Vercel's ugly per-deployment preview hostname:
-    //   1. VITE_APP_URL — explicit override (e.g. https://marketpollen.com)
+    //   1. VITE_APP_URL — explicit override (e.g. https://www.marketpollen.com)
     //   2. VERCEL_PROJECT_PRODUCTION_URL — stable production domain
     //   3. VERCEL_URL — deployment-specific (long, changes every deploy)
     //   4. localhost — local dev fallback
+    //
+    // Apex marketpollen.com currently serves a cert that only covers
+    // www.marketpollen.com (NET::ERR_CERT_COMMON_NAME_INVALID). Always
+    // send invitees to www until the apex domain is added in Vercel and
+    // the leftover Namecheap parking A record is removed.
     const withProtocol = (host?: string) =>
       host ? (host.startsWith('http') ? host : `https://${host}`) : undefined;
 
+    const toWorkingAppUrl = (raw?: string) => {
+      if (!raw) return undefined;
+      try {
+        const url = new URL(raw);
+        if (url.hostname === 'marketpollen.com') {
+          url.hostname = 'www.marketpollen.com';
+        }
+        return url.origin;
+      } catch {
+        return raw.replace(/\/$/, '');
+      }
+    };
+
     const appUrl =
-      withProtocol(process.env.VITE_APP_URL) ||
-      withProtocol(process.env.VERCEL_PROJECT_PRODUCTION_URL) ||
-      withProtocol(process.env.VERCEL_URL) ||
+      toWorkingAppUrl(withProtocol(process.env.VITE_APP_URL)) ||
+      toWorkingAppUrl(withProtocol(process.env.VERCEL_PROJECT_PRODUCTION_URL)) ||
+      toWorkingAppUrl(withProtocol(process.env.VERCEL_URL)) ||
       'http://localhost:5173';
 
     const signupUrl = `${appUrl}/signup?email=${encodeURIComponent(email)}`;

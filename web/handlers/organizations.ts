@@ -42,6 +42,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       data: {
         name: body.name.trim(),
         quarterly_goal: body.quarterlyGoal ?? 10000,
+        billing_enabled: true,
         created_by: uid,
       },
     });

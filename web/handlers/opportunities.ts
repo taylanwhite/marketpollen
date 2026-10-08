@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
-import { canAccessStore, readableStoreScope, storeIdWhere } from './lib/store-access.js';
+import { canAccessStore, readableStoreScope, rejectIfStoreLocked, storeIdWhere } from './lib/store-access.js';
 
 function toOpportunityJson(r: { id: string; store_id: string; place_id: string; name: string; address: string | null; city: string | null; state: string | null; zip_code: string | null; status: string; business_id: string | null; created_at: Date; created_by: string; converted_at: Date | null; dismissed_at: Date | null; dismissed_reason: string | null }) {
   return {
@@ -46,6 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!storeId) return res.status(400).json({ error: 'storeId required' });
     const can = await canAccessStore(uid, storeId);
     if (!can) return res.status(404).json({ error: 'Store not found' });
+    if (await rejectIfStoreLocked(res, storeId)) return;
 
     const body = req.body as {
       opportunities: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string }>;

@@ -2,7 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { Prisma } from '@prisma/client';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
-import { canAccessStore, readableStoreScope, storeIdWhere } from './lib/store-access.js';
+import { canAccessStore, readableStoreScope, rejectIfStoreLocked, storeIdWhere } from './lib/store-access.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -106,6 +106,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!storeId) return res.status(400).json({ error: 'storeId required' });
     const can = await canAccessStore(uid, storeId);
     if (!can) return res.status(404).json({ error: 'Store not found' });
+    if (await rejectIfStoreLocked(res, storeId)) return;
 
     const body = req.body as {
       id?: string;

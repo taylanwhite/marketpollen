@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
-import { canAccessStore, canViewStore } from '../lib/store-access.js';
+import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
 
 function toBusinessJson(r: { id: string; store_id: string; name: string; address: string | null; city: string | null; state: string | null; zip_code: string | null; place_id: string | null; created_at: Date; created_by: string }) {
   return {
@@ -33,6 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') return res.status(200).json(toBusinessJson(business));
 
   if (!(await canAccessStore(uid, business.store_id))) return res.status(404).json({ error: 'Business not found' });
+  if (await rejectIfStoreLocked(res, business.store_id)) return;
 
   if (req.method === 'PATCH') {
     const body = req.body as { name?: string; address?: string; city?: string; state?: string; zipCode?: string; placeId?: string };
