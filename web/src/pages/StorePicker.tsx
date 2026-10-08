@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { Store } from '../types';
 import { api } from '../api/client';
+import { BillingAccessGate } from '../components/BillingAccessGate';
 import {
   Box,
   Card,
@@ -15,6 +16,10 @@ import {
   CircularProgress,
   LinearProgress,
   Chip,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
   keyframes,
 } from '@mui/material';
 import {
@@ -39,11 +44,12 @@ const shimmer = keyframes`
 export function StorePicker() {
   const { userEmail } = useAuth();
   const { signOut } = useClerk();
-  const { setCurrentStore, isAdmin, isOrgAdminFn } = usePermissions();
+  const { permissions, setCurrentStore, isAdmin, isOrgAdminFn } = usePermissions();
   const navigate = useNavigate();
   const [stores, setStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(true);
   const [progressMap, setProgressMap] = useState<Map<string, StoreProgress>>(new Map());
+  const [selectedOrgId, setSelectedOrgId] = useState<string>(() => localStorage.getItem('selectedOrgId') || '');
 
   useEffect(() => {
     loadStores();
@@ -70,21 +76,43 @@ export function StorePicker() {
     }
   };
 
+  const organizations = permissions.organizations;
+  const activeOrgId = organizations.some((org) => org.id === selectedOrgId)
+    ? selectedOrgId
+    : organizations.find((org) => org.stores.some((store) => store.id === permissions.currentStoreId))?.id
+      || organizations[0]?.id
+      || '';
+  const activeOrg = organizations.find((org) => org.id === activeOrgId) || null;
+  const visibleStores = activeOrgId
+    ? stores.filter((store) => store.organizationId === activeOrgId)
+    : stores;
+  const orgLocked = !isAdmin() && (activeOrg?.access?.mode === 'trial_ended' || activeOrg?.access?.mode === 'payment_locked');
+
+  const chooseOrg = (orgId: string) => {
+    setSelectedOrgId(orgId);
+    localStorage.setItem('selectedOrgId', orgId);
+  };
+
   const handleSelectStore = (storeId: string) => {
+    if (orgLocked) return;
     localStorage.setItem('selectedStoreId', storeId);
+    if (activeOrgId) localStorage.setItem('selectedOrgId', activeOrgId);
     setCurrentStore(storeId);
     navigate('/dashboard');
   };
 
   const handleSelectAllStores = () => {
-    if (stores[0]) {
-      localStorage.setItem('selectedStoreId', stores[0].id);
-      setCurrentStore(stores[0].id);
+    if (orgLocked) return;
+    const first = visibleStores[0];
+    if (first) {
+      localStorage.setItem('selectedStoreId', first.id);
+      setCurrentStore(first.id);
     }
+    if (activeOrgId) localStorage.setItem('selectedOrgId', activeOrgId);
     navigate('/reports?stores=all');
   };
 
-  const showAllStores = stores.length > 1 && (isAdmin() || isOrgAdminFn());
+  const showAllStores = visibleStores.length > 1 && (isAdmin() || isOrgAdminFn());
 
   const handleLogout = async () => {
     try {
@@ -183,23 +211,58 @@ export function StorePicker() {
                 <Typography color="text.secondary">
                   Welcome, {userEmail}
                 </Typography>
+                {activeOrg && organizations.length === 1 && (
+                  <Typography sx={{ mt: 1, fontWeight: 600 }}>
+                    {activeOrg.name}
+                  </Typography>
+                )}
               </Box>
+
+              {organizations.length > 1 && (
+                <FormControl fullWidth sx={{ mb: 2 }}>
+                  <InputLabel id="org-switch-label">Organization</InputLabel>
+                  <Select
+                    labelId="org-switch-label"
+                    label="Organization"
+                    value={activeOrgId}
+                    onChange={(event) => chooseOrg(event.target.value)}
+                  >
+                    {organizations.map((org) => (
+                      <MenuItem key={org.id} value={org.id}>{org.name}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              )}
+
+              <BillingAccessGate
+                variant="banner"
+                access={activeOrg?.access}
+                orgId={activeOrg?.id}
+                orgName={activeOrg?.name}
+                canPay={!!activeOrg?.isAdmin}
+                isGlobalAdmin={isAdmin()}
+                storeCount={activeOrg?.stores.length || visibleStores.length || 1}
+                canSwitch={organizations.length > 1}
+              />
 
               <Grid container spacing={2} sx={{ mb: 3 }}>
                 {showAllStores && (
                   <Grid size={{ xs: 12 }} sx={{ display: 'flex' }}>
                     <Card
+                      onClick={handleSelectAllStores}
+                      aria-disabled={orgLocked}
                       sx={{
-                        cursor: 'pointer',
+                        cursor: orgLocked ? 'default' : 'pointer',
                         width: '100%',
+                        opacity: orgLocked ? 0.55 : 1,
+                        pointerEvents: orgLocked ? 'none' : 'auto',
                         bgcolor: 'rgba(245, 200, 66, 0.14)',
                         border: '1px solid rgba(245, 200, 66, 0.5)',
-                        '&:hover': {
+                        '&:hover': orgLocked ? undefined : {
                           transform: 'translateY(-2px)',
                           boxShadow: '0 4px 20px rgba(0, 0, 0, 0.08)',
                         },
                       }}
-                      onClick={handleSelectAllStores}
                     >
                       <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 2.5 }}>
                         <ReportsIcon sx={{ color: '#d4a017' }} />
@@ -208,18 +271,27 @@ export function StorePicker() {
                             All stores
                           </Typography>
                           <Typography variant="body2" color="text.secondary">
-                            Combined reports for {stores.length} stores. Pick a store below to work in one.
+                            Combined reports for {visibleStores.length} stores. Pick a store below to work in one.
                           </Typography>
                         </Box>
                       </CardContent>
                     </Card>
                   </Grid>
                 )}
-                {stores.map((store) => (
+                {visibleStores.length === 0 && (
+                  <Grid size={{ xs: 12 }}>
+                    <Typography color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
+                      No stores in {activeOrg?.name || 'this organization'} yet.
+                    </Typography>
+                  </Grid>
+                )}
+                {visibleStores.map((store) => (
                   <Grid size={{ xs: 12, sm: 6, md: 4 }} key={store.id} sx={{ display: 'flex' }}>
                     <Card
                       sx={{
-                        cursor: 'pointer',
+                        cursor: orgLocked ? 'default' : 'pointer',
+                        opacity: orgLocked ? 0.55 : 1,
+                        pointerEvents: orgLocked ? 'none' : 'auto',
                         transition: 'all 0.2s',
                         bgcolor: '#ffffff',
                         color: '#252525',
@@ -236,6 +308,7 @@ export function StorePicker() {
                         },
                       }}
                       onClick={() => handleSelectStore(store.id)}
+                      aria-disabled={orgLocked}
                     >
                       <CardContent sx={{ textAlign: 'center', py: 3, flex: 1, display: 'flex', flexDirection: 'column' }}>
                         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>

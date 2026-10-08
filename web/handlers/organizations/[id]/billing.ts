@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../../lib/db.js';
 import { getAuthUid } from '../../lib/auth.js';
 import { isOrgAdmin } from '../../lib/org-access.js';
+import { trialEndFromNow } from '../../lib/org-billing-access.js';
 import {
   billingView,
   BillingHttpError,
@@ -82,6 +83,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.action === 'sync_checkout') {
       if (!body.sessionId) return res.status(400).json({ error: 'sessionId is required' });
       await syncCheckoutSession(orgId, body.sessionId);
+      const billing = await billingView(orgId);
+      return res.status(200).json(billing);
+    }
+
+    if (body.action === 'start_trial') {
+      if (!(await isGlobalAdmin(uid))) return res.status(403).json({ error: 'Global admin required' });
+      const org = await prisma.organization.findUnique({ where: { id: orgId } });
+      if (!org) return res.status(404).json({ error: 'Organization not found' });
+      if (org.subscription_status === 'active') {
+        return res.status(400).json({ error: 'This organization is already paying.' });
+      }
+      await prisma.organization.update({
+        where: { id: orgId },
+        data: { trial_ends_at: trialEndFromNow(), billing_enabled: true },
+      });
       const billing = await billingView(orgId);
       return res.status(200).json(billing);
     }

@@ -2,6 +2,8 @@ import Stripe from 'stripe';
 import { prisma } from './db.js';
 import { appUrl } from './app-url.js';
 import { getStripe, integrationIdentifier, storePriceId, stripeConfigured } from './stripe.js';
+import { billingAccess, isTrialActive } from './org-billing-access.js';
+import { clearPaymentFailure, recordPaymentFailure } from './payment-grace.js';
 import {
   STORE_UNIT_CENTS,
   addStoreMessage,
@@ -176,6 +178,9 @@ export async function persistSubscription(orgId: string, sub: Stripe.Subscriptio
       current_period_end: periodEndOf(sub),
       ...(existing?.renewal_quantity != null && existing.renewal_quantity >= paid
         ? { renewal_quantity: null }
+        : {}),
+      ...(sub.status === 'active'
+        ? { payment_failed_at: null, payment_grace_notice_at: null, payment_final_notice_at: null }
         : {}),
     },
   });
@@ -356,6 +361,7 @@ function checkoutQuote(storeName: string, unitCents: number): BillingQuote {
 
 function requireActiveBill(org: OrgRecord, storeName = 'This store'): BillingQuote | null {
   if (!org.billing_enabled) return null;
+  if (isTrialActive(org)) return null;
   if (!stripeConfigured()) {
     throw new BillingHttpError(500, 'Monthly billing is not configured yet. Add the Stripe key and the store price.');
   }
@@ -369,6 +375,18 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
   if (!org) throw new BillingHttpError(404, 'Organization not found');
   if (!org.billing_enabled) return null;
   const name = storeName.trim() || 'this store';
+  if (isTrialActive(org)) {
+    return {
+      intent: 'add_store',
+      needsCharge: false,
+      needsCheckout: false,
+      message: `${name} is included while the free trial is going.`,
+      dueTodayCents: 0,
+      currentMonthlyCents: 0,
+      newMonthlyCents: 0,
+      periodEnd: org.trial_ends_at ? org.trial_ends_at.toISOString() : null,
+    };
+  }
   const blocked = requireActiveBill(org, name);
   if (blocked) return blocked;
   const { seatsInUse } = seatCounts(org.stores);
@@ -792,11 +810,12 @@ export async function billingView(orgId: string) {
     nextMonthlyLabel: money(nextMonthlyCents),
     currentPeriodEnd: org.current_period_end,
     alert: org.billing_alert,
-    needsCheckout: org.billing_enabled && org.subscription_status !== 'active',
+    needsCheckout: org.billing_enabled && org.subscription_status !== 'active' && !isTrialActive(org),
     minimumQuantity: Math.max(1, org.stores.filter((store) => !store.archived_at).length),
     configured: stripeConfigured(),
     unitCents: unitOf(org),
     unitLabel: money(unitOf(org)),
+    access: billingAccess(org),
     invoices: await listInvoices(org.id),
     profile: await billingProfile(org.id),
   };
@@ -1031,12 +1050,9 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
     if (!org) return;
     await persistSubscription(org.id, sub);
     if (event.type === 'invoice.payment_failed') {
-      await prisma.organization.update({
-        where: { id: org.id },
-        data: { billing_alert: "The last payment didn't go through. Update the card so new stores can be added. Stores you already have stay open." },
-      });
-    } else if (org.billing_alert?.includes("didn't go through")) {
-      await prisma.organization.update({ where: { id: org.id }, data: { billing_alert: null } });
+      await recordPaymentFailure(org.id);
+    } else {
+      await clearPaymentFailure(org.id);
     }
     return;
   }

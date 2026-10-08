@@ -46,7 +46,10 @@ import storeCalendarFeedHandler from './dist-handlers/stores/[id]/calendar-feed.
 import stripeWebhookHandler from './dist-handlers/stripe-webhook.js';
 import platformHandler from './dist-handlers/platform.js';
 import orgBillingHandler from './dist-handlers/organizations/[id]/billing.js';
+import orgMembersHandler from './dist-handlers/organizations/[id]/members.js';
+import billingCronHandler from './dist-handlers/billing-cron.js';
 import storeBillingHandler from './dist-handlers/stores/[id]/billing.js';
+import importCustomersHandler from './dist-handlers/import-customers.js';
 
 
 const app = express();
@@ -79,6 +82,8 @@ const withIdPid = (handler: Handler): express.RequestHandler => (req, res) => {
 // Health — cheap reachability probe used by the offline detection system
 // in the client. Must stay tiny: no auth, no DB, no third-party calls.
 app.get('/api/health', route(healthHandler));
+app.get('/api/billing-cron', route(billingCronHandler));
+app.post('/api/billing-cron', route(billingCronHandler));
 app.head('/api/health', route(healthHandler));
 
 // Me
@@ -98,6 +103,7 @@ app.head('/api/calendar-feed/:id', withId(calendarFeedPublicHandler));
 // Businesses
 app.get('/api/businesses', route(businessesHandler));
 app.post('/api/businesses', route(businessesHandler));
+app.post('/api/import-customers', route(importCustomersHandler));
 app.all('/api/businesses/:id', withId(businessesIdHandler));
 
 // Opportunities
@@ -157,6 +163,7 @@ app.get('/api/organizations/:id/products', withId(orgProductsHandler));
 app.post('/api/organizations/:id/products', withId(orgProductsHandler));
 
 app.all('/api/organizations/:id/billing', withId(orgBillingHandler));
+app.post('/api/organizations/:id/members', withId(orgMembersHandler));
 app.all('/api/organizations/:id', withId(organizationsIdHandler));
 
 export default app;

@@ -1,6 +1,7 @@
 import { prisma } from './db.js';
 import { isOrgAdmin } from './org-access.js';
 import { STORE_ARCHIVED_MESSAGE, STORE_PAUSED_MESSAGE } from './billing-copy.js';
+import { billingAccess } from './org-billing-access.js';
 
 type JsonResponse = { status: (code: number) => { json: (body: unknown) => unknown } };
 
@@ -8,12 +9,40 @@ type JsonResponse = { status: (code: number) => { json: (body: unknown) => unkno
  * A paused store can still be opened and read. Writes wait until it is turned back on.
  * If the pause date has passed, lock it here even when the renewal webhook has not arrived.
  */
-export async function rejectIfStoreLocked(res: JsonResponse, storeId: string): Promise<boolean> {
+export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, uid?: string | null): Promise<boolean> {
   const store = await prisma.store.findUnique({
     where: { id: storeId },
-    select: { billing_status: true, pause_on: true, archived_at: true },
+    select: {
+      billing_status: true,
+      pause_on: true,
+      archived_at: true,
+      organization: {
+        select: {
+          billing_enabled: true,
+          subscription_status: true,
+          trial_ends_at: true,
+          payment_failed_at: true,
+        },
+      },
+    },
   });
   if (!store) return false;
+  if (store.organization) {
+    const access = billingAccess(store.organization);
+    if (access.mode === 'trial_ended' || access.mode === 'payment_locked') {
+      const actor = uid
+        ? await prisma.user.findUnique({ where: { id: uid }, select: { is_global_admin: true } })
+        : null;
+      if (!actor?.is_global_admin) {
+        res.status(403).json({
+          error: access.mode === 'trial_ended'
+            ? 'Trial is done, please pay.'
+            : 'Insufficient payment. Update the card to continue.',
+        });
+        return true;
+      }
+    }
+  }
   if (store.archived_at) {
     res.status(403).json({ error: STORE_ARCHIVED_MESSAGE });
     return true;

@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { createDefaultCampaignProducts } from './lib/default-products.js';
+import { trialEndFromNow } from './lib/org-billing-access.js';
 
 function toOrgJson(o: any) {
   return {
@@ -39,7 +40,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const user = await prisma.user.findUnique({ where: { id: uid }, select: { is_global_admin: true } });
     if (!user?.is_global_admin) return res.status(403).json({ error: 'Only global admins can create organizations' });
 
-    const body = req.body as { name: string; quarterlyGoal?: number };
+    const body = req.body as { name: string; quarterlyGoal?: number; trial?: boolean };
     if (!body?.name?.trim()) return res.status(400).json({ error: 'name is required' });
 
     const org = await prisma.organization.create({
@@ -47,6 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         name: body.name.trim(),
         quarterly_goal: body.quarterlyGoal ?? 10000,
         billing_enabled: true,
+        trial_ends_at: body.trial ? trialEndFromNow() : null,
         created_by: uid,
       },
     });

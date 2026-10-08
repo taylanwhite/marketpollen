@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { Business, Contact } from '../types';
 import { AddressPicker } from '../components/AddressPicker';
+import { ImportCustomersDialog } from '../components/ImportCustomersDialog';
 import { PlaceMatchPicker, type PlaceResult } from '../components/PlaceMatchPicker';
 import {
   Box,
@@ -34,6 +35,7 @@ import {
   Place as PlaceIcon,
   Link as LinkIcon,
   LinkOff as LinkOffIcon,
+  UploadFile as UploadIcon,
 } from '@mui/icons-material';
 
 interface BusinessWithStats extends Business {
@@ -61,6 +63,7 @@ export function Businesses() {
   const [success, setSuccess] = useState('');
   const [showPlacePicker, setShowPlacePicker] = useState(false);
   const [placePickerBusiness, setPlacePickerBusiness] = useState<BusinessWithStats | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
     loadBusinesses();
@@ -226,9 +229,16 @@ export function Businesses() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 3, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <BusinessIcon /> Businesses
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+        <Typography variant="h4" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <BusinessIcon /> Businesses
+        </Typography>
+        {permissions.currentStoreId && canEdit(permissions.currentStoreId) && (
+          <Button variant="outlined" startIcon={<UploadIcon />} onClick={() => setImportOpen(true)}>
+            Import
+          </Button>
+        )}
+      </Box>
 
       {/* Search */}
       <Paper sx={{ p: 2, mb: 3 }}>
@@ -472,6 +482,16 @@ export function Businesses() {
       </Dialog>
 
       {/* Place Match Picker for linking existing businesses */}
+      <ImportCustomersDialog
+        open={importOpen}
+        storeId={permissions.currentStoreId || ''}
+        onClose={() => setImportOpen(false)}
+        onImported={(summary) => {
+          setSuccess(summary);
+          loadBusinesses();
+        }}
+      />
+
       <PlaceMatchPicker
         open={showPlacePicker}
         businessName={placePickerBusiness?.name || ''}

@@ -30,6 +30,10 @@ import {
   ToggleButtonGroup,
   IconButton,
   Tooltip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from '@mui/material';
 import { type AddressData } from './AddressPicker';
 import { useTheme, useMediaQuery } from '@mui/material';
@@ -67,7 +71,8 @@ interface FormState {
   personalDetails: string;
   reachoutNote: string;
   reachoutType: ReachoutType;
-  followUpDays: number;
+  followUpChoice: 'unset' | 'date' | 'none';
+  followUpDate: string;
 }
 
 const FOLLOW_UP_PRESETS: { label: string; days: number }[] = [
@@ -84,6 +89,20 @@ const REACHOUT_TYPES: { value: ReachoutType; label: string; icon: React.ReactNod
   { value: 'email', label: 'Email', icon: <EmailIcon fontSize="small" /> },
   { value: 'other', label: 'Other', icon: <OtherIcon fontSize="small" /> },
 ];
+
+function formatInputDate(daysFromNow: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseFollowUpDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, (month || 1) - 1, day || 1, 12, 0, 0, 0);
+}
 
 function splitName(full: string): { firstName: string; lastName: string } {
   const trimmed = full.trim();
@@ -166,12 +185,15 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     personalDetails: '',
     reachoutNote: '',
     reachoutType: 'meeting',
-    followUpDays: 3,
+    followUpChoice: 'unset',
+    followUpDate: '',
   });
 
   const [includeDonation, setIncludeDonation] = useState(false);
   const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation(products));
 
+  const [suggestedDays, setSuggestedDays] = useState<number | null>(null);
+  const [noFollowUpPromptOpen, setNoFollowUpPromptOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [aiProcessing, setAiProcessing] = useState(false);
   const [error, setError] = useState('');
@@ -281,8 +303,8 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         personalDetails: extracted.personalDetails || prev.personalDetails,
         reachoutNote: extracted.reachoutNote || prev.reachoutNote,
         reachoutType: (extracted.reachoutType as ReachoutType) || prev.reachoutType,
-        followUpDays: extracted.suggestedFollowUpDays || prev.followUpDays,
       }));
+      if (extracted.suggestedFollowUpDays) setSuggestedDays(extracted.suggestedFollowUpDays);
 
       // Auto-match the business by fuzzy name
       if (extracted.businessName) {
@@ -463,8 +485,8 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         personalDetails: extracted.personalDetails || prev.personalDetails,
         reachoutNote: noteParts.join(' ') || prev.reachoutNote,
         reachoutType: 'other',
-        followUpDays: extracted.suggestedFollowUpDays || prev.followUpDays,
       }));
+      if (extracted.suggestedFollowUpDays) setSuggestedDays(extracted.suggestedFollowUpDays);
       setIncludeDonation(false);
       setDonationData(createEmptyDonation(products));
       await stageBusinessFromExtractedCard(extracted);
@@ -490,8 +512,10 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       personalDetails: '',
       reachoutNote: '',
       reachoutType: 'meeting',
-      followUpDays: 3,
+      followUpChoice: 'unset',
+      followUpDate: '',
     });
+    setSuggestedDays(null);
     setIncludeDonation(false);
     setDonationData(createEmptyDonation(products));
     setError('');
@@ -596,6 +620,10 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       setError('Please select a store first');
       return;
     }
+    if (form.followUpChoice === 'unset' || (form.followUpChoice === 'date' && !form.followUpDate)) {
+      setError('Pick a follow-up date before saving. If there is truly nothing to plan, choose no follow-up.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -615,12 +643,12 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         throw new Error('Pick or create a business for this contact first');
       }
       const contactName = `${firstName} ${lastName}`.trim() || form.email || 'New contact';
+      const skipFollowUp = form.followUpChoice === 'none';
 
       // Client-generate everything that previously required server-side ids,
       // so the entire save chain can survive a network drop.
       const newContactId = crypto.randomUUID();
       const reachoutLogEventId = crypto.randomUUID();
-      const skipFollowUp = includeDonation && donationData.noFollowUp === true;
       const initialReachout: Reachout = {
         id: `reach-${Date.now()}`,
         date: now,
@@ -637,18 +665,17 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           : undefined,
       };
 
-      // Step 1 — try AI follow-up suggestion online. If it fails for any
-      // reason (offline, slow, API down), fall back to the user-picked
-      // "follow up in N days" preset. A donation marked "no follow-up"
-      // skips this entirely so we don't schedule a reminder or email anyone.
+      // The marketer's follow-up date is the one that lands on the planning
+      // tab. AI can still draft the note and method, but it does not move the date.
       let suggestedFollowUpDate: Date | null = null;
       let suggestedFollowUpMethod: 'email' | 'call' | 'meeting' | 'text' | 'other' | null = null;
       let suggestedFollowUpNote: string | null = null;
       let suggestedFollowUpPriority: 'low' | 'medium' | 'high' | null = null;
-      let aiSuggestionApplied = false;
 
-      if (!skipFollowUp) {
+      if (!skipFollowUp && form.followUpDate) {
+        suggestedFollowUpDate = parseFollowUpDate(form.followUpDate);
         suggestedFollowUpPriority = 'medium';
+        suggestedFollowUpMethod = form.email ? 'email' : form.phone ? 'call' : 'meeting';
         try {
           if (navigator.onLine) {
             const aiSuggestion = await generateFollowUpSuggestion({
@@ -667,21 +694,12 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
               email: form.email || undefined,
               phone: form.phone || undefined,
             });
-            suggestedFollowUpDate = new Date(aiSuggestion.suggestedDate);
-            suggestedFollowUpMethod = aiSuggestion.suggestedMethod || null;
+            suggestedFollowUpMethod = aiSuggestion.suggestedMethod || suggestedFollowUpMethod;
             suggestedFollowUpNote = aiSuggestion.message || null;
             suggestedFollowUpPriority = aiSuggestion.priority || 'medium';
-            aiSuggestionApplied = true;
-          } else {
-            throw new Error('offline');
           }
         } catch (aiErr) {
-          if ((aiErr as Error)?.message !== 'offline') {
-            console.warn('AI follow-up generation failed, using fallback:', aiErr);
-          }
-          suggestedFollowUpDate = new Date(now);
-          suggestedFollowUpDate.setDate(suggestedFollowUpDate.getDate() + form.followUpDays);
-          suggestedFollowUpMethod = form.email ? 'email' : form.phone ? 'call' : 'meeting';
+          console.warn('AI follow-up note failed, keeping the chosen date:', aiErr);
         }
       }
 
@@ -780,9 +798,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       parts.push(
         skipFollowUp
           ? 'no follow-up'
-          : aiSuggestionApplied
-            ? 'follow-up scheduled'
-            : `follow-up in ${form.followUpDays} day${form.followUpDays === 1 ? '' : 's'}`
+          : `follow-up ${parseFollowUpDate(form.followUpDate).toLocaleDateString()}`
       );
       setSuccessMessage(parts.join(' · '));
       setSuccess(true);
@@ -1279,12 +1295,15 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                   sx={{ mt: 1, alignItems: 'flex-start' }}
                   control={
                     <Switch
-                      checked={donationData.noFollowUp === true}
-                      onChange={(e) => setDonationData((prev) => ({
-                        ...prev,
-                        noFollowUp: e.target.checked,
-                        followedUp: e.target.checked ? false : prev.followedUp,
-                      }))}
+                      checked={form.followUpChoice === 'none'}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setNoFollowUpPromptOpen(true);
+                          return;
+                        }
+                        setForm((prev) => ({ ...prev, followUpChoice: 'unset', followUpDate: '' }));
+                        setDonationData((prev) => ({ ...prev, noFollowUp: false }));
+                      }}
                       disabled={loading}
                     />
                   }
@@ -1292,7 +1311,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                     <Box>
                       <Typography>No follow-up needed</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        Nothing else to do. Skips the calendar reminder and the email.
+                        You'll be asked to confirm. This contact will not land on the planning tab.
                       </Typography>
                     </Box>
                   }
@@ -1301,66 +1320,138 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             </Collapse>
           </Box>
 
-          {/* Follow-up preset chips */}
-          <Box sx={{ opacity: includeDonation && donationData.noFollowUp ? 0.45 : 1 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
-              Follow up in
-            </Typography>
-            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1 }}>
-              {FOLLOW_UP_PRESETS.map((preset) => {
-                const skipFollowUp = includeDonation && donationData.noFollowUp === true;
-                const active = !skipFollowUp && form.followUpDays === preset.days;
-                return (
-                  <Chip
-                    key={preset.days}
-                    label={preset.label}
-                    clickable={!skipFollowUp}
-                    onClick={() => {
-                      if (skipFollowUp) return;
-                      setForm((p) => ({ ...p, followUpDays: preset.days }));
-                    }}
-                    variant={active ? 'filled' : 'outlined'}
-                    sx={{
-                      bgcolor: active ? '#f5c842' : 'transparent',
-                      color: '#2d2d2d',
-                      fontWeight: active ? 700 : 500,
-                      borderColor: active ? '#f5c842' : 'rgba(0,0,0,0.2)',
-                      '&:hover': { bgcolor: active ? '#e8b923' : 'rgba(245, 200, 66, 0.12)' },
-                    }}
-                  />
-                );
-              })}
-            </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-              {includeDonation && donationData.noFollowUp
-                ? 'No reminder will be scheduled, and no follow-up email will be sent.'
-                : 'AI may pick a smarter date based on the visit context.'}
-            </Typography>
-          </Box>
-
-          {/* Save */}
-          <Button
-            variant="contained"
-            size="large"
-            fullWidth
-            onClick={handleSubmit}
-            disabled={loading || aiProcessing}
-            startIcon={loading ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
-            sx={{
-              bgcolor: '#f5c842',
-              color: '#2d2d2d',
-              py: 1.5,
-              fontWeight: 700,
-              fontSize: '1rem',
-              '&:hover': { bgcolor: '#e8b923' },
-              '&.Mui-disabled': { bgcolor: 'rgba(0,0,0,0.08)' },
-              mt: 0.5,
-            }}
-          >
-            {loading ? 'Saving…' : 'Save visit'}
-          </Button>
+          {(() => {
+            const followUpReady = form.followUpChoice === 'none' || (form.followUpChoice === 'date' && !!form.followUpDate);
+            const chooseDate = (days: number) => {
+              setForm((prev) => ({ ...prev, followUpChoice: 'date', followUpDate: formatInputDate(days) }));
+              setDonationData((prev) => ({ ...prev, noFollowUp: false }));
+            };
+            return (
+              <Box
+                sx={{
+                  p: 1.5,
+                  borderRadius: 1,
+                  border: '1px solid',
+                  borderColor: followUpReady ? 'divider' : '#f5c842',
+                  bgcolor: followUpReady ? 'transparent' : 'rgba(245, 200, 66, 0.12)',
+                }}
+              >
+                <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                  Follow-up date
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+                  Required. This is what puts them on the planning tab.
+                </Typography>
+                <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1, mb: 1.5 }}>
+                  {FOLLOW_UP_PRESETS.map((preset) => {
+                    const active = form.followUpChoice === 'date' && form.followUpDate === formatInputDate(preset.days);
+                    const suggested = !active && suggestedDays === preset.days;
+                    return (
+                      <Chip
+                        key={preset.days}
+                        label={suggested ? `${preset.label} suggested` : preset.label}
+                        clickable
+                        onClick={() => chooseDate(preset.days)}
+                        variant={active ? 'filled' : 'outlined'}
+                        sx={{
+                          bgcolor: active ? '#f5c842' : 'transparent',
+                          color: '#2d2d2d',
+                          fontWeight: active ? 700 : 500,
+                          borderColor: active || suggested ? '#f5c842' : 'rgba(0,0,0,0.2)',
+                          '&:hover': { bgcolor: active ? '#e8b923' : 'rgba(245, 200, 66, 0.12)' },
+                        }}
+                      />
+                    );
+                  })}
+                </Stack>
+                <TextField
+                  type="date"
+                  label="Or pick a date"
+                  size="small"
+                  fullWidth
+                  value={form.followUpChoice === 'date' ? form.followUpDate : ''}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setForm((prev) => ({
+                      ...prev,
+                      followUpChoice: value ? 'date' : 'unset',
+                      followUpDate: value,
+                    }));
+                    if (value) setDonationData((prev) => ({ ...prev, noFollowUp: false }));
+                  }}
+                  InputLabelProps={{ shrink: true }}
+                  inputProps={{ min: formatInputDate(0) }}
+                  disabled={loading}
+                />
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1, gap: 1 }}>
+                  <Button
+                    size="small"
+                    color="inherit"
+                    onClick={() => setNoFollowUpPromptOpen(true)}
+                    disabled={loading}
+                    sx={{ textTransform: 'none', color: 'text.secondary' }}
+                  >
+                    No follow-up
+                  </Button>
+                  {form.followUpChoice === 'none' && (
+                    <Typography variant="caption" color="warning.main">
+                      Not going on the planning tab.
+                    </Typography>
+                  )}
+                </Box>
+                <Button
+                  variant="contained"
+                  size="large"
+                  fullWidth
+                  onClick={handleSubmit}
+                  disabled={loading || aiProcessing || !followUpReady}
+                  startIcon={loading ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
+                  sx={{
+                    bgcolor: '#f5c842',
+                    color: '#2d2d2d',
+                    py: 1.5,
+                    fontWeight: 700,
+                    fontSize: '1rem',
+                    '&:hover': { bgcolor: '#e8b923' },
+                    '&.Mui-disabled': { bgcolor: 'rgba(0,0,0,0.08)' },
+                    mt: 1.5,
+                  }}
+                >
+                  {loading ? 'Saving…' : followUpReady ? 'Save visit' : 'Choose a follow-up date'}
+                </Button>
+              </Box>
+            );
+          })()}
         </Stack>
       </Collapse>
+
+      <Dialog open={noFollowUpPromptOpen} onClose={() => setNoFollowUpPromptOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Leave this off the planning tab?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            Without a follow-up date, this contact will not show up when you plan the day. Pick a date if you still want to see them.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2, flexDirection: 'column', alignItems: 'stretch', gap: 1 }}>
+          <Button
+            variant="contained"
+            onClick={() => setNoFollowUpPromptOpen(false)}
+            sx={{ bgcolor: '#f5c842', color: '#2d2d2d', fontWeight: 700, '&:hover': { bgcolor: '#e8b923' } }}
+          >
+            Pick a date
+          </Button>
+          <Button
+            color="inherit"
+            onClick={() => {
+              setForm((prev) => ({ ...prev, followUpChoice: 'none', followUpDate: '' }));
+              setDonationData((prev) => ({ ...prev, noFollowUp: true, followedUp: false }));
+              setNoFollowUpPromptOpen(false);
+            }}
+          >
+            Continue without a follow-up
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <PlaceMatchPicker
         open={showPlacePicker}

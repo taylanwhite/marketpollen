@@ -60,7 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'POST') {
     if (!(await canAccessStore(uid, contact.store_id))) return res.status(404).json({ error: 'Contact not found' });
-    if (await rejectIfStoreLocked(res, contact.store_id)) return;
+    if (await rejectIfStoreLocked(res, contact.store_id, uid)) return;
     const body = req.body as {
       id?: string;
       name?: string;

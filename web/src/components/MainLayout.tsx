@@ -8,6 +8,7 @@ import { QuickAddDialog } from './QuickAddDialog';
 import { OfflineIndicator } from './OfflineIndicator';
 import { OfflineBanner } from './OnlineOnlyNotice';
 import { isStoreArchived, isStoreLocked } from '../utils/storeLock';
+import { BillingAccessGate } from './BillingAccessGate';
 import { Store } from '../types';
 import { api } from '../api/client';
 import { prefetchOfflineAssets } from '../utils/prefetchOfflineAssets';
@@ -43,7 +44,7 @@ interface MainLayoutProps {
 export function MainLayout({ children }: MainLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { permissions, isAdmin, isOrgAdminFn } = usePermissions();
+  const { permissions, currentOrg, isAdmin, isOrgAdminFn } = usePermissions();
 
   const [currentStore, setCurrentStore] = useState<Store | null>(null);
   const [hasMultipleStores, setHasMultipleStores] = useState(false);
@@ -82,6 +83,10 @@ export function MainLayout({ children }: MainLayoutProps) {
   };
 
   const isStorePicker = location.pathname === '/select-store';
+  const accessMode = currentOrg?.access?.mode;
+  const orgLocked = !isAdmin()
+    && !isStorePicker
+    && (accessMode === 'trial_ended' || accessMode === 'payment_locked');
   const isActive = (path: string) => location.pathname === path;
 
   const navItems = [
@@ -268,7 +273,18 @@ export function MainLayout({ children }: MainLayoutProps) {
             The pill in the top bar is easy to miss on a busy page; this
             ribbon is unmissable and tells marketers exactly what's degraded. */}
         <OfflineBanner />
-        {children}
+        {!isStorePicker && (
+          <BillingAccessGate
+            access={currentOrg?.access}
+            orgId={currentOrg?.id}
+            orgName={currentOrg?.name}
+            canPay={!!currentOrg?.isAdmin}
+            isGlobalAdmin={isAdmin()}
+            storeCount={currentOrg?.stores.length || 1}
+            canSwitch={permissions.organizations.length > 1}
+          />
+        )}
+        {orgLocked ? null : children}
       </Box>
 
       {/* Mobile bottom navigation + center "+" — hidden when the user hasn't

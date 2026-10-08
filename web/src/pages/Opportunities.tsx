@@ -40,6 +40,8 @@ import {
   Cancel as DismissIcon,
   Place as PlaceIcon,
   Restore as RestoreIcon,
+  PauseCircleOutline as HoldIcon,
+  PlayCircleOutline as ReleaseIcon,
   Search as SearchIcon,
   Close as CloseIcon,
   Tune as MoreFiltersIcon,
@@ -176,6 +178,9 @@ export function Opportunities() {
   const [activeTab, setActiveTab] = useState(0);
   const [showDismissed, setShowDismissed] = useState(false);
   const [dismissedOpportunities, setDismissedOpportunities] = useState<Opportunity[]>([]);
+  const [heldOpportunities, setHeldOpportunities] = useState<Opportunity[]>([]);
+  const [holdingId, setHoldingId] = useState<string | null>(null);
+  const [releasingId, setReleasingId] = useState<string | null>(null);
   const [dismissModalOpen, setDismissModalOpen] = useState(false);
   const [opportunityToDismiss, setOpportunityToDismiss] = useState<Opportunity | null>(null);
 
@@ -200,6 +205,7 @@ export function Opportunities() {
     if (!storeId) {
       setOpportunities([]);
       setDismissedOpportunities([]);
+      setHeldOpportunities([]);
       setLoadingOpportunities(false);
       setLoadingStore(false);
       return;
@@ -207,6 +213,7 @@ export function Opportunities() {
     loadStoreAddress();
     loadOpportunities();
     loadDismissedOpportunities();
+    loadHeldOpportunities();
   }, [storeId]);
 
   const loadStoreAddress = async () => {
@@ -273,6 +280,20 @@ export function Opportunities() {
       setOpportunities([]);
     } finally {
       setLoadingOpportunities(false);
+    }
+  };
+
+  const loadHeldOpportunities = async () => {
+    if (!storeId) return;
+    try {
+      const list = await api.get<Opportunity[]>(`/opportunities?storeId=${storeId}&status=hold`);
+      setHeldOpportunities(list.map(o => ({
+        ...o,
+        createdAt: o.createdAt instanceof Date ? o.createdAt : new Date(o.createdAt),
+      })));
+    } catch (e) {
+      console.error('Load held opportunities:', e);
+      setHeldOpportunities([]);
     }
   };
 
@@ -485,6 +506,38 @@ export function Opportunities() {
     }
   };
 
+  const handleHold = async (opp: Opportunity) => {
+    if (!canEdit(opp.storeId)) return;
+    setError('');
+    setHoldingId(opp.id);
+    try {
+      await api.patch(`/opportunities/${opp.id}`, { status: 'hold' });
+      setSuccess('On hold. It stays on your list and is left off today’s route.');
+      await loadOpportunities();
+      await loadHeldOpportunities();
+    } catch (err: any) {
+      setError(err.message || 'Failed to put this stop on hold');
+    } finally {
+      setHoldingId(null);
+    }
+  };
+
+  const handleRelease = async (opp: Opportunity) => {
+    if (!canEdit(opp.storeId)) return;
+    setError('');
+    setReleasingId(opp.id);
+    try {
+      await api.patch(`/opportunities/${opp.id}`, { status: 'new' });
+      setSuccess('Back on the route.');
+      await loadOpportunities();
+      await loadHeldOpportunities();
+    } catch (err: any) {
+      setError(err.message || 'Failed to put this stop back on the route');
+    } finally {
+      setReleasingId(null);
+    }
+  };
+
   const handleRestore = async (opp: Opportunity) => {
     if (!canEdit(opp.storeId)) return;
     setError('');
@@ -515,6 +568,10 @@ export function Opportunities() {
     () => (term ? opportunities.filter((o) => haystack(o).includes(term)) : opportunities),
     [opportunities, term],
   );
+  const filteredHeld = useMemo(
+    () => (term ? heldOpportunities.filter((o) => haystack(o).includes(term)) : heldOpportunities),
+    [heldOpportunities, term],
+  );
   const filteredDismissed = useMemo(
     () => (term ? dismissedOpportunities.filter((o) => haystack(o).includes(term)) : dismissedOpportunities),
     [dismissedOpportunities, term],
@@ -527,6 +584,7 @@ export function Opportunities() {
   // hold one snapshot per status — no API churn.
   const PAGE_SIZE = 30;
   const [visibleActiveCount, setVisibleActiveCount] = useState(PAGE_SIZE);
+  const [visibleHeldCount, setVisibleHeldCount] = useState(PAGE_SIZE);
   const [visibleDismissedCount, setVisibleDismissedCount] = useState(PAGE_SIZE);
 
   // Reset the visible window whenever the underlying filtered list changes
@@ -537,6 +595,9 @@ export function Opportunities() {
     setVisibleActiveCount(PAGE_SIZE);
   }, [term, opportunities.length]);
   useEffect(() => {
+    setVisibleHeldCount(PAGE_SIZE);
+  }, [term, heldOpportunities.length]);
+  useEffect(() => {
     setVisibleDismissedCount(PAGE_SIZE);
   }, [term, dismissedOpportunities.length]);
 
@@ -544,17 +605,26 @@ export function Opportunities() {
     () => filteredOpportunities.slice(0, visibleActiveCount),
     [filteredOpportunities, visibleActiveCount],
   );
+  const visibleHeld = useMemo(
+    () => filteredHeld.slice(0, visibleHeldCount),
+    [filteredHeld, visibleHeldCount],
+  );
   const visibleDismissedList = useMemo(
     () => filteredDismissed.slice(0, visibleDismissedCount),
     [filteredDismissed, visibleDismissedCount],
   );
 
   const hasMoreActive = visibleActiveCount < filteredOpportunities.length;
+  const hasMoreHeld = visibleHeldCount < filteredHeld.length;
   const hasMoreDismissed = visibleDismissedCount < filteredDismissed.length;
 
   const { sentinelRef: activeSentinelRef } = useInfiniteScroll({
     onLoadMore: () => setVisibleActiveCount((c) => c + PAGE_SIZE),
     hasMore: hasMoreActive,
+  });
+  const { sentinelRef: heldSentinelRef } = useInfiniteScroll({
+    onLoadMore: () => setVisibleHeldCount((c) => c + PAGE_SIZE),
+    hasMore: hasMoreHeld,
   });
   const { sentinelRef: dismissedSentinelRef } = useInfiniteScroll({
     onLoadMore: () => setVisibleDismissedCount((c) => c + PAGE_SIZE),
@@ -603,10 +673,10 @@ export function Opportunities() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                 <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
                   {term
-                    ? `${filteredOpportunities.length + (effectiveShowDismissed ? filteredDismissed.length : 0)} match${
-                        filteredOpportunities.length + (effectiveShowDismissed ? filteredDismissed.length : 0) === 1 ? '' : 'es'
+                    ? `${filteredOpportunities.length + filteredHeld.length + (effectiveShowDismissed ? filteredDismissed.length : 0)} match${
+                        filteredOpportunities.length + filteredHeld.length + (effectiveShowDismissed ? filteredDismissed.length : 0) === 1 ? '' : 'es'
                       }`
-                    : `${opportunities.length} active${dismissedOpportunities.length ? ` · ${dismissedOpportunities.length} dismissed` : ''}`}
+                    : `${opportunities.length} on the route${heldOpportunities.length ? ` · ${heldOpportunities.length} on hold` : ''}${dismissedOpportunities.length ? ` · ${dismissedOpportunities.length} dismissed` : ''}`}
                 </Typography>
                 {!searchOpen ? (
                   <IconButton
@@ -656,17 +726,17 @@ export function Opportunities() {
                 <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
                   <CircularProgress />
                 </Box>
-              ) : opportunities.length === 0 && dismissedOpportunities.length === 0 ? (
+              ) : opportunities.length === 0 && heldOpportunities.length === 0 && dismissedOpportunities.length === 0 ? (
                 <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
                   No opportunities yet. Switch to "Generate" to discover businesses near your store.
                 </Typography>
-              ) : term && filteredOpportunities.length === 0 && filteredDismissed.length === 0 ? (
+              ) : term && filteredOpportunities.length === 0 && filteredHeld.length === 0 && filteredDismissed.length === 0 ? (
                 <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
                   No opportunities match “{searchTerm.trim()}”.
                 </Typography>
               ) : (
                 <>
-                  {filteredOpportunities.length > 0 && (
+                  {filteredOpportunities.length > 0 ? (
                     <>
                       <List disablePadding sx={{ mb: 1 }}>
                         {visibleOpportunities.map((opp) => (
@@ -676,7 +746,9 @@ export function Opportunities() {
                             canEdit={canEdit(opp.storeId)}
                             converting={convertingId === opp.id}
                             dismissing={dismissingId === opp.id}
+                            holding={holdingId === opp.id}
                             onConvert={() => handleConvert(opp)}
+                            onHold={() => handleHold(opp)}
                             onDismiss={() => openDismissModal(opp)}
                           />
                         ))}
@@ -702,12 +774,49 @@ export function Opportunities() {
                         </Box>
                       )}
                     </>
-                  )}
-
-                  {term && filteredOpportunities.length === 0 && filteredDismissed.length > 0 && (
-                    <Typography color="text.secondary" sx={{ mb: 1, fontStyle: 'italic' }}>
-                      No active matches — see dismissed below.
+                  ) : !term && opportunities.length === 0 ? (
+                    <Typography color="text.secondary" sx={{ py: 1 }}>
+                      Nothing is on the route right now.
                     </Typography>
+                  ) : null}
+
+                  {filteredHeld.length > 0 && (
+                    <Box sx={{ mt: 2 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                        On hold ({filteredHeld.length})
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                        These stops stay on your list. They are left off today’s route.
+                      </Typography>
+                      <List disablePadding sx={{ bgcolor: 'action.hover', borderRadius: 1, py: 0.5 }}>
+                        {visibleHeld.map((opp) => (
+                          <HeldOpportunityRow
+                            key={opp.id}
+                            opp={opp}
+                            canEdit={canEdit(opp.storeId)}
+                            releasing={releasingId === opp.id}
+                            onRelease={() => handleRelease(opp)}
+                          />
+                        ))}
+                      </List>
+                      {hasMoreHeld && (
+                        <Box
+                          ref={heldSentinelRef}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            py: 1.5,
+                            gap: 1,
+                            color: 'text.secondary',
+                            fontSize: '0.8rem',
+                          }}
+                        >
+                          <CircularProgress size={14} />
+                          {`Loading… (${visibleHeld.length} of ${filteredHeld.length})`}
+                        </Box>
+                      )}
+                    </Box>
                   )}
                 </>
               )}
@@ -1221,14 +1330,18 @@ function OpportunityRow({
   canEdit,
   converting,
   dismissing,
+  holding,
   onConvert,
+  onHold,
   onDismiss,
 }: {
   opp: Opportunity;
   canEdit: boolean;
   converting: boolean;
   dismissing: boolean;
+  holding: boolean;
   onConvert: () => void;
+  onHold: () => void;
   onDismiss: () => void;
 }) {
   const subtitle =
@@ -1273,6 +1386,18 @@ function OpportunityRow({
               </IconButton>
             </span>
           </Tooltip>
+          <Tooltip title="Put on hold. Stays on your list, left off today’s route.">
+            <span>
+              <IconButton
+                size="small"
+                onClick={onHold}
+                disabled={holding}
+                aria-label="Put on hold"
+              >
+                {holding ? <CircularProgress size={20} /> : <HoldIcon />}
+              </IconButton>
+            </span>
+          </Tooltip>
           <Tooltip title="Dismiss">
             <span>
               <IconButton
@@ -1286,6 +1411,60 @@ function OpportunityRow({
             </span>
           </Tooltip>
         </Box>
+      )}
+    </ListItem>
+  );
+}
+
+function HeldOpportunityRow({
+  opp,
+  canEdit,
+  releasing,
+  onRelease,
+}: {
+  opp: Opportunity;
+  canEdit: boolean;
+  releasing: boolean;
+  onRelease: () => void;
+}) {
+  const subtitle =
+    opp.address || [opp.city, opp.state, opp.zipCode].filter(Boolean).join(', ');
+  return (
+    <ListItem
+      sx={{
+        alignItems: 'flex-start',
+        gap: 1,
+        py: 1,
+        borderBottom: 1,
+        borderColor: 'divider',
+        '&:last-of-type': { borderBottom: 0 },
+      }}
+    >
+      <HoldIcon fontSize="small" color="action" sx={{ mt: 0.5 }} />
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.3 }}>
+          {opp.name}
+        </Typography>
+        {subtitle && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.4, mt: 0.25 }}>
+            {subtitle}
+          </Typography>
+        )}
+      </Box>
+      {canEdit && (
+        <Tooltip title="Put back on the route">
+          <span>
+            <IconButton
+              size="small"
+              onClick={onRelease}
+              disabled={releasing}
+              aria-label="Put back on the route"
+              sx={{ flexShrink: 0, mt: 0.25 }}
+            >
+              {releasing ? <CircularProgress size={20} /> : <ReleaseIcon color="primary" />}
+            </IconButton>
+          </span>
+        </Tooltip>
       )}
     </ListItem>
   );

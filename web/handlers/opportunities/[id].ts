@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') return res.status(200).json(toOpportunityJson(opportunity));
 
   if (!(await canAccessStore(uid, opportunity.store_id))) return res.status(404).json({ error: 'Opportunity not found' });
-  if (await rejectIfStoreLocked(res, opportunity.store_id)) return;
+  if (await rejectIfStoreLocked(res, opportunity.store_id, uid)) return;
 
   if (req.method === 'PATCH') {
     const body = req.body as { status?: string; dismissedReason?: string };
@@ -55,8 +55,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(toOpportunityJson(updated));
     }
 
+    if (body?.status === 'hold') {
+      const updated = await prisma.opportunity.update({
+        where: { id },
+        data: {
+          status: 'hold',
+          dismissed_at: null,
+          dismissed_reason: null,
+        },
+      });
+      return res.status(200).json(toOpportunityJson(updated));
+    }
+
     if (body?.status === 'new') {
-      // Restore a dismissed opportunity
+      // Restore a dismissed or held opportunity onto the route.
       const updated = await prisma.opportunity.update({
         where: { id },
         data: {

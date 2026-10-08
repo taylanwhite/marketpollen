@@ -964,8 +964,11 @@ export function Calendar() {
               </Box>
               {/* Optimized route */}
               <Box>
-                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 600 }}>
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.25, fontWeight: 600 }}>
                   Planned route (store → opportunities, least distance)
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                  Stops on hold are left off this route.
                 </Typography>
                 {dayPlan.optimizedRoute.length === 0 ? (
                   <Typography variant="body2" color="text.secondary">

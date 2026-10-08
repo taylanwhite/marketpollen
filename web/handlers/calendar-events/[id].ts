@@ -38,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') return res.status(200).json(toEventJson(event));
 
   if (!(await canAccessStore(uid, event.store_id))) return res.status(404).json({ error: 'Event not found' });
-  if (await rejectIfStoreLocked(res, event.store_id)) return;
+  if (await rejectIfStoreLocked(res, event.store_id, uid)) return;
 
   if (req.method === 'PATCH') {
     const body = req.body as {

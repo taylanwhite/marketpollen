@@ -33,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') return res.status(200).json(toBusinessJson(business));
 
   if (!(await canAccessStore(uid, business.store_id))) return res.status(404).json({ error: 'Business not found' });
-  if (await rejectIfStoreLocked(res, business.store_id)) return;
+  if (await rejectIfStoreLocked(res, business.store_id, uid)) return;
 
   if (req.method === 'PATCH') {
     const body = req.body as { name?: string; address?: string; city?: string; state?: string; zipCode?: string; placeId?: string };

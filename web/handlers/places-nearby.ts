@@ -268,7 +268,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       where: {
         OR: [
           { store_id: storeId },
-          { store_id: { in: orgStoreIds }, status: { in: ['new', 'converted'] } },
+          { store_id: { in: orgStoreIds }, status: { in: ['new', 'hold', 'converted'] } },
         ],
       },
       select: { place_id: true },

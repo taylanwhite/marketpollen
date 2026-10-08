@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { createDefaultCampaignProducts } from './lib/default-products.js';
+import { billingAccess } from './lib/org-billing-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -40,5 +41,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     subscriptionStatus: org.subscription_status,
     paidQuantity: org.paid_quantity,
     admins: org.members.map((member) => member.user.email),
+    access: billingAccess(org),
   })));
 }

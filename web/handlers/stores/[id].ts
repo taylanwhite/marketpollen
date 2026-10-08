@@ -39,7 +39,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'PATCH') {
     if (!(await canAccessStore(uid, id))) return res.status(404).json({ error: 'Store not found' });
-    if (await rejectIfStoreLocked(res, id)) return;
+    if (await rejectIfStoreLocked(res, id, uid)) return;
 
     const body = req.body as { name?: string; address?: string; city?: string; state?: string; zipCode?: string };
     const row = await prisma.store.update({

@@ -63,6 +63,7 @@ const GenerateEmailDialog = lazy(() =>
   import('./GenerateEmailDialog').then((m) => ({ default: m.GenerateEmailDialog }))
 );
 import { haptics } from '../utils/haptics';
+import { connectionValue } from '../utils/connectionLabel';
 
 interface EditContactModalProps {
   contact: Contact;
@@ -539,6 +540,16 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         {/* Tab 0: Contact Details */}
         <TabPanel value={tabValue} index={0}>
           <Grid container spacing={2}>
+            {connectionValue(contact.createdByName, contact.createdAt) && (
+              <Grid size={{ xs: 12 }}>
+                <TextField
+                  label="Connected by"
+                  value={connectionValue(contact.createdByName, contact.createdAt) || ''}
+                  fullWidth
+                  InputProps={{ readOnly: true }}
+                />
+              </Grid>
+            )}
             <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="First Name"
@@ -631,7 +642,10 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                         variant="outlined"
                       />
                       <Typography variant="body2" color="text.secondary">
-                        {reachout.date.toLocaleDateString()} at {reachout.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {[
+                          reachout.createdByName,
+                          `${reachout.date.toLocaleDateString()} at ${reachout.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+                        ].filter(Boolean).join(' · ')}
                       </Typography>
                       {reachout.donation && (
                         <Chip

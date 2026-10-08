@@ -25,6 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       where: { id: uid },
       data: { email, display_name: body.displayName ?? null },
     });
+    await acceptOwnerInvites(uid, email);
     return respondWithUser(res, uid, 200);
   }
 
@@ -53,6 +54,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await prisma.$executeRawUnsafe(`UPDATE invites SET invited_by = $1 WHERE invited_by = $2`, uid, oldId);
     await prisma.$executeRawUnsafe(`UPDATE opportunities SET created_by = $1 WHERE created_by = $2`, uid, oldId);
     await prisma.$executeRawUnsafe(`UPDATE contact_files SET uploaded_by = $1 WHERE uploaded_by = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE organization_members SET user_id = $1 WHERE user_id = $2`, uid, oldId);
+    await prisma.$executeRawUnsafe(`UPDATE organization_invites SET invited_by = $1 WHERE invited_by = $2`, uid, oldId);
 
     return respondWithUser(res, uid, 200);
   }
@@ -94,7 +97,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
+  await acceptOwnerInvites(uid, email);
+
   return respondWithUser(res, uid, 201);
+}
+
+async function acceptOwnerInvites(userId: string, email: string) {
+  const invites = await prisma.organizationInvite.findMany({
+    where: { email: email.toLowerCase(), status: 'pending' },
+  });
+  for (const invite of invites) {
+    await prisma.organizationMember.upsert({
+      where: { user_id_org_id: { user_id: userId, org_id: invite.org_id } },
+      create: { user_id: userId, org_id: invite.org_id, is_admin: true },
+      update: { is_admin: true },
+    });
+    const stores = await prisma.store.findMany({
+      where: { organization_id: invite.org_id, archived_at: null },
+      select: { id: true },
+    });
+    for (const store of stores) {
+      await prisma.storePermission.upsert({
+        where: { user_id_store_id: { user_id: userId, store_id: store.id } },
+        create: { user_id: userId, store_id: store.id, can_edit: true },
+        update: { can_edit: true },
+      });
+    }
+    await prisma.organizationInvite.update({
+      where: { id: invite.id },
+      data: { status: 'accepted' },
+    });
+  }
 }
 
 async function respondWithUser(res: VercelRequest extends never ? never : any, uid: string, status: number) {

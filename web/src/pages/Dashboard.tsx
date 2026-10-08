@@ -6,6 +6,8 @@ import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { ContactForm } from '../components/ContactForm';
+import { ImportCustomersDialog } from '../components/ImportCustomersDialog';
+import { connectionValue } from '../utils/connectionLabel';
 
 // Heavy modals — pulled in on demand to keep the contacts list snappy on
 // first paint, especially on slow LTE.
@@ -75,6 +77,7 @@ import {
   MicOff as MicOffIcon,
   AutoAwesome as AIIcon,
   Cake as CakeIcon,
+  UploadFile as UploadIcon,
   EventAvailable as EventAvailableIcon,
   Check as CheckIcon,
 } from '@mui/icons-material';
@@ -97,6 +100,8 @@ export function Dashboard() {
   const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(openNewContact && !!businessFilter);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importNotice, setImportNotice] = useState('');
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [followUpSuggestions, setFollowUpSuggestions] = useState<FollowUpSuggestion[]>([]);
   const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false);
@@ -642,13 +647,22 @@ export function Dashboard() {
           />
           
           {canEdit() && (
-            <Button
-              variant="contained"
-              startIcon={showForm ? <CloseIcon /> : <AddIcon />}
-              onClick={() => setShowForm(!showForm)}
-            >
-              {showForm ? 'Cancel' : 'Add Contact'}
-            </Button>
+            <>
+              <Button
+                variant="outlined"
+                startIcon={<UploadIcon />}
+                onClick={() => setImportOpen(true)}
+              >
+                Import
+              </Button>
+              <Button
+                variant="contained"
+                startIcon={showForm ? <CloseIcon /> : <AddIcon />}
+                onClick={() => setShowForm(!showForm)}
+              >
+                {showForm ? 'Cancel' : 'Add Contact'}
+              </Button>
+            </>
           )}
         </Box>
       </Paper>
@@ -974,6 +988,11 @@ export function Dashboard() {
                       </Box>
                       
                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 2 }}>
+                        {connectionValue(contact.createdByName, contact.createdAt) && (
+                          <Typography variant="caption" color="text.secondary">
+                            Connected by {connectionValue(contact.createdByName, contact.createdAt)}
+                          </Typography>
+                        )}
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <BusinessIcon fontSize="small" color="action" />
                           <Typography variant="body2" color="text.secondary">
@@ -1156,6 +1175,23 @@ export function Dashboard() {
             <Button onClick={handleCloseFollowUpDialog}>Close</Button>
           </DialogActions>
         </Dialog>
+
+        <ImportCustomersDialog
+          open={importOpen}
+          storeId={permissions.currentStoreId || ''}
+          onClose={() => setImportOpen(false)}
+          onImported={(summary) => {
+            setImportNotice(summary);
+            loadData();
+          }}
+        />
+        <Snackbar
+          open={!!importNotice}
+          autoHideDuration={4000}
+          onClose={() => setImportNotice('')}
+          message={importNotice}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        />
 
         {/* Copy Toast Notification */}
         <Snackbar

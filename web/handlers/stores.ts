@@ -153,6 +153,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         },
       });
       if (orgId) {
+        const admins = await prisma.organizationMember.findMany({
+          where: { org_id: orgId, is_admin: true },
+          select: { user_id: true },
+        });
+        for (const admin of admins) {
+          await prisma.storePermission.upsert({
+            where: { user_id_store_id: { user_id: admin.user_id, store_id: row.id } },
+            create: { user_id: admin.user_id, store_id: row.id, can_edit: true },
+            update: { can_edit: true },
+          });
+        }
         try {
           await noteStoreAdded(orgId, charge.charged);
         } catch (err) {

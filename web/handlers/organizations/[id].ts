@@ -17,12 +17,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!(await isOrgAdmin(uid, id))) return res.status(404).json({ error: 'Organization not found' });
 
   if (req.method === 'GET') {
-    const [stores, products, members] = await Promise.all([
+    const [stores, products, members, invites] = await Promise.all([
       prisma.store.findMany({ where: { organization_id: id, archived_at: null }, orderBy: { name: 'asc' } }),
       prisma.campaignProduct.findMany({ where: { org_id: id }, orderBy: { display_order: 'asc' } }),
       prisma.organizationMember.findMany({
         where: { org_id: id },
         include: { user: { select: { id: true, email: true, display_name: true } } },
+      }),
+      prisma.organizationInvite.findMany({
+        where: { org_id: id, status: 'pending' },
+        orderBy: { invited_at: 'desc' },
       }),
     ]);
 
@@ -50,6 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         displayName: m.user.display_name,
         isAdmin: m.is_admin,
       })),
+      pendingOwners: invites.map((invite) => invite.email),
       billing: await billingView(id),
     });
   }

@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { getAccessibleStores } from './lib/store-access.js';
+import { billingAccess } from './lib/org-billing-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -62,10 +63,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       isActive: p.is_active,
       reachoutColumn: p.reachout_column,
     })),
+    access: billingAccess(org),
   });
 
   let organizations: ReturnType<typeof mapOrg>[];
-  if (user.is_global_admin && orgMemberships.length === 0) {
+  if (user.is_global_admin) {
     const allOrgs = await prisma.organization.findMany({
       include: {
         products: { orderBy: { display_order: 'asc' } },

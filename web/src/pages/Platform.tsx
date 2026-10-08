@@ -13,6 +13,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   Paper,
   Switch,
   Tab,
@@ -26,6 +27,11 @@ import {
   Typography,
 } from '@mui/material';
 
+interface OrgAccess {
+  mode: 'open' | 'trial' | 'grace' | 'trial_ended' | 'payment_locked';
+  daysLeft: number | null;
+}
+
 interface PlatformOrg {
   id: string;
   name: string;
@@ -35,6 +41,7 @@ interface PlatformOrg {
   subscriptionStatus: string | null;
   paidQuantity: number;
   admins: string[];
+  access?: OrgAccess;
 }
 
 interface OrgInvoice {
@@ -63,7 +70,9 @@ interface OrgDetail {
     alert: string | null;
     unitLabel: string;
     invoices: OrgInvoice[];
+    access?: OrgAccess;
   } | null;
+  pendingOwners?: string[];
 }
 
 function money(cents: number) {
@@ -71,6 +80,11 @@ function money(cents: number) {
 }
 
 function billLabel(org: PlatformOrg) {
+  const days = org.access?.daysLeft ?? 0;
+  if (org.access?.mode === 'trial') return `Free trial · ${days} day${days === 1 ? '' : 's'} left`;
+  if (org.access?.mode === 'trial_ended') return 'Trial ended';
+  if (org.access?.mode === 'grace') return `Payment due · ${days} day${days === 1 ? '' : 's'} left`;
+  if (org.access?.mode === 'payment_locked') return 'Insufficient payment';
   if (!org.billingEnabled) return 'Not billing';
   if (org.subscriptionStatus === 'active') return `Paying ${money(org.monthlyPriceCents)} × ${org.paidQuantity}`;
   return 'Waiting for first payment';
@@ -87,6 +101,8 @@ export function Platform() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [newPrice, setNewPrice] = useState('65');
+  const [newTrial, setNewTrial] = useState(false);
+  const [ownerEmail, setOwnerEmail] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { price: string; billing: boolean }>>({});
   const [selected, setSelected] = useState<PlatformOrg | null>(null);
@@ -122,7 +138,7 @@ export function Platform() {
     setSavingId('new');
     setError('');
     try {
-      const created = await api.post<{ id: string }>('/organizations', { name: newName.trim() });
+      const created = await api.post<{ id: string }>('/organizations', { name: newName.trim(), trial: newTrial });
       const price = Number(newPrice);
       if (price && price !== 65) {
         await api.post(`/organizations/${created.id}/billing`, { action: 'set_price', monthlyPrice: price });
@@ -130,6 +146,7 @@ export function Platform() {
       setCreating(false);
       setNewName('');
       setNewPrice('65');
+      setNewTrial(true);
       setSuccess(`${newName.trim()} was created.`);
       await loadOrgs();
     } catch (err: any) {
@@ -141,6 +158,7 @@ export function Platform() {
 
   const openOrg = async (org: PlatformOrg) => {
     setSelected(org);
+    setOwnerEmail('');
     setDetail(null);
     setDetailLoading(true);
     try {
@@ -177,6 +195,45 @@ export function Platform() {
       window.location.href = result.url;
     } catch (err: any) {
       setError(err.message || 'Could not open the card on file');
+      setSavingId(null);
+    }
+  };
+
+  const addOwner = async () => {
+    if (!selected || !ownerEmail.trim()) return;
+    setSavingId('owner');
+    setError('');
+    try {
+      const result = await api.post<{ pending: boolean; emailed: boolean; email: string }>(`/organizations/${selected.id}/members`, {
+        email: ownerEmail.trim(),
+      });
+      setOwnerEmail('');
+      setSuccess(result.pending
+        ? `${result.email} will become an owner when they create an account${result.emailed ? '' : '. The email could not be sent'}.`
+        : `${result.email} is now an owner.`);
+      const row = await api.get<OrgDetail>(`/organizations/${selected.id}`);
+      setDetail(row);
+      await loadOrgs();
+    } catch (err: any) {
+      setError(err.message || 'Could not add that owner');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const startTrial = async () => {
+    if (!selected) return;
+    setSavingId('trial');
+    setError('');
+    try {
+      await api.post(`/organizations/${selected.id}/billing`, { action: 'start_trial' });
+      setSuccess(`${selected.name} has a free month.`);
+      const row = await api.get<OrgDetail>(`/organizations/${selected.id}`);
+      setDetail(row);
+      await loadOrgs();
+    } catch (err: any) {
+      setError(err.message || 'Could not start the free month');
+    } finally {
       setSavingId(null);
     }
   };
@@ -306,6 +363,7 @@ export function Platform() {
         <DialogContent>
           {detailLoading || !detail ? <CircularProgress sx={{ my: 3 }} /> : (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {error && <Alert severity="error">{error}</Alert>}
               {detail.billing?.alert && <Alert severity="warning">{detail.billing.alert}</Alert>}
               <Box>
                 <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Bill</Typography>
@@ -321,10 +379,27 @@ export function Platform() {
                 </Typography>
               </Box>
               <Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Admins</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {detail.members.filter((member) => member.isAdmin).map((member) => member.email).join(', ') || 'None'}
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Owners</Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  {detail.members.filter((member) => member.isAdmin).map((member) => member.email).join(', ') || 'None yet'}
                 </Typography>
+                {(detail.pendingOwners?.length ?? 0) > 0 && (
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Waiting to sign up: {detail.pendingOwners?.join(', ')}
+                  </Typography>
+                )}
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    size="small"
+                    label="Owner email"
+                    value={ownerEmail}
+                    onChange={(event) => setOwnerEmail(event.target.value)}
+                    sx={{ flex: 1 }}
+                  />
+                  <Button variant="contained" disabled={!ownerEmail.trim() || savingId === 'owner'} onClick={addOwner}>
+                    {savingId === 'owner' ? <CircularProgress size={16} color="inherit" /> : 'Add owner'}
+                  </Button>
+                </Box>
               </Box>
               <Box>
                 <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Stores</Typography>
@@ -360,7 +435,12 @@ export function Platform() {
           )}
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
-          {selected && selected.billingEnabled && selected.subscriptionStatus !== 'active' && (
+          {selected && detail?.billing?.status !== 'active' && detail?.billing?.access?.mode !== 'trial' && (
+            <Button onClick={startTrial} disabled={savingId === 'trial'}>
+              {savingId === 'trial' ? <CircularProgress size={16} /> : 'Give a free month'}
+            </Button>
+          )}
+          {selected && selected.billingEnabled && selected.subscriptionStatus !== 'active' && detail?.billing?.access?.mode !== 'trial' && (
             <Button variant="contained" onClick={() => chargeInStripe(selected)} disabled={savingId === selected.id}>
               Charge in Stripe
             </Button>
@@ -391,6 +471,10 @@ export function Platform() {
             value={newPrice}
             onChange={(event) => setNewPrice(event.target.value)}
             fullWidth
+          />
+          <FormControlLabel
+            control={<Switch checked={newTrial} onChange={(event) => setNewTrial(event.target.checked)} />}
+            label="Start with a free month"
           />
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>

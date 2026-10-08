@@ -42,6 +42,8 @@ export interface Store {
 }
 
 // Organization types
+export type OrgAccessMode = 'open' | 'trial' | 'grace' | 'trial_ended' | 'payment_locked';
+
 export interface Organization {
   id: string;
   name: string;
@@ -49,6 +51,12 @@ export interface Organization {
   isAdmin: boolean;
   stores: Array<{ id: string; name: string }>;
   products: CampaignProduct[];
+  access?: {
+    mode: OrgAccessMode;
+    daysLeft: number | null;
+    trialEndsAt: string | null;
+    graceEndsAt: string | null;
+  };
 }
 
 export interface CampaignProduct {
@@ -85,7 +93,7 @@ export interface Opportunity {
   city?: string | null;
   state?: string | null;
   zipCode?: string | null;
-  status: 'new' | 'converted' | 'dismissed';
+  status: 'new' | 'hold' | 'converted' | 'dismissed';
   businessId?: string | null;
   createdAt: Date;
   createdBy: string;
@@ -141,6 +149,7 @@ export interface Reachout {
   note: string;
   rawNotes?: string | null; // Original unprocessed meeting notes
   createdBy: string; // user uid
+  createdByName?: string | null;
   type?: 'call' | 'email' | 'meeting' | 'text' | 'other';
   donation?: DonationData; // Optional donation data
 }
@@ -177,6 +186,7 @@ export interface Contact {
   suggestedFollowUpPriority?: 'low' | 'medium' | 'high' | null; // AI-suggested priority
   createdAt: Date;
   createdBy: string; // user uid
+  createdByName?: string | null;
   lastReachoutDate?: Date | null;
   status?: 'new' | 'contacted' | 'active' | 'converted' | 'inactive';
 }

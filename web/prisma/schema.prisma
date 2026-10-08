@@ -28,6 +28,7 @@ model User {
   opportunities_created Opportunity[]   @relation("OpportunityCreatedBy")
   organizations_created Organization[]  @relation("OrgCreatedBy")
   organization_memberships OrganizationMember[]
+  organization_invites_sent OrganizationInvite[] @relation("OrgInviteSentBy")
 
   @@map("users")
 }
@@ -50,11 +51,16 @@ model Organization {
   renewal_quantity            Int?
   current_period_end          DateTime?
   billing_alert               String?
+  trial_ends_at               DateTime?
+  payment_failed_at           DateTime?
+  payment_grace_notice_at     DateTime?
+  payment_final_notice_at     DateTime?
 
   creator  User                 @relation("OrgCreatedBy", fields: [created_by], references: [id])
   stores   Store[]
   members  OrganizationMember[]
   products CampaignProduct[]
+  invites  OrganizationInvite[]
 
   @@map("organizations")
 }
@@ -69,6 +75,21 @@ model OrganizationMember {
 
   @@id([user_id, org_id])
   @@map("organization_members")
+}
+
+model OrganizationInvite {
+  id         String   @id @default(uuid()) @db.Uuid
+  org_id     String   @db.Uuid
+  email      String
+  invited_by String
+  invited_at DateTime @default(now())
+  status     String   @default("pending")
+
+  org     Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  creator User         @relation("OrgInviteSentBy", fields: [invited_by], references: [id])
+
+  @@index([email, status])
+  @@map("organization_invites")
 }
 
 model CampaignProduct {
@@ -156,7 +177,7 @@ model Opportunity {
   city             String?
   state            String?
   zip_code         String?
-  status           String    @default("new") // new | converted | dismissed
+  status           String    @default("new") // new | hold | converted | dismissed
   business_id      String?   @db.Uuid
   created_at       DateTime  @default(now())
   created_by       String

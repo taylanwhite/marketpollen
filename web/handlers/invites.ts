@@ -52,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (managedStoreIds && !managedStoreIds.includes(body.storeId)) {
       return res.status(404).json({ error: 'Store not found' });
     }
-    if (await rejectIfStoreLocked(res, body.storeId)) return;
+    if (await rejectIfStoreLocked(res, body.storeId, uid)) return;
 
     const row = await prisma.invite.create({
       data: {

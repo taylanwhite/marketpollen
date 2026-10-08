@@ -20,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const can = await canAccessStore(uid, opportunity.store_id);
   if (!can) return res.status(404).json({ error: 'Opportunity not found' });
-  if (await rejectIfStoreLocked(res, opportunity.store_id)) return;
+  if (await rejectIfStoreLocked(res, opportunity.store_id, uid)) return;
 
   const body = req.body as { name?: string; address?: string; city?: string; state?: string; zipCode?: string } | undefined;
   const name = (body?.name ?? opportunity.name) || opportunity.name;

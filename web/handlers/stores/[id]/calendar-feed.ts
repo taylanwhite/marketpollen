@@ -28,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!(await canViewStore(uid, id))) return res.status(404).json({ error: 'Store not found' });
   } else if (!(await canAccessStore(uid, id))) {
     return res.status(404).json({ error: 'Store not found' });
-  } else if (await rejectIfStoreLocked(res, id)) {
+  } else if (await rejectIfStoreLocked(res, id, uid)) {
     return;
   }
 
