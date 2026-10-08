@@ -39,18 +39,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       org: {
         include: {
           products: { orderBy: { display_order: 'asc' } },
-          stores: { select: { id: true, name: true } },
+          stores: { select: { id: true, name: true, archived_at: true } },
         },
       },
     },
   });
 
-  const mapOrg = (org: any, isAdmin: boolean) => ({
+  const mapOrg = (org: any, isAdmin: boolean, allowedStoreIds?: Set<string>) => ({
     id: org.id,
     name: org.name,
     quarterlyGoal: org.quarterly_goal,
     isAdmin,
-    stores: org.stores.map((s: any) => ({ id: s.id, name: s.name })),
+    stores: org.stores
+      .filter((s: any) => !s.archived_at && (!allowedStoreIds || allowedStoreIds.has(s.id)))
+      .map((s: any) => ({ id: s.id, name: s.name })),
     products: org.products.map((p: any) => ({
       id: p.id,
       slug: p.slug,
@@ -67,13 +69,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const allOrgs = await prisma.organization.findMany({
       include: {
         products: { orderBy: { display_order: 'asc' } },
-        stores: { select: { id: true, name: true } },
+        stores: { select: { id: true, name: true, archived_at: true } },
       },
     });
     organizations = allOrgs.map((org) => mapOrg(org, true));
   } else if (orgMemberships.length > 0) {
+    const allowedStoreIds = new Set(stores.map((store) => store.id));
     organizations = orgMemberships.map((m) =>
-      mapOrg(m.org, m.is_admin || user.is_global_admin)
+      mapOrg(
+        m.org,
+        m.is_admin || user.is_global_admin,
+        m.is_admin || user.is_global_admin ? undefined : allowedStoreIds,
+      )
     );
   } else {
     // User has no explicit org membership — derive orgs from their store permissions
@@ -83,10 +90,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         where: { id: { in: storeOrgIds } },
         include: {
           products: { orderBy: { display_order: 'asc' } },
-          stores: { select: { id: true, name: true } },
+          stores: { select: { id: true, name: true, archived_at: true } },
         },
       });
-      organizations = derivedOrgs.map((org) => mapOrg(org, false));
+      const allowedStoreIds = new Set(stores.map((store) => store.id));
+      organizations = derivedOrgs.map((org) => mapOrg(org, false, allowedStoreIds));
     } else {
       organizations = [];
     }
@@ -113,6 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       organizationId: s.organization_id ?? undefined,
       billingStatus: s.billing_status,
       pauseOn: s.pause_on,
+      archivedAt: s.archived_at,
     })),
     organizations,
   });

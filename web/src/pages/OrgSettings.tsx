@@ -13,6 +13,18 @@ import {
   Delete as DeleteIcon, Save as SaveIcon,
 } from '@mui/icons-material';
 
+interface BillingInvoice {
+  id: string;
+  number: string | null;
+  status: string | null;
+  totalCents: number;
+  amountDueCents: number;
+  amountPaidCents: number;
+  created: number;
+  hostedUrl: string | null;
+  pdfUrl: string | null;
+}
+
 interface BillingInfo {
   enabled: boolean;
   status: string | null;
@@ -24,7 +36,9 @@ interface BillingInfo {
   needsCheckout: boolean;
   minimumQuantity: number;
   configured: boolean;
+  unitCents: number;
   unitLabel: string;
+  invoices: BillingInvoice[];
 }
 
 interface OrgData {
@@ -53,6 +67,7 @@ export function OrgSettings() {
   const [productSaving, setProductSaving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const [storeQuantity, setStoreQuantity] = useState(1);
+  const [priceInput, setPriceInput] = useState('65');
   const [billingBusy, setBillingBusy] = useState(false);
 
   useEffect(() => {
@@ -95,6 +110,9 @@ export function OrgSettings() {
       setGoalValue(data.quarterlyGoal);
       if (data.billing?.minimumQuantity) {
         setStoreQuantity((current) => Math.max(current, data.billing!.minimumQuantity));
+      }
+      if (data.billing?.unitCents) {
+        setPriceInput((data.billing.unitCents / 100).toFixed(2).replace(/\.00$/, ''));
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load organization');
@@ -233,28 +251,60 @@ export function OrgSettings() {
             </Typography>
             {orgData.billing?.alert && <Alert severity="warning" sx={{ mb: 2 }}>{orgData.billing.alert}</Alert>}
             {isAdmin() && orgData.billing?.status !== 'active' && (
-              <FormControlLabel
-                sx={{ mb: 1, display: 'block' }}
-                control={
-                  <Switch
-                    checked={!!orgData.billing?.enabled}
-                    disabled={billingBusy}
-                    onChange={async (event) => {
-                      setBillingBusy(true);
-                      setError('');
-                      try {
-                        await api.post(`/organizations/${orgData.id}/billing`, { action: 'enable', enabled: event.target.checked });
-                        await loadOrgData();
-                      } catch (err: any) {
-                        setError(err.message || 'Could not update billing');
-                      } finally {
-                        setBillingBusy(false);
-                      }
-                    }}
-                  />
-                }
-                label="Require a monthly bill before new stores can be added"
-              />
+              <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', mb: 2 }}>
+                <TextField
+                  label="Price per store"
+                  type="number"
+                  size="small"
+                  value={priceInput}
+                  onChange={(event) => setPriceInput(event.target.value)}
+                  slotProps={{ htmlInput: { min: 1, step: '0.01' } }}
+                  sx={{ width: 160 }}
+                />
+                <Button
+                  variant="outlined"
+                  disabled={billingBusy}
+                  onClick={async () => {
+                    setBillingBusy(true);
+                    setError('');
+                    try {
+                      await api.post(`/organizations/${orgData.id}/billing`, {
+                        action: 'set_price',
+                        monthlyPrice: Number(priceInput),
+                      });
+                      setSuccess('Price saved.');
+                      await loadOrgData();
+                    } catch (err: any) {
+                      setError(err.message || 'Could not save the price');
+                    } finally {
+                      setBillingBusy(false);
+                    }
+                  }}
+                >
+                  Save price
+                </Button>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={!!orgData.billing?.enabled}
+                      disabled={billingBusy}
+                      onChange={async (event) => {
+                        setBillingBusy(true);
+                        setError('');
+                        try {
+                          await api.post(`/organizations/${orgData.id}/billing`, { action: 'enable', enabled: event.target.checked });
+                          await loadOrgData();
+                        } catch (err: any) {
+                          setError(err.message || 'Could not update billing');
+                        } finally {
+                          setBillingBusy(false);
+                        }
+                      }}
+                    />
+                  }
+                  label="Require a monthly bill before new stores can be added"
+                />
+              </Box>
             )}
             {orgData.billing?.needsCheckout && (
               <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -285,7 +335,7 @@ export function OrgSettings() {
                     }
                   }}
                 >
-                  {billingBusy ? <CircularProgress size={16} color="inherit" /> : `Start at $${storeQuantity * 65} a month`}
+                  {billingBusy ? <CircularProgress size={16} color="inherit" /> : `Start at $${((storeQuantity * (orgData.billing.unitCents || 6500)) / 100).toLocaleString()} a month`}
                 </Button>
                 <Typography variant="body2" color="text.secondary">
                   You'll pay for the full month today. Adding another store later charges only the days left in that month.
@@ -318,6 +368,32 @@ export function OrgSettings() {
                 >
                   Update card
                 </Button>
+              </Box>
+            )}
+            {(orgData.billing?.invoices?.length ?? 0) > 0 && (
+              <Box sx={{ mt: 3 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Invoices</Typography>
+                {orgData.billing?.invoices.map((invoice) => (
+                  <Box key={invoice.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <Typography sx={{ flex: 1 }}>
+                      {new Date(invoice.created * 1000).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
+                      {invoice.number ? ` · ${invoice.number}` : ''}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label={invoice.status === 'paid' ? 'Paid' : invoice.status === 'open' ? 'Due' : invoice.status || 'Invoice'}
+                      color={invoice.status === 'paid' ? 'success' : invoice.status === 'open' ? 'warning' : 'default'}
+                    />
+                    <Typography sx={{ minWidth: 80, textAlign: 'right' }}>
+                      ${((invoice.status === 'paid' ? invoice.amountPaidCents : invoice.amountDueCents) / 100).toLocaleString()}
+                    </Typography>
+                    {invoice.hostedUrl && (
+                      <Button size="small" href={invoice.hostedUrl} target="_blank" rel="noopener noreferrer">
+                        View
+                      </Button>
+                    )}
+                  </Box>
+                ))}
               </Box>
             )}
             {orgData.billing?.enabled && orgData.billing.configured === false && (

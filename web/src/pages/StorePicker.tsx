@@ -151,6 +151,9 @@ export function StorePicker() {
                   <Button variant="text" onClick={() => navigate('/org-settings')}>
                     Organization settings
                   </Button>
+                  <Button variant="text" onClick={() => navigate('/stores?tab=archived')}>
+                    Archived stores
+                  </Button>
                 </Box>
               )}
               

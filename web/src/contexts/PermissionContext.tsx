@@ -2,13 +2,13 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { useAuth } from './AuthContext';
 import { StorePermission, Store, Organization } from '../types';
 import { api } from '../api/client';
-import { isStoreLocked } from '../utils/storeLock';
+import { isStoreArchived, isStoreLocked } from '../utils/storeLock';
 
 interface UserPermissions {
   isGlobalAdmin: boolean;
   isOrgAdmin: boolean;
   storePermissions: StorePermission[];
-  accessibleStores: Array<{ id: string; name: string; billingStatus?: string; pauseOn?: string | Date | null }>;
+  accessibleStores: Array<{ id: string; name: string; billingStatus?: string; pauseOn?: string | Date | null; archivedAt?: string | Date | null }>;
   currentStoreId: string | null;
   organizations: Organization[];
 }
@@ -104,7 +104,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         name: store.name,
         billingStatus: store.billingStatus,
         pauseOn: store.pauseOn,
+        archivedAt: store.archivedAt,
       }));
+      const openStores = accessibleStores.filter((store) => !isStoreArchived(store));
       const isGlobalAdmin = me.user?.isGlobalAdmin === true;
       const orgs = (me.organizations || []) as Organization[];
       const orgAdmin = isGlobalAdmin || orgs.some(o => o.isAdmin);
@@ -121,16 +123,19 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
       }
 
       if (!currentStoreId) {
-        if (accessibleStores.length === 1) {
-          currentStoreId = accessibleStores[0].id;
+        if (openStores.length === 1) {
+          currentStoreId = openStores[0].id;
           localStorage.setItem('selectedStoreId', currentStoreId);
-        } else if (accessibleStores.length > 1 && (isGlobalAdmin || orgAdmin)) {
+        } else if (openStores.length > 1 && (isGlobalAdmin || orgAdmin)) {
           currentStoreId = null;
         } else if (storePerms.length > 0) {
-          currentStoreId = storePerms[0].storeId;
-          localStorage.setItem('selectedStoreId', currentStoreId);
-        } else if (accessibleStores.length > 0) {
-          currentStoreId = accessibleStores[0].id;
+          const openPerm = storePerms.find((perm) => openStores.some((store) => store.id === perm.storeId));
+          if (openPerm) {
+            currentStoreId = openPerm.storeId;
+            localStorage.setItem('selectedStoreId', currentStoreId);
+          }
+        } else if (openStores.length > 0) {
+          currentStoreId = openStores[0].id;
           localStorage.setItem('selectedStoreId', currentStoreId);
         }
       }
@@ -180,7 +185,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   const canEdit = (storeId?: string): boolean => {
     const targetStoreId = storeId || permissions.currentStoreId;
     const listed = permissions.accessibleStores.find((store) => store.id === targetStoreId);
-    if (isStoreLocked(listed)) return false;
+    if (isStoreArchived(listed) || isStoreLocked(listed)) return false;
     if (permissions.isGlobalAdmin) return true;
     if (!targetStoreId) return false;
     const perm = permissions.storePermissions.find(p => p.storeId === targetStoreId);

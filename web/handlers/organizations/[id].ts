@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
-import { isOrgAdmin, isOrgMember } from '../lib/org-access.js';
+import { isOrgAdmin } from '../lib/org-access.js';
 import { billingView } from '../lib/billing.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -14,11 +14,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const org = await prisma.organization.findUnique({ where: { id } });
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
-  if (!(await isOrgMember(uid, id))) return res.status(404).json({ error: 'Organization not found' });
+  if (!(await isOrgAdmin(uid, id))) return res.status(404).json({ error: 'Organization not found' });
 
   if (req.method === 'GET') {
     const [stores, products, members] = await Promise.all([
-      prisma.store.findMany({ where: { organization_id: id }, orderBy: { name: 'asc' } }),
+      prisma.store.findMany({ where: { organization_id: id, archived_at: null }, orderBy: { name: 'asc' } }),
       prisma.campaignProduct.findMany({ where: { org_id: id }, orderBy: { display_order: 'asc' } }),
       prisma.organizationMember.findMany({
         where: { org_id: id },

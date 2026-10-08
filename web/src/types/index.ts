@@ -36,6 +36,7 @@ export interface Store {
   pauseOn?: string | Date | null;
   statusMessage?: string | null;
   billingActive?: boolean;
+  archivedAt?: string | Date | null;
   createdAt: Date;
   createdBy: string; // user uid
 }

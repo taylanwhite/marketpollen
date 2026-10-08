@@ -5,6 +5,7 @@ import { getStripe, integrationIdentifier, storePriceId, stripeConfigured } from
 import {
   STORE_UNIT_CENTS,
   addStoreMessage,
+  archiveStoreMessage,
   deleteStoreMessage,
   keepOpenMessage,
   money,
@@ -24,7 +25,7 @@ export class BillingHttpError extends Error {
 }
 
 export type BillingQuote = {
-  intent: 'add_store' | 'resume_store' | 'pause_store' | 'keep_open' | 'delete_store';
+  intent: 'add_store' | 'resume_store' | 'pause_store' | 'keep_open' | 'delete_store' | 'archive_store';
   needsCharge: boolean;
   needsCheckout: boolean;
   message: string;
@@ -41,7 +42,7 @@ async function loadOrg(orgId: string) {
     where: { id: orgId },
     include: {
       stores: {
-        select: { id: true, name: true, billing_status: true, pause_on: true },
+        select: { id: true, name: true, billing_status: true, pause_on: true, archived_at: true },
         orderBy: { name: 'asc' },
       },
     },
@@ -59,9 +60,10 @@ export async function settleDuePauses(orgId: string): Promise<void> {
   });
 }
 
-function seatCounts(stores: Array<{ billing_status: string }>) {
-  const active = stores.filter((store) => store.billing_status === 'active').length;
-  const scheduled = stores.filter((store) => store.billing_status === 'pause_scheduled').length;
+function seatCounts(stores: Array<{ billing_status: string; archived_at?: Date | null }>) {
+  const open = stores.filter((store) => !store.archived_at);
+  const active = open.filter((store) => store.billing_status === 'active').length;
+  const scheduled = open.filter((store) => store.billing_status === 'pause_scheduled').length;
   return {
     active,
     scheduled,
@@ -84,6 +86,64 @@ function periodEndOf(sub: Stripe.Subscription): Date | null {
 
 function scheduledRenewal(org: { paid_quantity: number; renewal_quantity: number | null }): number {
   return org.renewal_quantity ?? org.paid_quantity;
+}
+
+function unitOf(org: { monthly_price_cents: number }): number {
+  return org.monthly_price_cents > 0 ? org.monthly_price_cents : STORE_UNIT_CENTS;
+}
+
+async function priceForMonthlyAmount(cents: number): Promise<string> {
+  const stripe = getStripe();
+  const base = await stripe.prices.retrieve(storePriceId());
+  const productId = typeof base.product === 'string' ? base.product : base.product.id;
+  if (base.unit_amount === cents && base.recurring?.interval === 'month') return base.id;
+  const existing = await stripe.prices.list({ product: productId, active: true, limit: 100 });
+  const match = existing.data.find((price) =>
+    price.unit_amount === cents && price.currency === 'usd' && price.recurring?.interval === 'month'
+  );
+  if (match) return match.id;
+  const created = await stripe.prices.create({
+    product: productId,
+    unit_amount: cents,
+    currency: 'usd',
+    recurring: { interval: 'month' },
+    nickname: `${money(cents)} per store`,
+  });
+  return created.id;
+}
+
+export async function setMonthlyPrice(orgId: string, cents: number): Promise<void> {
+  if (!Number.isInteger(cents) || cents < 100 || cents > 100000) {
+    throw new BillingHttpError(400, 'Enter a monthly price between $1 and $1,000 per store.');
+  }
+  const org = await prisma.organization.findUnique({ where: { id: orgId } });
+  if (!org) throw new BillingHttpError(404, 'Organization not found');
+  if (org.subscription_status === 'active') {
+    throw new BillingHttpError(400, 'The monthly price is already set on an active bill.');
+  }
+  await prisma.organization.update({ where: { id: orgId }, data: { monthly_price_cents: cents } });
+}
+
+export async function listInvoices(orgId: string) {
+  try {
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { stripe_customer_id: true } });
+    if (!org?.stripe_customer_id || !stripeConfigured()) return [];
+    const invoices = await getStripe().invoices.list({ customer: org.stripe_customer_id, limit: 24 });
+    return invoices.data.map((invoice) => ({
+      id: invoice.id,
+      number: invoice.number,
+      status: invoice.status,
+      totalCents: invoice.total,
+      amountDueCents: invoice.amount_due,
+      amountPaidCents: invoice.amount_paid,
+      created: invoice.created,
+      hostedUrl: invoice.hosted_invoice_url,
+      pdfUrl: invoice.invoice_pdf,
+    }));
+  } catch (err) {
+    console.error('Could not load invoices', err);
+    return [];
+  }
 }
 
 async function setRenewal(orgId: string, paid: number, next: number): Promise<void> {
@@ -112,6 +172,7 @@ export async function persistSubscription(orgId: string, sub: Stripe.Subscriptio
       stripe_schedule_id: scheduleId,
       subscription_status: sub.status,
       paid_quantity: paid,
+      ...(item?.price?.unit_amount ? { monthly_price_cents: item.price.unit_amount } : {}),
       current_period_end: periodEndOf(sub),
       ...(existing?.renewal_quantity != null && existing.renewal_quantity >= paid
         ? { renewal_quantity: null }
@@ -274,21 +335,21 @@ async function raisePaidQuantity(org: OrgRecord, idempotencyKey?: string): Promi
 function quoteBase(org: OrgRecord, dueTodayCents: number, newMonthlyCents: number): Omit<BillingQuote, 'intent' | 'message' | 'needsCharge' | 'needsCheckout'> {
   return {
     dueTodayCents,
-    currentMonthlyCents: org.paid_quantity * STORE_UNIT_CENTS,
+    currentMonthlyCents: org.paid_quantity * unitOf(org),
     newMonthlyCents,
     periodEnd: org.current_period_end ? org.current_period_end.toISOString() : null,
   };
 }
 
-function checkoutQuote(storeName: string): BillingQuote {
+function checkoutQuote(storeName: string, unitCents: number): BillingQuote {
   return {
     intent: 'add_store',
     needsCharge: false,
     needsCheckout: true,
-    message: `${storeName} can't be added until this organization starts a monthly bill. Each store is $65 a month. You can start that from organization settings.`,
+    message: `${storeName} can't be added until this organization starts a monthly bill. Each store is ${money(unitCents)} a month. You can start that from organization settings.`,
     dueTodayCents: 0,
     currentMonthlyCents: 0,
-    newMonthlyCents: STORE_UNIT_CENTS,
+    newMonthlyCents: unitCents,
     periodEnd: null,
   };
 }
@@ -298,7 +359,7 @@ function requireActiveBill(org: OrgRecord, storeName = 'This store'): BillingQuo
   if (!stripeConfigured()) {
     throw new BillingHttpError(500, 'Monthly billing is not configured yet. Add the Stripe key and the store price.');
   }
-  if (org.subscription_status !== 'active') return checkoutQuote(storeName);
+  if (org.subscription_status !== 'active') return checkoutQuote(storeName, unitOf(org));
   return null;
 }
 
@@ -313,7 +374,7 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
   const { seatsInUse } = seatCounts(org.stores);
   const periodEnd = org.current_period_end;
   if (seatsInUse + 1 <= org.paid_quantity) {
-    const current = org.paid_quantity * STORE_UNIT_CENTS;
+    const current = org.paid_quantity * unitOf(org);
     return {
       intent: 'add_store',
       needsCharge: false,
@@ -329,14 +390,14 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
     };
   }
   const due = await previewIncrease(org, org.paid_quantity + 1);
-  const next = (org.paid_quantity + 1) * STORE_UNIT_CENTS;
+  const next = (org.paid_quantity + 1) * unitOf(org);
   return {
     intent: 'add_store',
     needsCharge: true,
     needsCheckout: false,
     message: addStoreMessage({
       storeName: name,
-      currentMonthlyCents: org.paid_quantity * STORE_UNIT_CENTS,
+      currentMonthlyCents: org.paid_quantity * unitOf(org),
       newMonthlyCents: next,
       dueTodayCents: due,
       periodEnd,
@@ -409,8 +470,8 @@ export async function quotePauseStore(storeId: string): Promise<BillingQuote> {
   }
   const alreadyScheduled = fresh.billing_status === 'pause_scheduled';
   const nextCount = alreadyScheduled ? scheduledRenewal(org) : Math.max(0, scheduledRenewal(org) - 1);
-  const current = org.paid_quantity * STORE_UNIT_CENTS;
-  const next = nextCount * STORE_UNIT_CENTS;
+  const current = org.paid_quantity * unitOf(org);
+  const next = nextCount * unitOf(org);
   return {
     intent: 'pause_store',
     needsCharge: false,
@@ -455,8 +516,8 @@ export async function quoteKeepOpen(storeId: string): Promise<BillingQuote> {
   }
   const nextCount = Math.min(org.paid_quantity, scheduledRenewal(org) + 1);
   const otherReductions = nextCount < org.paid_quantity;
-  const current = org.paid_quantity * STORE_UNIT_CENTS;
-  const next = nextCount * STORE_UNIT_CENTS;
+  const current = org.paid_quantity * unitOf(org);
+  const next = nextCount * unitOf(org);
   return {
     intent: 'keep_open',
     needsCharge: false,
@@ -503,7 +564,7 @@ export async function quoteResumeStore(storeId: string): Promise<BillingQuote> {
   const { seatsInUse } = seatCounts(org.stores);
   const periodEnd = org.current_period_end;
   if (seatsInUse + 1 <= org.paid_quantity) {
-    const current = org.paid_quantity * STORE_UNIT_CENTS;
+    const current = org.paid_quantity * unitOf(org);
     return {
       intent: 'resume_store',
       needsCharge: false,
@@ -519,14 +580,14 @@ export async function quoteResumeStore(storeId: string): Promise<BillingQuote> {
     };
   }
   const due = await previewIncrease(org, org.paid_quantity + 1);
-  const next = (org.paid_quantity + 1) * STORE_UNIT_CENTS;
+  const next = (org.paid_quantity + 1) * unitOf(org);
   return {
     intent: 'resume_store',
     needsCharge: true,
     needsCheckout: false,
     message: resumeStoreMessage({
       storeName: store.name,
-      currentMonthlyCents: org.paid_quantity * STORE_UNIT_CENTS,
+      currentMonthlyCents: org.paid_quantity * unitOf(org),
       newMonthlyCents: next,
       dueTodayCents: due,
       periodEnd,
@@ -570,6 +631,86 @@ export async function resumeStore(input: {
     data: { billing_status: 'active', pause_on: null },
   });
   await alignRenewal(store.organization_id);
+  return quote;
+}
+
+export async function quoteArchiveStore(storeId: string): Promise<BillingQuote> {
+  const store = await prisma.store.findUnique({ where: { id: storeId } });
+  if (!store) throw new BillingHttpError(404, 'Store not found');
+  if (store.archived_at) throw new BillingHttpError(400, `${store.name} is already archived.`);
+  if (!store.organization_id) {
+    return {
+      intent: 'archive_store',
+      needsCharge: false,
+      needsCheckout: false,
+      message: archiveStoreMessage({
+        storeName: store.name,
+        currentMonthlyCents: 0,
+        newMonthlyCents: 0,
+        dueTodayCents: 0,
+        periodEnd: null,
+      }),
+      dueTodayCents: 0,
+      currentMonthlyCents: 0,
+      newMonthlyCents: 0,
+      periodEnd: null,
+    };
+  }
+  await settleDuePauses(store.organization_id);
+  const org = await loadOrg(store.organization_id);
+  if (!org?.billing_enabled || org.subscription_status !== 'active') {
+    return {
+      intent: 'archive_store',
+      needsCharge: false,
+      needsCheckout: false,
+      message: archiveStoreMessage({
+        storeName: store.name,
+        currentMonthlyCents: 0,
+        newMonthlyCents: 0,
+        dueTodayCents: 0,
+        periodEnd: null,
+      }),
+      dueTodayCents: 0,
+      currentMonthlyCents: 0,
+      newMonthlyCents: 0,
+      periodEnd: null,
+    };
+  }
+  const fresh = org.stores.find((row) => row.id === storeId);
+  const dropping = fresh?.billing_status === 'active';
+  const nextCount = dropping ? Math.max(0, scheduledRenewal(org) - 1) : scheduledRenewal(org);
+  const current = org.paid_quantity * unitOf(org);
+  const next = nextCount * unitOf(org);
+  return {
+    intent: 'archive_store',
+    needsCharge: false,
+    needsCheckout: false,
+    message: archiveStoreMessage({
+      storeName: store.name,
+      currentMonthlyCents: current,
+      newMonthlyCents: next,
+      dueTodayCents: 0,
+      periodEnd: org.current_period_end,
+    }),
+    ...quoteBase(org, 0, next),
+  };
+}
+
+export async function archiveStore(storeId: string): Promise<BillingQuote> {
+  const quote = await quoteArchiveStore(storeId);
+  const store = await prisma.store.findUnique({ where: { id: storeId } });
+  if (!store) throw new BillingHttpError(404, 'Store not found');
+  if (store.organization_id && store.billing_status === 'active') {
+    const org = await loadOrg(store.organization_id);
+    if (org?.billing_enabled && org.subscription_status === 'active') {
+      await setRenewal(org.id, org.paid_quantity, scheduledRenewal(org) - 1);
+    }
+  }
+  await prisma.store.update({
+    where: { id: storeId },
+    data: { archived_at: new Date() },
+  });
+  if (store.organization_id) await alignRenewal(store.organization_id);
   return quote;
 }
 
@@ -617,8 +758,8 @@ export async function quoteDeleteStore(storeId: string): Promise<BillingQuote> {
   const fresh = org.stores.find((row) => row.id === storeId);
   const dropping = fresh?.billing_status === 'active';
   const nextCount = dropping ? Math.max(0, scheduledRenewal(org) - 1) : scheduledRenewal(org);
-  const current = org.paid_quantity * STORE_UNIT_CENTS;
-  const next = nextCount * STORE_UNIT_CENTS;
+  const current = org.paid_quantity * unitOf(org);
+  const next = nextCount * unitOf(org);
   return {
     intent: 'delete_store',
     needsCharge: false,
@@ -638,13 +779,13 @@ export async function billingView(orgId: string) {
   await settleDuePauses(orgId);
   const org = await loadOrg(orgId);
   if (!org) return null;
-  const monthlyCents = org.paid_quantity * STORE_UNIT_CENTS;
-  const nextMonthlyCents = (org.subscription_status === 'active' ? scheduledRenewal(org) : 0) * STORE_UNIT_CENTS;
+  const monthlyCents = org.paid_quantity * unitOf(org);
+  const nextMonthlyCents = (org.subscription_status === 'active' ? scheduledRenewal(org) : 0) * unitOf(org);
   return {
     enabled: org.billing_enabled,
     status: org.subscription_status,
     paidQuantity: org.paid_quantity,
-    storeCount: org.stores.length,
+    storeCount: org.stores.filter((store) => !store.archived_at).length,
     monthlyCents,
     monthlyLabel: money(monthlyCents),
     nextMonthlyCents,
@@ -652,9 +793,11 @@ export async function billingView(orgId: string) {
     currentPeriodEnd: org.current_period_end,
     alert: org.billing_alert,
     needsCheckout: org.billing_enabled && org.subscription_status !== 'active',
-    minimumQuantity: Math.max(1, org.stores.length),
+    minimumQuantity: Math.max(1, org.stores.filter((store) => !store.archived_at).length),
     configured: stripeConfigured(),
-    unitLabel: money(STORE_UNIT_CENTS),
+    unitCents: unitOf(org),
+    unitLabel: money(unitOf(org)),
+    invoices: await listInvoices(org.id),
   };
 }
 
@@ -670,9 +813,9 @@ export async function createCheckout(orgId: string, quantity: number): Promise<s
   if (org.subscription_status === 'active') {
     throw new BillingHttpError(400, 'This organization already has a monthly bill.');
   }
-  const minimum = Math.max(1, org.stores.length);
+  const minimum = Math.max(1, org.stores.filter((store) => !store.archived_at).length);
   if (!Number.isInteger(quantity) || quantity < minimum) {
-    throw new BillingHttpError(400, `Start with at least ${minimum} ${minimum === 1 ? 'store' : 'stores'}. Each one is $65 a month.`);
+    throw new BillingHttpError(400, `Start with at least ${minimum} ${minimum === 1 ? 'store' : 'stores'}. Each one is ${money(unitOf(org))} a month.`);
   }
 
   const stripe = getStripe();
@@ -690,7 +833,7 @@ export async function createCheckout(orgId: string, quantity: number): Promise<s
     mode: 'subscription',
     customer: customerId,
     client_reference_id: org.id,
-    line_items: [{ price: storePriceId(), quantity }],
+    line_items: [{ price: await priceForMonthlyAmount(unitOf(org)), quantity }],
     success_url: `${appUrl()}/org-settings?billing=success&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${appUrl()}/org-settings?billing=cancel`,
     metadata: { organizationId: org.id },

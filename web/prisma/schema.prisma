@@ -45,6 +45,7 @@ model Organization {
   stripe_schedule_id          String?
   stripe_price_id             String?
   subscription_status         String?
+  monthly_price_cents         Int       @default(6500)
   paid_quantity               Int       @default(0)
   renewal_quantity            Int?
   current_period_end          DateTime?
@@ -97,6 +98,7 @@ model Store {
   calendar_feed_token String? @unique
   billing_status  String   @default("active")
   pause_on        DateTime?
+  archived_at     DateTime?
   created_at      DateTime @default(now())
   created_by      String
 

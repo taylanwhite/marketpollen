@@ -159,8 +159,8 @@ export function Reports() {
   const [syncOpen, setSyncOpen] = useState(false);
 
   const reportStores = useMemo(() => {
-    if (currentOrg?.stores?.length) return currentOrg.stores;
-    return permissions.accessibleStores;
+    const list = currentOrg?.stores?.length ? currentOrg.stores : permissions.accessibleStores;
+    return list.filter((store) => !('archivedAt' in store && store.archivedAt));
   }, [currentOrg, permissions.accessibleStores]);
   const canRollup = reportStores.length > 1 && (isAdmin() || isOrgAdminFn());
   const storesParam = searchParams.get('stores');

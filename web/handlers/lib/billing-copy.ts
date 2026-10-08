@@ -3,6 +3,9 @@ export const STORE_UNIT_CENTS = 6500;
 export const STORE_PAUSED_MESSAGE =
   'This store is paused. You can look through what is already here, but nothing can be added or changed until the store is turned back on.';
 
+export const STORE_ARCHIVED_MESSAGE =
+  'This store is archived. You can look through contacts, businesses, and past visits, but nothing can be changed.';
+
 export function money(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
@@ -66,6 +69,20 @@ export function keepOpenMessage(input: QuoteInput & { otherPausesRemain: boolean
   return `${name} stays open. Nothing is charged today, and the monthly total stays ${current}.`;
 }
 
+export function archiveStoreMessage(input: QuoteInput): string {
+  const name = input.storeName;
+  if (!input.periodEnd) {
+    return `Archive ${name}? It will leave the store list. Contacts, businesses, and past visits stay under Archived, and nothing is erased.`;
+  }
+  const from = money(input.currentMonthlyCents);
+  const to = money(input.newMonthlyCents);
+  const date = longDate(input.periodEnd);
+  if (from === to) {
+    return `Archive ${name}? It will leave the store list now. Contacts, businesses, and past visits stay under Archived. You've already paid through ${date}, and the next bill stays ${to}.`;
+  }
+  return `Archive ${name}? It will leave the store list now. Contacts, businesses, and past visits stay under Archived. You've already paid through ${date}, so nothing is refunded. It comes off the next bill, and the monthly total goes from ${from} to ${to}.`;
+}
+
 export function deleteStoreMessage(input: QuoteInput): string {
   const name = input.storeName;
   const from = money(input.currentMonthlyCents);
@@ -81,6 +98,6 @@ export function scheduledPauseBanner(storeName: string, pauseOn: Date, currentMo
   return `${storeName} stays open through ${longDate(pauseOn)}. After that it locks, and it comes off the next bill. The monthly total goes from ${money(currentMonthlyCents)} to ${money(nextMonthlyCents)}.`;
 }
 
-export function pausedBanner(storeName: string): string {
-  return `${storeName} is paused. The last paid month has ended, so this store is locked and it isn't on the bill. You can look through contacts and past visits. Turning it back on adds ${money(STORE_UNIT_CENTS)} a month.`;
+export function pausedBanner(storeName: string, unitCents = STORE_UNIT_CENTS): string {
+  return `${storeName} is paused. The last paid month has ended, so this store is locked and it isn't on the bill. You can look through contacts and past visits. Turning it back on adds ${money(unitCents)} a month.`;
 }

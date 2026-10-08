@@ -16,12 +16,14 @@ type StoreRow = {
   organization_id: string | null;
   billing_status: string;
   pause_on: Date | null;
+  archived_at: Date | null;
   created_at: Date;
   created_by: string;
   organization?: {
     billing_enabled: boolean;
     subscription_status: string | null;
     paid_quantity: number;
+    monthly_price_cents: number;
   } | null;
   statusMessage?: string | null;
   billingActive?: boolean;
@@ -38,6 +40,7 @@ function toStoreJson(r: StoreRow) {
     organizationId: r.organization_id ?? undefined,
     billingStatus: r.billing_status ?? 'active',
     pauseOn: r.pause_on,
+    archivedAt: r.archived_at,
     statusMessage: r.statusMessage ?? null,
     billingActive: r.billingActive ?? false,
     createdAt: r.created_at,
@@ -58,13 +61,14 @@ function withStatusMessages(rows: StoreRow[]): StoreRow[] {
     if (!org?.billing_enabled || org.subscription_status !== 'active' || !row.organization_id) return row;
     const siblings = byOrg.get(row.organization_id) ?? [];
     const active = siblings.filter((store) => store.billing_status === 'active').length;
-    const current = org.paid_quantity * STORE_UNIT_CENTS;
-    const next = active * STORE_UNIT_CENTS;
+    const unit = org.monthly_price_cents > 0 ? org.monthly_price_cents : STORE_UNIT_CENTS;
+    const current = org.paid_quantity * unit;
+    const next = active * unit;
     let statusMessage: string | null = null;
     if (row.billing_status === 'pause_scheduled' && row.pause_on) {
       statusMessage = scheduledPauseBanner(row.name, row.pause_on, current, next);
     } else if (row.billing_status === 'paused') {
-      statusMessage = pausedBanner(row.name);
+      statusMessage = pausedBanner(row.name, unit);
     }
     return {
       ...row,
@@ -80,11 +84,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'GET') {
     const access = await getAccessibleStores(uid);
+    const archivedOnly = req.query?.archived === '1' || req.query?.archived === 'true';
     const rows = await prisma.store.findMany({
-      where: 'all' in access ? undefined : { id: { in: access.ids } },
+      where: {
+        ...('all' in access ? {} : { id: { in: access.ids } }),
+        archived_at: archivedOnly ? { not: null } : null,
+      },
       include: {
         organization: {
-          select: { billing_enabled: true, subscription_status: true, paid_quantity: true },
+          select: { billing_enabled: true, subscription_status: true, paid_quantity: true, monthly_price_cents: true },
         },
       },
       orderBy: { name: 'asc' },

@@ -8,11 +8,12 @@ import {
   createCheckout,
   createPortal,
   quoteAddStore,
-  quoteDeleteStore,
+  quoteArchiveStore,
   quoteKeepOpen,
   quotePauseStore,
   quoteResumeStore,
   setBillingEnabled,
+  setMonthlyPrice,
   syncCheckoutSession,
 } from '../../lib/billing.js';
 
@@ -53,6 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       intent?: string;
       storeId?: string;
       storeName?: string;
+      monthlyPrice?: number;
     };
 
     if (body.action === 'checkout') {
@@ -79,6 +81,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(billing);
     }
 
+    if (body.action === 'set_price') {
+      if (!(await isGlobalAdmin(uid))) return res.status(403).json({ error: 'Global admin required' });
+      const cents = Math.round(Number(body.monthlyPrice) * 100);
+      await setMonthlyPrice(orgId, cents);
+      const billing = await billingView(orgId);
+      return res.status(200).json(billing);
+    }
+
     if (body.action === 'preview') {
       if (body.intent === 'add_store') {
         const quote = await quoteAddStore(orgId, body.storeName || 'this store');
@@ -91,7 +101,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (body.intent === 'pause_store') return res.status(200).json({ quote: await quotePauseStore(store.id) });
       if (body.intent === 'keep_open') return res.status(200).json({ quote: await quoteKeepOpen(store.id) });
       if (body.intent === 'resume_store') return res.status(200).json({ quote: await quoteResumeStore(store.id) });
-      if (body.intent === 'delete_store') return res.status(200).json({ quote: await quoteDeleteStore(store.id) });
+      if (body.intent === 'archive_store') return res.status(200).json({ quote: await quoteArchiveStore(store.id) });
       return res.status(400).json({ error: 'Unknown preview' });
     }
 

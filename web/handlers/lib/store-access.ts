@@ -1,6 +1,6 @@
 import { prisma } from './db.js';
 import { isOrgAdmin } from './org-access.js';
-import { STORE_PAUSED_MESSAGE } from './billing-copy.js';
+import { STORE_ARCHIVED_MESSAGE, STORE_PAUSED_MESSAGE } from './billing-copy.js';
 
 type JsonResponse = { status: (code: number) => { json: (body: unknown) => unknown } };
 
@@ -11,9 +11,13 @@ type JsonResponse = { status: (code: number) => { json: (body: unknown) => unkno
 export async function rejectIfStoreLocked(res: JsonResponse, storeId: string): Promise<boolean> {
   const store = await prisma.store.findUnique({
     where: { id: storeId },
-    select: { billing_status: true, pause_on: true },
+    select: { billing_status: true, pause_on: true, archived_at: true },
   });
   if (!store) return false;
+  if (store.archived_at) {
+    res.status(403).json({ error: STORE_ARCHIVED_MESSAGE });
+    return true;
+  }
   const due = store.billing_status === 'pause_scheduled' && !!store.pause_on && store.pause_on.getTime() <= Date.now();
   if (due) {
     await prisma.store.update({ where: { id: storeId }, data: { billing_status: 'paused' } });

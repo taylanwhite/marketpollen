@@ -9,7 +9,7 @@ import {
 } from '@mui/material';
 
 export interface BillingQuote {
-  intent: 'add_store' | 'resume_store' | 'pause_store' | 'keep_open' | 'delete_store';
+  intent: 'add_store' | 'resume_store' | 'pause_store' | 'keep_open' | 'delete_store' | 'archive_store';
   needsCharge: boolean;
   needsCheckout: boolean;
   message: string;
@@ -22,10 +22,12 @@ const TITLES: Record<BillingQuote['intent'], string> = {
   pause_store: 'Pause this store?',
   keep_open: 'Keep this store open?',
   delete_store: 'Remove this store?',
+  archive_store: 'Archive this store?',
 };
 
 function confirmLabel(quote: BillingQuote): string {
   if (quote.intent === 'delete_store') return 'Remove store';
+  if (quote.intent === 'archive_store') return 'Archive store';
   if (quote.intent === 'pause_store') return 'Pause store';
   if (quote.intent === 'keep_open') return 'Keep it open';
   if (quote.needsCharge && quote.intent === 'resume_store') return 'Turn it back on';

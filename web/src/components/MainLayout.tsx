@@ -7,7 +7,7 @@ import { UserMenu } from './UserMenu';
 import { QuickAddDialog } from './QuickAddDialog';
 import { OfflineIndicator } from './OfflineIndicator';
 import { OfflineBanner } from './OnlineOnlyNotice';
-import { isStoreLocked } from '../utils/storeLock';
+import { isStoreArchived, isStoreLocked } from '../utils/storeLock';
 import { Store } from '../types';
 import { api } from '../api/client';
 import { prefetchOfflineAssets } from '../utils/prefetchOfflineAssets';
@@ -71,8 +71,11 @@ export function MainLayout({ children }: MainLayoutProps) {
     try {
       const storeList = await api.get<Store[]>('/stores');
       setHasMultipleStores(storeList.length > 1);
-      const current = storeList.find((store) => store.id === permissions.currentStoreId);
-      setCurrentStore(current || null);
+      let current = storeList.find((store) => store.id === permissions.currentStoreId) || null;
+      if (!current && permissions.currentStoreId) {
+        current = await api.get<Store>(`/stores/${permissions.currentStoreId}`).catch(() => null);
+      }
+      setCurrentStore(current);
     } catch (error) {
       console.error('Error loading store:', error);
     }
@@ -239,7 +242,16 @@ export function MainLayout({ children }: MainLayoutProps) {
         }}
       >
         <Toolbar />
-        {currentStore?.statusMessage && (
+        {isStoreArchived(currentStore) && (
+          <Alert severity="info" sx={{ mb: 2 }} action={
+            <Button color="inherit" size="small" onClick={() => navigate('/stores')}>
+              Archived stores
+            </Button>
+          }>
+            {currentStore?.name} is archived. You can look through contacts, businesses, and past visits. Nothing can be added or changed.
+          </Alert>
+        )}
+        {currentStore?.statusMessage && !isStoreArchived(currentStore) && (
           <Alert
             severity={isStoreLocked(currentStore) ? 'warning' : 'info'}
             sx={{ mb: 2 }}
@@ -264,7 +276,7 @@ export function MainLayout({ children }: MainLayoutProps) {
           on currentStoreId being set. */}
       {permissions.currentStoreId && location.pathname !== '/select-store' && (
         <>
-          <MobileBottomNav onQuickAdd={() => { if (!isStoreLocked(currentStore)) setQuickAddOpen(true); }} />
+          <MobileBottomNav onQuickAdd={() => { if (!isStoreLocked(currentStore) && !isStoreArchived(currentStore)) setQuickAddOpen(true); }} />
           <QuickAddDialog open={quickAddOpen} onClose={() => setQuickAddOpen(false)} />
         </>
       )}

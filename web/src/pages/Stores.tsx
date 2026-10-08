@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Store } from '../types';
 import { AddressPicker } from '../components/AddressPicker';
 import { BillingQuote, BillingQuoteDialog } from '../components/BillingQuoteDialog';
+import { markStoreArchived } from '../utils/storeLock';
 import {
   Box,
   Typography,
@@ -25,6 +26,8 @@ import {
   DialogActions,
   MenuItem,
   Chip,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -34,15 +37,18 @@ import {
   Edit as EditIcon,
   Save as SaveIcon,
   Pause as PauseIcon,
-  Delete as DeleteIcon,
   PlayArrow as PlayIcon,
+  Archive as ArchiveIcon,
 } from '@mui/icons-material';
 
 export function Stores() {
-  const { isAdmin, isOrgAdminFn, currentOrg, permissions } = usePermissions();
+  const { isAdmin, isOrgAdminFn, currentOrg, permissions, setCurrentStore } = usePermissions();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   
   const [stores, setStores] = useState<Store[]>([]);
+  const [archivedStores, setArchivedStores] = useState<Store[]>([]);
+  const [storeTab, setStoreTab] = useState<'open' | 'archived'>(searchParams.get('tab') === 'archived' ? 'archived' : 'open');
   const [filteredStores, setFilteredStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -73,7 +79,7 @@ export function Stores() {
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<
     | { type: 'create' }
-    | { type: 'pause' | 'keep_open' | 'resume' | 'delete'; store: Store }
+    | { type: 'pause' | 'keep_open' | 'resume' | 'archive'; store: Store }
     | null
   >(null);
 
@@ -87,11 +93,14 @@ export function Stores() {
     loadStores();
   }, [canManage, navigate]);
 
+  const listedStores = storeTab === 'archived' ? archivedStores : stores;
+
   useEffect(() => {
+    const source = listedStores;
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
       setFilteredStores(
-        stores.filter(store =>
+        source.filter(store =>
           store.name.toLowerCase().includes(term) ||
           (store.address?.toLowerCase() || '').includes(term) ||
           (store.city?.toLowerCase() || '').includes(term) ||
@@ -100,19 +109,22 @@ export function Stores() {
         )
       );
     } else {
-      setFilteredStores(stores);
+      setFilteredStores(source);
     }
-  }, [searchTerm, stores]);
+  }, [searchTerm, listedStores]);
 
   const loadStores = async () => {
     try {
-      const list = await api.get<Store[]>(`/stores`);
-      const storeList = list.map((s) => ({
+      const [list, archivedList] = await Promise.all([
+        api.get<Store[]>(`/stores`),
+        api.get<Store[]>(`/stores?archived=1`),
+      ]);
+      const normalize = (rows: Store[]) => rows.map((s) => ({
         ...s,
         createdAt: s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt),
-      }));
-      storeList.sort((a, b) => a.name.localeCompare(b.name));
-      setStores(storeList);
+      })).sort((a, b) => a.name.localeCompare(b.name));
+      setStores(normalize(list));
+      setArchivedStores(normalize(archivedList));
     } catch (err: any) {
       setError(err.message || 'Failed to load stores');
     } finally {
@@ -171,20 +183,25 @@ export function Stores() {
     }
   };
 
-  const openStoreQuote = async (store: Store, intent: 'pause_store' | 'keep_open' | 'resume_store' | 'delete_store') => {
-    if (!store.organizationId) {
-      if (intent === 'delete_store') {
-        setPendingAction({ type: 'delete', store });
-        setQuote({
-          intent: 'delete_store',
-          needsCharge: false,
-          needsCheckout: false,
-          message: `Remove ${store.name}? The store and everything in it are deleted now. This cannot be undone.`,
-          dueTodayCents: 0,
-        });
-      }
+  const openArchivedStore = (store: Store) => {
+    markStoreArchived(store.id);
+    setCurrentStore(store.id);
+    navigate('/dashboard');
+  };
+
+  const openStoreQuote = async (store: Store, intent: 'pause_store' | 'keep_open' | 'resume_store' | 'archive_store') => {
+    if (!store.organizationId && intent === 'archive_store') {
+      setPendingAction({ type: 'archive', store });
+      setQuote({
+        intent: 'archive_store',
+        needsCharge: false,
+        needsCheckout: false,
+        message: `Archive ${store.name}? It will leave the store list. Contacts, businesses, and past visits stay under Archived, and nothing is erased.`,
+        dueTodayCents: 0,
+      });
       return;
     }
+    if (!store.organizationId) return;
     setError('');
     try {
       const preview = await api.post<{ quote: BillingQuote }>(`/organizations/${store.organizationId}/billing`, {
@@ -193,7 +210,7 @@ export function Stores() {
         storeId: store.id,
         storeName: store.name,
       });
-      const type = intent === 'pause_store' ? 'pause' : intent === 'keep_open' ? 'keep_open' : intent === 'resume_store' ? 'resume' : 'delete';
+      const type = intent === 'pause_store' ? 'pause' : intent === 'keep_open' ? 'keep_open' : intent === 'resume_store' ? 'resume' : 'archive';
       setPendingAction({ type, store });
       setQuote(preview.quote);
     } catch (err: any) {
@@ -208,9 +225,11 @@ export function Stores() {
     try {
       if (pendingAction.type === 'create') {
         await createStore(quote.needsCharge, quote.dueTodayCents);
-      } else if (pendingAction.type === 'delete') {
-        await api.delete(`/stores/${pendingAction.store.id}?confirm=1`);
-        setSuccess(`${pendingAction.store.name} was removed.`);
+      } else if (pendingAction.type === 'archive') {
+        await api.post(`/stores/${pendingAction.store.id}`, { action: 'archive' });
+        markStoreArchived(pendingAction.store.id);
+        setSuccess(`${pendingAction.store.name} was archived. Its contacts and businesses are still under Archived.`);
+        setStoreTab('archived');
         await loadStores();
       } else {
         await api.post(`/stores/${pendingAction.store.id}/billing`, {
@@ -311,20 +330,34 @@ export function Stores() {
             ),
           }}
         />
-        <Button
-          variant="contained"
-          startIcon={showForm ? <CloseIcon /> : <AddIcon />}
-          onClick={() => setShowForm(!showForm)}
-        >
-          {showForm ? 'Cancel' : 'New Store'}
-        </Button>
+        {storeTab === 'open' && (
+          <Button
+            variant="contained"
+            startIcon={showForm ? <CloseIcon /> : <AddIcon />}
+            onClick={() => setShowForm(!showForm)}
+          >
+            {showForm ? 'Cancel' : 'New Store'}
+          </Button>
+        )}
       </Paper>
+
+      <Tabs
+        value={storeTab}
+        onChange={(_event, value: 'open' | 'archived') => {
+          setStoreTab(value);
+          setShowForm(false);
+        }}
+        sx={{ mb: 2 }}
+      >
+        <Tab value="open" label={`Stores (${stores.length})`} />
+        <Tab value="archived" label={`Archived (${archivedStores.length})`} />
+      </Tabs>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
 
       {/* Create Form */}
-      <Collapse in={showForm}>
+      <Collapse in={showForm && storeTab === 'open'}>
         <Paper sx={{ p: 3, mb: 3 }}>
           <Typography variant="h6" sx={{ mb: 1, fontWeight: 600 }}>
             Create New Store
@@ -429,14 +462,21 @@ export function Stores() {
       {filteredStores.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <Typography color="text.secondary">
-            {searchTerm ? 'No stores match your search' : 'No stores yet. Create your first store!'}
+            {searchTerm
+              ? 'No stores match your search'
+              : storeTab === 'archived'
+                ? 'No archived stores yet. Archiving keeps the contacts and businesses, and takes the store off the main list.'
+                : 'No stores yet. Create your first store!'}
           </Typography>
         </Paper>
       ) : (
         <Grid container spacing={2}>
           {filteredStores.map((store) => (
             <Grid size={{ xs: 12, sm: 6, md: 4 }} key={store.id} sx={{ display: 'flex' }}>
-              <Card sx={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+              <Card
+                sx={{ display: 'flex', flexDirection: 'column', width: '100%', cursor: storeTab === 'archived' ? 'pointer' : 'default' }}
+                onClick={storeTab === 'archived' ? () => openArchivedStore(store) : undefined}
+              >
                 <CardContent sx={{ flex: 1 }}>
                   <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
                     {store.name}
@@ -466,32 +506,40 @@ export function Stores() {
                     Created: {store.createdAt.toLocaleDateString()}
                   </Typography>
                 </CardContent>
-                <CardActions sx={{ justifyContent: 'flex-end', pt: 0, flexWrap: 'wrap' }}>
-                  {store.billingActive && store.billingStatus !== 'paused' && store.billingStatus !== 'pause_scheduled' && (
-                    <Button size="small" startIcon={<PauseIcon />} onClick={() => openStoreQuote(store, 'pause_store')}>
-                      Pause
+                <CardActions sx={{ justifyContent: 'flex-end', pt: 0, flexWrap: 'wrap' }} onClick={(event) => event.stopPropagation()}>
+                  {storeTab === 'archived' ? (
+                    <Button size="small" onClick={() => openArchivedStore(store)}>
+                      View contacts and businesses
                     </Button>
+                  ) : (
+                    <>
+                      {store.billingActive && store.billingStatus !== 'paused' && store.billingStatus !== 'pause_scheduled' && (
+                        <Button size="small" startIcon={<PauseIcon />} onClick={() => openStoreQuote(store, 'pause_store')}>
+                          Pause
+                        </Button>
+                      )}
+                      {store.billingStatus === 'pause_scheduled' && (
+                        <Button size="small" startIcon={<PlayIcon />} onClick={() => openStoreQuote(store, 'keep_open')}>
+                          Keep open
+                        </Button>
+                      )}
+                      {store.billingStatus === 'paused' && (
+                        <Button size="small" startIcon={<PlayIcon />} onClick={() => openStoreQuote(store, 'resume_store')}>
+                          Turn back on
+                        </Button>
+                      )}
+                      <Button size="small" startIcon={<ArchiveIcon />} onClick={() => openStoreQuote(store, 'archive_store')}>
+                        Archive
+                      </Button>
+                      <Button
+                        size="small"
+                        startIcon={<EditIcon />}
+                        onClick={() => openEditModal(store)}
+                      >
+                        Edit
+                      </Button>
+                    </>
                   )}
-                  {store.billingStatus === 'pause_scheduled' && (
-                    <Button size="small" startIcon={<PlayIcon />} onClick={() => openStoreQuote(store, 'keep_open')}>
-                      Keep open
-                    </Button>
-                  )}
-                  {store.billingStatus === 'paused' && (
-                    <Button size="small" startIcon={<PlayIcon />} onClick={() => openStoreQuote(store, 'resume_store')}>
-                      Turn back on
-                    </Button>
-                  )}
-                  <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => openStoreQuote(store, 'delete_store')}>
-                    Remove
-                  </Button>
-                  <Button
-                    size="small"
-                    startIcon={<EditIcon />}
-                    onClick={() => openEditModal(store)}
-                  >
-                    Edit
-                  </Button>
                 </CardActions>
               </Card>
             </Grid>
