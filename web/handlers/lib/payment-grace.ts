@@ -94,6 +94,14 @@ function brandName(brand: string): string {
   return names[brand] || brand.replace(/^\w/, (letter) => letter.toUpperCase());
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export async function sendStoreInvoiceEmail(orgId: string, quote: {
   storeName?: string;
   orgName?: string;
@@ -121,33 +129,122 @@ export async function sendStoreInvoiceEmail(orgId: string, quote: {
   const orgName = quote.orgName || org.name;
   const unit = money(quote.unitCents ?? 0);
   const due = money(quote.dueTodayCents);
-  const lines = [
-    `Invoice`,
+  const issued = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const subscriptionChanged = (quote.currentMonthlyCents ?? 0) > 0 && quote.newMonthlyCents !== quote.currentMonthlyCents;
+  const cardLine = quote.card
+    ? `${brandName(quote.card.brand)} ending in ${quote.card.last4}, expires ${quote.card.expMonth}/${quote.card.expYear}`
+    : 'No card on file';
+  const row = (label: string, value: string, strong = false) => `
+    <tr>
+      <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">${label}</td>
+      <td style="padding: 8px 0; font-size: 14px; color: #1a1a1a; text-align: right; font-weight: ${strong ? 700 : 600};">${value}</td>
+    </tr>`;
+  const text = [
+    `MarketPollen invoice`,
     orgName,
-    new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    issued,
     ``,
-    storeName,
-    `Store subscription          ${unit} / month`,
-  ];
-  if ((quote.currentMonthlyCents ?? 0) > 0 && quote.newMonthlyCents !== quote.currentMonthlyCents) {
-    lines.push(`Current subscription       ${money(quote.currentMonthlyCents)} / month`);
-    lines.push(`Subscription after today   ${money(quote.newMonthlyCents)} / month`);
-  }
-  lines.push(``, `Due today                  ${due}`);
-  if (quote.dueTodayCents === 0) lines.push(`Nothing was charged.`);
-  if (quote.card) {
-    lines.push(
-      ``,
-      `Charged to`,
-      `${brandName(quote.card.brand)} ending in ${quote.card.last4}, expires ${quote.card.expMonth}/${quote.card.expYear}`,
-    );
-  }
+    `${storeName}`,
+    `Store subscription: ${unit} / month`,
+    subscriptionChanged ? `Current subscription: ${money(quote.currentMonthlyCents)} / month` : '',
+    subscriptionChanged ? `Subscription after today: ${money(quote.newMonthlyCents)} / month` : '',
+    ``,
+    `Due today: ${due}`,
+    quote.dueTodayCents === 0 ? 'Nothing was charged.' : '',
+    ``,
+    `Charged to: ${cardLine}`,
+  ].filter((line) => line !== undefined).join('\n');
+  const html = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body style="margin: 0; padding: 0; background-color: #f4f5f7;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f5f7; padding: 40px 16px;">
+          <tr>
+            <td align="center">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 520px; background-color: #ffffff; border-radius: 12px; border: 1px solid #e6e8eb; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <tr>
+                  <td style="padding: 28px 36px 0 36px;">
+                    <span style="font-size: 20px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.2px;">
+                      Market<span style="color: #d4a017;">Pollen</span>
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 18px 36px 0 36px;">
+                    <p style="margin: 0 0 4px 0; font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; color: #9096a0; font-weight: 700;">Invoice</p>
+                    <h1 style="margin: 0; font-size: 22px; line-height: 1.3; font-weight: 700; color: #1a1a1a;">${escapeHtml(orgName)}</h1>
+                    <p style="margin: 6px 0 0 0; font-size: 13px; color: #6b7280;">${issued}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 20px 36px 0 36px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border: 1px solid #e6e8eb; border-radius: 8px;">
+                      <tr>
+                        <td style="padding: 14px 16px; background-color: #fafafa; border-bottom: 1px solid #e6e8eb; font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; color: #6b7280; font-weight: 700;">Description</td>
+                        <td style="padding: 14px 16px; background-color: #fafafa; border-bottom: 1px solid #e6e8eb; font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; color: #6b7280; font-weight: 700; text-align: right;">Amount</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 16px; font-size: 15px; color: #1a1a1a; font-weight: 600;">
+                          ${escapeHtml(storeName)}
+                          <div style="font-size: 13px; font-weight: 400; color: #6b7280; margin-top: 2px;">Store subscription</div>
+                        </td>
+                        <td style="padding: 16px; font-size: 15px; color: #1a1a1a; font-weight: 600; text-align: right; white-space: nowrap;">${unit} / month</td>
+                      </tr>
+                      ${subscriptionChanged ? `
+                      <tr>
+                        <td colspan="2" style="padding: 0 16px 12px 16px;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                            ${row('Current subscription', `${money(quote.currentMonthlyCents)} / month`)}
+                            ${row('Subscription after today', `${money(quote.newMonthlyCents)} / month`, true)}
+                          </table>
+                        </td>
+                      </tr>` : ''}
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 16px 36px 0 36px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #fafafa; border: 1px solid #e6e8eb; border-radius: 8px;">
+                      <tr>
+                        <td style="padding: 16px 18px; font-size: 15px; font-weight: 700; color: #1a1a1a;">Due today</td>
+                        <td style="padding: 16px 18px; font-size: 22px; font-weight: 700; color: #1a1a1a; text-align: right;">${due}</td>
+                      </tr>
+                    </table>
+                    ${quote.dueTodayCents === 0 ? `<p style="margin: 10px 0 0 0; font-size: 13px; color: #6b7280;">Nothing was charged.</p>` : ''}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 18px 36px 0 36px;">
+                    <p style="margin: 0 0 4px 0; font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; color: #9096a0; font-weight: 700;">Charged to</p>
+                    <p style="margin: 0; font-size: 15px; font-weight: 600; color: #1a1a1a;">${escapeHtml(cardLine)}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 24px 36px 28px 36px;">
+                    <div style="border-top: 1px solid #eceef0; padding-top: 16px;">
+                      <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #9096a0;">
+                        This invoice was sent by MarketPollen for ${escapeHtml(orgName)}.
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>`;
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
     from: fromEmail(),
     to: emails,
     subject: `Invoice for ${storeName}`,
-    text: `${lines.join('\n')}\n`,
+    html,
+    text,
   });
   if (error) console.error('Store invoice email failed', error);
 }

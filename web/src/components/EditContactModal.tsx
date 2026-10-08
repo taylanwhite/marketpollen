@@ -118,7 +118,9 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   const [success, setSuccess] = useState('');
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
-  const [selectedBusinessId, setSelectedBusinessId] = useState<string>(contact.businessId);
+  const [selectedBusinessIds, setSelectedBusinessIds] = useState<string[]>(
+    contact.businessIds?.length ? contact.businessIds : [contact.businessId],
+  );
   const [deleting, setDeleting] = useState(false);
   const [moving, setMoving] = useState(false);
   const [showNewBusiness, setShowNewBusiness] = useState(false);
@@ -344,7 +346,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
       const businessMap = new Map<string, string>();
       list.forEach((b) => businessMap.set(b.id, b.name));
       setBusinesses(businessMap);
-      setSelectedBusinessId(created.id);
+      setSelectedBusinessIds((current) => current.includes(created.id) ? current : [...current, created.id]);
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
       setShowNewBusiness(false);
@@ -358,36 +360,20 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     }
   };
 
-  const handleMoveContact = async () => {
-    if (!selectedBusinessId || selectedBusinessId === contact.businessId) {
-      setError('Please select a different business');
+  const handleSaveBusinesses = async () => {
+    if (selectedBusinessIds.length === 0) {
+      setError('Pick at least one business');
       return;
     }
-
-    const contactName = getContactName();
-    const newBusinessName = businesses.get(selectedBusinessId);
-    const confirmMessage = `Move "${contactName}" to "${newBusinessName}"?\n\nThis will update the contact's business association.`;
-    
-    if (!window.confirm(confirmMessage)) {
-      return;
-    }
-
     setMoving(true);
     setError('');
     setSuccess('');
-
     try {
-      await api.patch(`/contacts/${contact.id}`, {
-        businessId: selectedBusinessId
-      });
-      
-      setSuccess('Contact moved successfully!');
-      setTimeout(() => {
-        onSuccess();
-      }, 1000);
+      await api.patch(`/contacts/${contact.id}`, { businessIds: selectedBusinessIds });
+      setSuccess('Businesses saved.');
+      setTimeout(() => onSuccess(), 600);
     } catch (err: any) {
-      console.error('Error moving contact:', err);
-      setError(`Failed to move contact: ${err.message}`);
+      setError(err.message || 'Could not save businesses');
     } finally {
       setMoving(false);
     }
@@ -1049,34 +1035,38 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                   <BusinessIcon color="primary" />
                   <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                    Move to Another Business
+                    Businesses
                   </Typography>
                 </Box>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Transfer this contact to a different business within the same store.
+                  This contact can belong to more than one business.
                 </Typography>
                 {!showNewBusiness ? (
-                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
                     <TextField
                       select
-                      label="Select Business"
-                      value={selectedBusinessId}
+                      label="Businesses"
+                      value={selectedBusinessIds}
                       onChange={(e) => {
-                        if (e.target.value === '__new__') {
+                        const value = e.target.value;
+                        const ids = typeof value === 'string' ? value.split(',') : value;
+                        if (ids.includes('__new__')) {
                           setShowNewBusiness(true);
+                          setSelectedBusinessIds(ids.filter((id) => id !== '__new__'));
                         } else {
-                          setSelectedBusinessId(e.target.value);
+                          setSelectedBusinessIds(ids);
                         }
                       }}
                       fullWidth
                       sx={{ flex: 1 }}
                       disabled={moving || creatingBusiness}
+                      SelectProps={{
+                        multiple: true,
+                        renderValue: (selected) => (selected as string[]).map((id) => businesses.get(id) || id).join(', '),
+                      }}
                     >
                       {Array.from(businesses.entries()).map(([id, name]) => (
-                        <MenuItem key={id} value={id}>
-                          {name}
-                          {id === contact.businessId && ' (Current)'}
-                        </MenuItem>
+                        <MenuItem key={id} value={id}>{name}</MenuItem>
                       ))}
                       <MenuItem value="__new__" sx={{ fontStyle: 'italic', color: 'primary.main' }}>
                         + Create New Business
@@ -1085,10 +1075,10 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                     <Button
                       variant="outlined"
                       startIcon={<BusinessIcon />}
-                      onClick={handleMoveContact}
-                      disabled={moving || selectedBusinessId === contact.businessId || creatingBusiness}
+                      onClick={handleSaveBusinesses}
+                      disabled={moving || selectedBusinessIds.length === 0 || creatingBusiness}
                     >
-                      {moving ? <CircularProgress size={20} /> : 'Move Contact'}
+                      {moving ? <CircularProgress size={20} /> : 'Save'}
                     </Button>
                   </Box>
                 ) : (

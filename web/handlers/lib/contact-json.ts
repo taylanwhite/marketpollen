@@ -7,6 +7,7 @@ export function personName(user?: { display_name?: string | null; email?: string
 
 export const contactInclude = {
   creator: { select: { display_name: true, email: true } },
+  business_links: { select: { business_id: true } },
   reachouts: {
     orderBy: { date: 'desc' as const },
     include: { creator: { select: { display_name: true, email: true } } },
@@ -61,6 +62,10 @@ export function contactToJson(c: any) {
   return {
     id: c.id,
     businessId: c.business_id,
+    businessIds: [...new Set([
+      c.business_id,
+      ...((c.business_links || []) as Array<{ business_id: string }>).map((link) => link.business_id),
+    ].filter(Boolean))],
     storeId: c.store_id,
     contactId: c.contact_id,
     firstName: c.first_name ?? null,

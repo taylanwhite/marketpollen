@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../api/client';
@@ -28,7 +28,7 @@ import { useTheme } from '@mui/material/styles';
 import { useMediaQuery } from '@mui/material';
 import { extractContactInfo, generateFollowUpSuggestion } from '../utils/openai';
 import { useVoiceInput } from '../hooks/useVoiceInput';
-import { Contact, FollowUpSuggestion, Reachout, DonationData, SLUG_TO_FIELD } from '../types';
+import { Business, Contact, FollowUpSuggestion, Reachout, DonationData, SLUG_TO_FIELD } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
 import { useCampaign } from '../contexts/CampaignContext';
 import { DonationProductFields } from '../components/DonationProductFields';
@@ -60,6 +60,8 @@ import {
   Divider,
   Snackbar,
   Tooltip,
+  Tabs,
+  Tab,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -82,6 +84,21 @@ import {
   Check as CheckIcon,
 } from '@mui/icons-material';
 
+function contactBusinessIds(contact: Contact): string[] {
+  const ids = contact.businessIds?.length ? contact.businessIds : [contact.businessId];
+  return [...new Set(ids.filter(Boolean))];
+}
+
+const NEW_CONTACT_MS = 2 * 24 * 60 * 60 * 1000;
+
+function contactStatusLabel(contact: Contact): string | null {
+  const status = contact.status || 'new';
+  if (status !== 'new') return status;
+  const created = contact.createdAt instanceof Date ? contact.createdAt : new Date(contact.createdAt);
+  if (Number.isNaN(created.getTime())) return null;
+  return Date.now() - created.getTime() < NEW_CONTACT_MS ? 'new' : null;
+}
+
 export function Dashboard() {
   const { userId } = useAuth();
   const { permissions, canEdit, loading: permissionsLoading } = usePermissions();
@@ -98,6 +115,8 @@ export function Dashboard() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
   const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
+  const [businessRecords, setBusinessRecords] = useState<Business[]>([]);
+  const [pageTab, setPageTab] = useState<'contacts' | 'businesses'>(searchParams.get('tab') === 'businesses' ? 'businesses' : 'contacts');
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(openNewContact && !!businessFilter);
   const [importOpen, setImportOpen] = useState(false);
@@ -165,7 +184,7 @@ export function Dashboard() {
     let filtered = contacts;
     
     if (businessFilter) {
-      filtered = filtered.filter(c => c.businessId === businessFilter);
+      filtered = filtered.filter(c => contactBusinessIds(c).includes(businessFilter));
     }
 
     if (showNoDonationsOnly) {
@@ -176,19 +195,26 @@ export function Dashboard() {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(c => {
         const name = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
-        const businessName = (businesses.get(c.businessId) || '').toLowerCase();
+        const businessText = contactBusinessIds(c).map((id) => {
+          const business = businessRecords.find((item) => item.id === id);
+          return business
+            ? `${business.name} ${business.address || ''} ${business.city || ''} ${business.state || ''} ${business.zipCode || ''}`
+            : (businesses.get(id) || '');
+        }).join(' ').toLowerCase();
+        const notes = (c.reachouts || []).map((reachout) => `${reachout.note || ''} ${reachout.rawNotes || ''}`).join(' ').toLowerCase();
         return (
           name.includes(term) ||
           (c.email?.toLowerCase() || '').includes(term) ||
           (c.phone?.toLowerCase() || '').includes(term) ||
-          businessName.includes(term) ||
+          businessText.includes(term) ||
+          notes.includes(term) ||
           (c.personalDetails?.toLowerCase() || '').includes(term)
         );
       });
     }
     
     setFilteredContacts(filtered);
-  }, [businessFilter, contacts, searchTerm, businesses, showNoDonationsOnly]);
+  }, [businessFilter, contacts, searchTerm, businesses, businessRecords, showNoDonationsOnly]);
 
   useEffect(() => {
     if (!contactFilter || contacts.length === 0) return;
@@ -239,14 +265,16 @@ export function Dashboard() {
       if (!permissions.currentStoreId) {
         setContacts([]);
         setBusinesses(new Map());
+        setBusinessRecords([]);
         setLoading(false);
         return;
       }
 
-      const businessList = await api.get<{ id: string; name: string }[]>(`/businesses?storeId=${permissions.currentStoreId}`);
+      const businessList = await api.get<Business[]>(`/businesses?storeId=${permissions.currentStoreId}`);
       const businessMap = new Map<string, string>();
       businessList.forEach((b) => businessMap.set(b.id, b.name));
       setBusinesses(businessMap);
+      setBusinessRecords(businessList);
 
       const contactsData = await api.get<Contact[]>(`/contacts?storeId=${permissions.currentStoreId}`);
       contactsData.forEach((c) => {
@@ -271,10 +299,28 @@ export function Dashboard() {
       // On error, don't show any data to prevent leaking data
       setContacts([]);
       setBusinesses(new Map());
+      setBusinessRecords([]);
     } finally {
       setLoading(false);
     }
   };
+
+  const filteredBusinesses = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    return businessRecords
+      .filter((business) => {
+        if (!term) return true;
+        const people = contacts
+          .filter((contact) => contactBusinessIds(contact).includes(business.id))
+          .flatMap((contact) => [contact.firstName, contact.lastName, contact.email, contact.phone]);
+        const haystack = [business.name, business.address, business.city, business.state, business.zipCode, ...people]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(term);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [businessRecords, contacts, searchTerm]);
 
   const handleContactClick = (contact: Contact) => {
     if (isMobile) {
@@ -607,11 +653,20 @@ export function Dashboard() {
         refreshing={pullState.refreshing}
         willTrigger={pullState.willTrigger}
       />
+      <Tabs
+        value={pageTab}
+        onChange={(_event, value: 'contacts' | 'businesses') => setPageTab(value)}
+        sx={{ mb: 2 }}
+      >
+        <Tab value="contacts" label={`Contacts (${filteredContacts.length})`} />
+        <Tab value="businesses" label={`Businesses (${filteredBusinesses.length})`} />
+      </Tabs>
+
       {/* Header */}
       <Paper sx={{ p: 2, mb: 3 }}>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
           <TextField
-            placeholder="Search contacts..."
+            placeholder={pageTab === 'contacts' ? 'Search name, email, phone, business, or notes' : 'Search name, address, city, or contact'}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             size="small"
@@ -625,6 +680,25 @@ export function Dashboard() {
             }}
           />
           
+          {pageTab === 'contacts' && (
+            <TextField
+              select
+              size="small"
+              label="Business"
+              value={businessFilter || ''}
+              onChange={(event) => {
+                const id = event.target.value;
+                navigate(id ? `/dashboard?business=${id}` : '/dashboard');
+              }}
+              sx={{ minWidth: 200 }}
+            >
+              <MenuItem value="">All businesses</MenuItem>
+              {businessRecords.map((business) => (
+                <MenuItem key={business.id} value={business.id}>{business.name}</MenuItem>
+              ))}
+            </TextField>
+          )}
+
           {businessFilter && businesses.get(businessFilter) && (
             <Chip
               label={`Viewing: ${businesses.get(businessFilter)}`}
@@ -634,17 +708,19 @@ export function Dashboard() {
             />
           )}
 
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={showNoDonationsOnly}
-                onChange={(e) => setShowNoDonationsOnly(e.target.checked)}
-                size="small"
-              />
-            }
-            label="No donations"
-            sx={{ mr: 'auto' }}
-          />
+          {pageTab === 'contacts' && (
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={showNoDonationsOnly}
+                  onChange={(e) => setShowNoDonationsOnly(e.target.checked)}
+                  size="small"
+                />
+              }
+              label="No donations"
+              sx={{ mr: 'auto' }}
+            />
+          )}
           
           {canEdit() && (
             <>
@@ -951,13 +1027,46 @@ export function Dashboard() {
 
       {/* Content */}
       <Grid container spacing={3}>
-        {/* Contacts List */}
         <Grid size={{ xs: 12 }}>
-          <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
-            Contacts ({filteredContacts.length})
-          </Typography>
-          
-          {filteredContacts.length === 0 ? (
+          {pageTab === 'businesses' ? (
+            filteredBusinesses.length === 0 ? (
+              <Paper sx={{ p: 4, textAlign: 'center' }}>
+                <Typography color="text.secondary">
+                  {searchTerm ? 'No businesses match your search' : 'No businesses yet. Add one when you add a contact.'}
+                </Typography>
+              </Paper>
+            ) : (
+              <Grid container spacing={2}>
+                {filteredBusinesses.map((business) => {
+                  const people = contacts.filter((contact) => contactBusinessIds(contact).includes(business.id));
+                  const place = [business.address, business.city, business.state, business.zipCode].filter(Boolean).join(', ');
+                  return (
+                    <Grid size={{ xs: 12, sm: 6, xl: 4 }} key={business.id}>
+                      <Card
+                        sx={{ cursor: 'pointer', height: '100%', '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 } }}
+                        onClick={() => {
+                          setPageTab('contacts');
+                          navigate(`/dashboard?business=${business.id}`);
+                        }}
+                      >
+                        <CardContent>
+                          <Typography variant="h6" sx={{ fontWeight: 600 }}>{business.name}</Typography>
+                          {place && (
+                            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{place}</Typography>
+                          )}
+                          <Chip
+                            size="small"
+                            sx={{ mt: 1.5 }}
+                            label={`${people.length} contact${people.length === 1 ? '' : 's'}`}
+                          />
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            )
+          ) : filteredContacts.length === 0 ? (
             <Paper sx={{ p: 4, textAlign: 'center' }}>
               <Typography color="text.secondary">
                 {searchTerm ? 'No contacts match your search' : 'No contacts yet. Add your first contact!'}
@@ -980,11 +1089,13 @@ export function Dashboard() {
                         <Typography variant="h6" sx={{ fontWeight: 600 }}>
                           {getContactName(contact)}
                         </Typography>
-                        <Chip 
-                          label={contact.status || 'new'} 
-                          size="small" 
-                          color={getStatusColor(contact.status || 'new') as any}
-                        />
+                        {contactStatusLabel(contact) && (
+                          <Chip
+                            label={contactStatusLabel(contact)}
+                            size="small"
+                            color={getStatusColor(contactStatusLabel(contact) || 'new') as any}
+                          />
+                        )}
                       </Box>
                       
                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 2 }}>
@@ -996,7 +1107,7 @@ export function Dashboard() {
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <BusinessIcon fontSize="small" color="action" />
                           <Typography variant="body2" color="text.secondary">
-                            {businesses.get(contact.businessId) || contact.businessId}
+                            {contactBusinessIds(contact).map((id) => businesses.get(id) || id).join(', ')}
                           </Typography>
                         </Box>
                         
@@ -1092,7 +1203,7 @@ export function Dashboard() {
             {followUpDialogContact && (
               <Box sx={{ mb: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                  {businesses.get(followUpDialogContact.businessId) || followUpDialogContact.businessId}
+                  {contactBusinessIds(followUpDialogContact).map((id) => businesses.get(id) || id).join(', ')}
                 </Typography>
                 {followUpDialogContact.email && (
                   <Typography variant="body2" color="text.secondary">

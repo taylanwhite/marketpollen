@@ -162,6 +162,7 @@ model Business {
   store   Store   @relation(fields: [store_id], references: [id], onDelete: Cascade)
   creator User    @relation("BusinessCreatedBy", fields: [created_by], references: [id])
   contacts Contact[]
+  contact_links ContactBusiness[]
   opportunities_converted Opportunity[]
   calendar_events CalendarEvent[]
 
@@ -218,6 +219,7 @@ model Contact {
   business  Business   @relation(fields: [business_id], references: [id], onDelete: Cascade)
   store     Store      @relation(fields: [store_id], references: [id], onDelete: Cascade)
   creator   User       @relation("ContactCreatedBy", fields: [created_by], references: [id])
+  business_links ContactBusiness[]
   reachouts Reachout[]
   contact_files ContactFile[]
   calendar_events CalendarEvent[]
@@ -226,6 +228,18 @@ model Contact {
   @@index([store_id])
   @@index([business_id])
   @@map("contacts")
+}
+
+model ContactBusiness {
+  contact_id  String @db.Uuid
+  business_id String @db.Uuid
+
+  contact  Contact  @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  business Business @relation(fields: [business_id], references: [id], onDelete: Cascade)
+
+  @@id([contact_id, business_id])
+  @@index([business_id])
+  @@map("contact_businesses")
 }
 
 model Reachout {

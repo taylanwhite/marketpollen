@@ -4,6 +4,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore, readableStoreScope, rejectIfStoreLocked, storeIdWhere } from './lib/store-access.js';
 import { contactInclude, contactToJson } from './lib/contact-json.js';
+import { syncContactBusinesses } from './lib/contact-businesses.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -50,6 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       employeeCount?: number;
       personalDetails?: string;
       status?: string;
+      businessIds?: string[];
     };
     if (!body?.businessId) return res.status(400).json({ error: 'businessId is required' });
 
@@ -88,7 +90,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         },
         include: contactInclude,
       });
-      return res.status(201).json(contactToJson(row));
+      const linked = Array.isArray(body.businessIds) && body.businessIds.length > 0
+        ? body.businessIds
+        : [body.businessId];
+      await syncContactBusinesses(row.id, storeId, linked);
+      const saved = await prisma.contact.findUnique({ where: { id: row.id }, include: contactInclude });
+      return res.status(201).json(contactToJson(saved || row));
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError) {
         if (err.code === 'P2023') return res.status(400).json({ error: 'Invalid store id format' });

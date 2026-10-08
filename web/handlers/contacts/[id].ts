@@ -3,6 +3,7 @@ import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
 import { contactInclude, contactToJson } from '../lib/contact-json.js';
+import { syncContactBusinesses } from '../lib/contact-businesses.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
@@ -39,6 +40,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastReachoutDate?: string | Date | null;
       status?: string | null;
       businessId?: string;
+      businessIds?: string[];
       reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; customItems?: Record<string, number>; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean; noFollowUp?: boolean } }>;
     };
 
@@ -51,6 +53,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.personalDetails !== undefined) updateData.personal_details = body.personalDetails;
     if (body.status !== undefined) updateData.status = body.status;
     if (body.businessId !== undefined) updateData.business_id = body.businessId;
+    const linkedBusinesses = Array.isArray(body.businessIds)
+      ? body.businessIds
+      : body.businessId
+        ? [body.businessId]
+        : null;
     if (body.suggestedFollowUpDate !== undefined) updateData.suggested_follow_up_date = body.suggestedFollowUpDate == null ? null : (body.suggestedFollowUpDate instanceof Date ? body.suggestedFollowUpDate : new Date(body.suggestedFollowUpDate));
     if (body.suggestedFollowUpMethod !== undefined) updateData.suggested_follow_up_method = body.suggestedFollowUpMethod;
     if (body.suggestedFollowUpNote !== undefined) updateData.suggested_follow_up_note = body.suggestedFollowUpNote;
@@ -59,6 +66,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (Object.keys(updateData).length > 0) {
       await prisma.contact.update({ where: { id }, data: updateData });
+    }
+    if (linkedBusinesses) {
+      await syncContactBusinesses(id, contact.store_id, linkedBusinesses);
     }
 
     if (Array.isArray(body.reachouts)) {

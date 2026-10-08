@@ -169,7 +169,8 @@ export interface ContactFile {
 // Contact types
 export interface Contact {
   id: string;
-  businessId: string; // Business the contact works for
+  businessId: string; // Primary business
+  businessIds?: string[]; // Every business this contact belongs to
   storeId: string; // Store that owns/manages this contact
   contactId: string; // Unique contact identifier
   firstName?: string | null;

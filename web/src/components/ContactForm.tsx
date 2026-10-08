@@ -158,7 +158,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const [businesses, setBusinesses] = useState<Business[]>([]);
-  const [selectedBusinessId, setSelectedBusinessId] = useState<string>(defaultBusinessId || '');
+  const [selectedBusinessIds, setSelectedBusinessIds] = useState<string[]>(defaultBusinessId ? [defaultBusinessId] : []);
 
   const [showNewBusiness, setShowNewBusiness] = useState(false);
   const [newBusinessName, setNewBusinessName] = useState('');
@@ -264,9 +264,9 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline]);
 
-  const selectedBusiness = useMemo(
-    () => businesses.find((b) => b.id === selectedBusinessId) || null,
-    [businesses, selectedBusinessId]
+  const selectedBusinesses = useMemo(
+    () => businesses.filter((business) => selectedBusinessIds.includes(business.id)),
+    [businesses, selectedBusinessIds]
   );
 
   const totalMouths = useMemo(
@@ -314,12 +314,11 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           return n === target || n.includes(target) || target.includes(n);
         });
         if (match) {
-          setSelectedBusinessId(match.id);
+          setSelectedBusinessIds((current) => current.includes(match.id) ? current : [...current, match.id]);
           setShowNewBusiness(false);
         } else {
           setShowNewBusiness(true);
           setNewBusinessName(extracted.businessName);
-          setSelectedBusinessId('');
         }
       }
 
@@ -393,13 +392,12 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     });
 
     if (match) {
-      setSelectedBusinessId(match.id);
+      setSelectedBusinessIds((current) => current.includes(match.id) ? current : [...current, match.id]);
       setShowNewBusiness(false);
       setBusinessCardMessage(`Matched existing business: ${match.name}`);
       return;
     }
 
-    setSelectedBusinessId('');
     setShowNewBusiness(true);
     setNewBusinessName(extracted.businessName);
     setNewBusinessAddress({
@@ -523,7 +521,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     setHasBusinessCardDraft(false);
     setPendingBusinessCardFile(null);
     setSuccess(false);
-    setSelectedBusinessId(defaultBusinessId || '');
+    setSelectedBusinessIds(defaultBusinessId ? [defaultBusinessId] : []);
     setShowNewBusiness(false);
     setNewBusinessName('');
     setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
@@ -594,7 +592,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     setError('');
     try {
       const newId = await createBusinessRecord(placeId);
-      setSelectedBusinessId(newId);
+      setSelectedBusinessIds((current) => current.includes(newId) ? current : [...current, newId]);
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
       setNewBusinessPlaceId(null);
@@ -630,18 +628,20 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       const now = new Date();
       const { firstName, lastName } = splitName(form.name);
       const storeId = permissions.currentStoreId;
-      let businessIdForSave = selectedBusinessId;
-      if (!businessIdForSave && showNewBusiness && newBusinessName.trim()) {
-        businessIdForSave = await createBusinessRecord(newBusinessPlaceId || undefined);
-        setSelectedBusinessId(businessIdForSave);
+      let businessIdsForSave = [...selectedBusinessIds];
+      if (showNewBusiness && newBusinessName.trim()) {
+        const createdBusinessId = await createBusinessRecord(newBusinessPlaceId || undefined);
+        businessIdsForSave = [...businessIdsForSave, createdBusinessId];
+        setSelectedBusinessIds(businessIdsForSave);
         setNewBusinessName('');
         setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
         setNewBusinessPlaceId(null);
         setShowNewBusiness(false);
       }
-      if (!businessIdForSave) {
+      if (businessIdsForSave.length === 0) {
         throw new Error('Pick or create a business for this contact first');
       }
+      const businessIdForSave = businessIdsForSave[0];
       const contactName = `${firstName} ${lastName}`.trim() || form.email || 'New contact';
       const skipFollowUp = form.followUpChoice === 'none';
 
@@ -715,6 +715,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         phone: form.phone || null,
         personalDetails: form.personalDetails || null,
         status: 'new',
+        businessIds: businessIdsForSave,
       }, { label: `New contact · ${contactName}` });
 
       if (pendingBusinessCardFile) {
@@ -834,7 +835,6 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       state: prev.state,
       zipCode: prev.zipCode,
     }));
-    setSelectedBusinessId('');
   };
 
   return (
@@ -1049,19 +1049,18 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
 
           {/* Business */}
           <Autocomplete
-            value={selectedBusiness}
+            multiple
+            value={selectedBusinesses}
             options={businesses}
             getOptionLabel={(o) => o.name}
-            onChange={(_, value) => {
-              setSelectedBusinessId(value?.id || '');
-              if (value) setShowNewBusiness(false);
-            }}
-            disabled={loading || showNewBusiness}
+            isOptionEqualToValue={(option, value) => option.id === value.id}
+            onChange={(_, value) => setSelectedBusinessIds(value.map((business) => business.id))}
+            disabled={loading}
             renderInput={(params) => (
               <TextField
                 {...params}
-                label="Business"
-                placeholder="Search or pick a business"
+                label="Businesses"
+                placeholder={selectedBusinesses.length ? '' : 'Search or pick businesses'}
                 slotProps={{
                   input: {
                     ...params.InputProps,
@@ -1083,10 +1082,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             <Button
               size="small"
               startIcon={<BusinessIcon />}
-              onClick={() => {
-                setShowNewBusiness(true);
-                setSelectedBusinessId('');
-              }}
+              onClick={() => setShowNewBusiness(true)}
               disabled={loading}
               sx={{ alignSelf: 'flex-start' }}
             >
