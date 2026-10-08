@@ -6,7 +6,7 @@ import { CampaignProduct } from '../types';
 import {
   Box, Typography, TextField, Button, Card, CardContent, Paper,
   IconButton, Switch, FormControlLabel, Alert, CircularProgress,
-  Dialog, DialogTitle, DialogContent, DialogActions, Chip, MenuItem,
+  Dialog, DialogTitle, DialogContent, DialogActions, Chip, MenuItem, Tabs, Tab,
 } from '@mui/material';
 import {
   Settings as SettingsIcon, Add as AddIcon, Edit as EditIcon,
@@ -39,6 +39,18 @@ interface BillingInfo {
   unitCents: number;
   unitLabel: string;
   invoices: BillingInvoice[];
+  profile: {
+    name: string;
+    email: string;
+    phone: string;
+    line1: string;
+    line2: string;
+    city: string;
+    state: string;
+    postalCode: string;
+    country: string;
+    card: { brand: string; last4: string; expMonth: number; expYear: number } | null;
+  };
 }
 
 interface OrgData {
@@ -70,6 +82,10 @@ export function OrgSettings() {
   const [billingBusy, setBillingBusy] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [orgChoices, setOrgChoices] = useState<Array<{ id: string; name: string }>>([]);
+  const [pageTab, setPageTab] = useState<'settings' | 'billing'>(searchParams.get('tab') === 'billing' ? 'billing' : 'settings');
+  const [billingForm, setBillingForm] = useState({
+    name: '', email: '', phone: '', line1: '', line2: '', city: '', state: '', postalCode: '', country: 'US',
+  });
 
   const activeOrgId = selectedOrgId || currentOrg?.id || null;
 
@@ -127,6 +143,20 @@ export function OrgSettings() {
       setOrgData(data);
       setNameValue(data.name);
       setGoalValue(data.quarterlyGoal);
+      if (data.billing?.profile) {
+        const profile = data.billing.profile;
+        setBillingForm({
+          name: profile.name,
+          email: profile.email,
+          phone: profile.phone,
+          line1: profile.line1,
+          line2: profile.line2,
+          city: profile.city,
+          state: profile.state,
+          postalCode: profile.postalCode,
+          country: profile.country || 'US',
+        });
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load organization');
     } finally {
@@ -248,10 +278,15 @@ export function OrgSettings() {
         </TextField>
       )}
 
+      <Tabs value={pageTab} onChange={(_event, value: 'settings' | 'billing') => setPageTab(value)} sx={{ mb: 3 }}>
+        <Tab value="settings" label="Settings" />
+        <Tab value="billing" label="Billing" />
+      </Tabs>
+
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
 
-      <Card sx={{ mb: 3 }}>
+      {pageTab === 'settings' && <><Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>Organization name</Typography>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -305,75 +340,6 @@ export function OrgSettings() {
         </CardContent>
       </Card>
 
-      {(orgData.billing?.status === 'active' || (orgData.billing?.invoices?.length ?? 0) > 0) && (
-        <Card sx={{ mb: 3 }}>
-          <CardContent>
-            <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Monthly bill</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Each store is {orgData.billing?.unitLabel || '$65.00'} a month.
-            </Typography>
-            {orgData.billing?.alert && <Alert severity="warning" sx={{ mb: 2 }}>{orgData.billing.alert}</Alert>}
-            {orgData.billing?.status === 'active' && (
-              <Box>
-                <Typography sx={{ mb: 1 }}>
-                  You're paying {orgData.billing.monthlyLabel} a month
-                  {orgData.billing.paidQuantity ? ` for ${orgData.billing.paidQuantity} ${orgData.billing.paidQuantity === 1 ? 'store' : 'stores'}` : ''}.
-                  {orgData.billing.currentPeriodEnd && orgData.billing.nextMonthlyLabel !== orgData.billing.monthlyLabel && (
-                    <> On {new Date(orgData.billing.currentPeriodEnd).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} the bill goes to {orgData.billing.nextMonthlyLabel}.</>
-                  )}
-                </Typography>
-                <Button
-                  variant="outlined"
-                  disabled={billingBusy}
-                  onClick={async () => {
-                    setBillingBusy(true);
-                    setError('');
-                    try {
-                      const result = await api.post<{ url: string }>(`/organizations/${orgData.id}/billing`, { action: 'portal' });
-                      window.location.href = result.url;
-                    } catch (err: any) {
-                      setError(err.message || 'Could not open billing');
-                      setBillingBusy(false);
-                    }
-                  }}
-                >
-                  Update card
-                </Button>
-              </Box>
-            )}
-            {(orgData.billing?.invoices?.length ?? 0) > 0 && (
-              <Box sx={{ mt: 3 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Invoices</Typography>
-                {orgData.billing?.invoices.map((invoice) => (
-                  <Box key={invoice.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1, borderTop: '1px solid', borderColor: 'divider' }}>
-                    <Typography sx={{ flex: 1 }}>
-                      {new Date(invoice.created * 1000).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
-                      {invoice.number ? ` · ${invoice.number}` : ''}
-                    </Typography>
-                    <Chip
-                      size="small"
-                      label={invoice.status === 'paid' ? 'Paid' : invoice.status === 'open' ? 'Due' : invoice.status || 'Invoice'}
-                      color={invoice.status === 'paid' ? 'success' : invoice.status === 'open' ? 'warning' : 'default'}
-                    />
-                    <Typography sx={{ minWidth: 80, textAlign: 'right' }}>
-                      ${((invoice.status === 'paid' ? invoice.amountPaidCents : invoice.amountDueCents) / 100).toLocaleString()}
-                    </Typography>
-                    {invoice.hostedUrl && (
-                      <Button size="small" href={invoice.hostedUrl} target="_blank" rel="noopener noreferrer">
-                        View
-                      </Button>
-                    )}
-                  </Box>
-                ))}
-              </Box>
-            )}
-            {orgData.billing?.enabled && orgData.billing.configured === false && (
-              <Alert severity="info" sx={{ mt: 2 }}>Monthly billing isn't configured yet.</Alert>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
       {/* Products */}
       <Card>
         <CardContent>
@@ -406,6 +372,129 @@ export function OrgSettings() {
           ))}
         </CardContent>
       </Card>
+      </>}
+
+      {pageTab === 'billing' && <>
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>Billing contact</Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
+              <TextField label="Name" value={billingForm.name} onChange={(event) => setBillingForm({ ...billingForm, name: event.target.value })} />
+              <TextField label="Email" value={billingForm.email} onChange={(event) => setBillingForm({ ...billingForm, email: event.target.value })} />
+              <TextField label="Phone" value={billingForm.phone} onChange={(event) => setBillingForm({ ...billingForm, phone: event.target.value })} />
+              <TextField label="Country" value={billingForm.country} onChange={(event) => setBillingForm({ ...billingForm, country: event.target.value })} />
+              <TextField label="Address" value={billingForm.line1} onChange={(event) => setBillingForm({ ...billingForm, line1: event.target.value })} sx={{ gridColumn: { sm: '1 / -1' } }} />
+              <TextField label="Address line 2" value={billingForm.line2} onChange={(event) => setBillingForm({ ...billingForm, line2: event.target.value })} sx={{ gridColumn: { sm: '1 / -1' } }} />
+              <TextField label="City" value={billingForm.city} onChange={(event) => setBillingForm({ ...billingForm, city: event.target.value })} />
+              <TextField label="State" value={billingForm.state} onChange={(event) => setBillingForm({ ...billingForm, state: event.target.value })} />
+              <TextField label="Postal code" value={billingForm.postalCode} onChange={(event) => setBillingForm({ ...billingForm, postalCode: event.target.value })} />
+            </Box>
+            <Button
+              variant="contained"
+              sx={{ mt: 2 }}
+              disabled={billingBusy}
+              onClick={async () => {
+                setBillingBusy(true);
+                setError('');
+                try {
+                  await api.post(`/organizations/${orgData.id}/billing`, { action: 'update_profile', profile: billingForm });
+                  setSuccess('Billing contact saved.');
+                  await loadOrgData();
+                } catch (err: any) {
+                  setError(err.message || 'Could not save the billing contact');
+                } finally {
+                  setBillingBusy(false);
+                }
+              }}
+            >
+              Save billing contact
+            </Button>
+          </CardContent>
+        </Card>
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Card</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              {orgData.billing?.profile.card
+                ? `${orgData.billing.profile.card.brand.toUpperCase()} ending in ${orgData.billing.profile.card.last4}, expires ${orgData.billing.profile.card.expMonth}/${orgData.billing.profile.card.expYear}`
+                : 'No card on file.'}
+            </Typography>
+            <Button
+              variant="outlined"
+              disabled={billingBusy}
+              onClick={async () => {
+                setBillingBusy(true);
+                setError('');
+                try {
+                  const result = await api.post<{ url: string }>(`/organizations/${orgData.id}/billing`, { action: 'portal' });
+                  window.location.href = result.url;
+                } catch (err: any) {
+                  setError(err.message || 'Could not open card management');
+                  setBillingBusy(false);
+                }
+              }}
+            >
+              {orgData.billing?.profile.card ? 'Manage cards' : 'Add a card'}
+            </Button>
+          </CardContent>
+        </Card>
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Monthly bill</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Each store is {orgData.billing?.unitLabel || '$65.00'} a month.
+            </Typography>
+            {orgData.billing?.alert && <Alert severity="warning" sx={{ mb: 2 }}>{orgData.billing.alert}</Alert>}
+            {orgData.billing?.status === 'active' && (
+              <Box>
+                <Typography sx={{ mb: 1 }}>
+                  You're paying {orgData.billing.monthlyLabel} a month
+                  {orgData.billing.paidQuantity ? ` for ${orgData.billing.paidQuantity} ${orgData.billing.paidQuantity === 1 ? 'store' : 'stores'}` : ''}.
+                  {orgData.billing.currentPeriodEnd && orgData.billing.nextMonthlyLabel !== orgData.billing.monthlyLabel && (
+                    <> On {new Date(orgData.billing.currentPeriodEnd).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} the bill goes to {orgData.billing.nextMonthlyLabel}.</>
+                  )}
+                </Typography>
+              </Box>
+            )}
+            {(['Due', 'Past'] as const).map((group) => {
+              const invoices = (orgData.billing?.invoices || []).filter((invoice) =>
+                group === 'Due' ? invoice.status === 'open' || invoice.status === 'uncollectible' : invoice.status === 'paid' || invoice.status === 'void'
+              );
+              return (
+              <Box key={group} sx={{ mt: 3 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>{group === 'Due' ? 'Due invoices' : 'Past invoices'}</Typography>
+                {invoices.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">None</Typography>
+                ) : invoices.map((invoice) => (
+                  <Box key={invoice.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <Typography sx={{ flex: 1 }}>
+                      {new Date(invoice.created * 1000).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
+                      {invoice.number ? ` · ${invoice.number}` : ''}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label={invoice.status === 'paid' ? 'Paid' : invoice.status === 'open' ? 'Due' : invoice.status || 'Invoice'}
+                      color={invoice.status === 'paid' ? 'success' : invoice.status === 'open' ? 'warning' : 'default'}
+                    />
+                    <Typography sx={{ minWidth: 80, textAlign: 'right' }}>
+                      ${((invoice.status === 'paid' ? invoice.amountPaidCents : invoice.amountDueCents) / 100).toLocaleString()}
+                    </Typography>
+                    {invoice.hostedUrl && (
+                      <Button size="small" href={invoice.hostedUrl} target="_blank" rel="noopener noreferrer">
+                        View
+                      </Button>
+                    )}
+                  </Box>
+                ))}
+              </Box>
+              );
+            })}
+            {orgData.billing?.enabled && orgData.billing.configured === false && (
+              <Alert severity="info" sx={{ mt: 2 }}>Monthly billing isn't configured yet.</Alert>
+            )}
+          </CardContent>
+        </Card>
+      </>}
 
       {/* Product Add/Edit Dialog */}
       <Dialog open={productDialog} onClose={() => setProductDialog(false)} maxWidth="xs" fullWidth>

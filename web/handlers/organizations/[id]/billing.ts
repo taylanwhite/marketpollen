@@ -15,6 +15,7 @@ import {
   setBillingEnabled,
   setMonthlyPrice,
   syncCheckoutSession,
+  updateBillingProfile,
 } from '../../lib/billing.js';
 
 async function isGlobalAdmin(uid: string): Promise<boolean> {
@@ -55,6 +56,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       storeId?: string;
       storeName?: string;
       monthlyPrice?: number;
+      profile?: {
+        name?: string;
+        email?: string;
+        phone?: string;
+        line1?: string;
+        line2?: string;
+        city?: string;
+        state?: string;
+        postalCode?: string;
+        country?: string;
+      };
     };
 
     if (body.action === 'checkout') {
@@ -77,6 +89,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.action === 'enable') {
       if (!(await isGlobalAdmin(uid))) return res.status(403).json({ error: 'Global admin required' });
       await setBillingEnabled(orgId, body.enabled !== false);
+      const billing = await billingView(orgId);
+      return res.status(200).json(billing);
+    }
+
+    if (body.action === 'update_profile') {
+      await updateBillingProfile(orgId, body.profile || {});
       const billing = await billingView(orgId);
       return res.status(200).json(billing);
     }

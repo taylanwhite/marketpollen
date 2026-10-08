@@ -798,7 +798,99 @@ export async function billingView(orgId: string) {
     unitCents: unitOf(org),
     unitLabel: money(unitOf(org)),
     invoices: await listInvoices(org.id),
+    profile: await billingProfile(org.id),
   };
+}
+
+export async function billingProfile(orgId: string) {
+  const empty = {
+    name: '',
+    email: '',
+    phone: '',
+    line1: '',
+    line2: '',
+    city: '',
+    state: '',
+    postalCode: '',
+    country: 'US',
+    card: null as null | { brand: string; last4: string; expMonth: number; expYear: number },
+  };
+  const org = await prisma.organization.findUnique({
+    where: { id: orgId },
+    select: { name: true, stripe_customer_id: true },
+  });
+  if (!org) return empty;
+  empty.name = org.name;
+  if (!org.stripe_customer_id || !stripeConfigured()) return empty;
+  try {
+    const customer = await getStripe().customers.retrieve(org.stripe_customer_id, {
+      expand: ['invoice_settings.default_payment_method'],
+    });
+    if (customer.deleted) return empty;
+    const paymentMethod = customer.invoice_settings?.default_payment_method;
+    const card = paymentMethod && typeof paymentMethod !== 'string' ? paymentMethod.card : null;
+    return {
+      name: customer.name || org.name,
+      email: customer.email || '',
+      phone: customer.phone || '',
+      line1: customer.address?.line1 || '',
+      line2: customer.address?.line2 || '',
+      city: customer.address?.city || '',
+      state: customer.address?.state || '',
+      postalCode: customer.address?.postal_code || '',
+      country: customer.address?.country || 'US',
+      card: card?.last4 ? {
+        brand: card.brand || 'card',
+        last4: card.last4,
+        expMonth: card.exp_month,
+        expYear: card.exp_year,
+      } : null,
+    };
+  } catch (err) {
+    console.error('Could not load billing contact', err);
+    return empty;
+  }
+}
+
+export async function updateBillingProfile(orgId: string, input: {
+  name?: string;
+  email?: string;
+  phone?: string;
+  line1?: string;
+  line2?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+}): Promise<void> {
+  if (!stripeConfigured()) {
+    throw new BillingHttpError(500, 'Billing is not configured yet.');
+  }
+  const org = await prisma.organization.findUnique({ where: { id: orgId } });
+  if (!org) throw new BillingHttpError(404, 'Organization not found');
+  const stripe = getStripe();
+  const details = {
+    name: input.name?.trim() || org.name,
+    email: input.email?.trim() || undefined,
+    phone: input.phone?.trim() || undefined,
+    address: {
+      line1: input.line1?.trim() || undefined,
+      line2: input.line2?.trim() || undefined,
+      city: input.city?.trim() || undefined,
+      state: input.state?.trim() || undefined,
+      postal_code: input.postalCode?.trim() || undefined,
+      country: (input.country?.trim() || 'US').toUpperCase(),
+    },
+  };
+  if (!org.stripe_customer_id) {
+    const customer = await stripe.customers.create({
+      ...details,
+      metadata: { organizationId: org.id },
+    });
+    await prisma.organization.update({ where: { id: org.id }, data: { stripe_customer_id: customer.id } });
+    return;
+  }
+  await stripe.customers.update(org.stripe_customer_id, details);
 }
 
 export async function createCheckout(orgId: string, quantity: number): Promise<string> {
@@ -847,12 +939,12 @@ export async function createCheckout(orgId: string, quantity: number): Promise<s
 export async function createPortal(orgId: string): Promise<string> {
   const org = await prisma.organization.findUnique({ where: { id: orgId } });
   if (!org?.stripe_customer_id) {
-    throw new BillingHttpError(400, 'Start the monthly bill before updating the card.');
+    throw new BillingHttpError(400, 'Save the billing contact before adding a card.');
   }
   const stripe = getStripe();
   const session = await stripe.billingPortal.sessions.create({
     customer: org.stripe_customer_id,
-    return_url: `${appUrl()}/org-settings`,
+    return_url: `${appUrl()}/org-settings?tab=billing`,
   });
   return session.url;
 }
