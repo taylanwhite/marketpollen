@@ -67,7 +67,6 @@ export function OrgSettings() {
   const [productForm, setProductForm] = useState({ name: '', slug: '', mouthValue: 1 });
   const [productSaving, setProductSaving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const [storeQuantity, setStoreQuantity] = useState(1);
   const [billingBusy, setBillingBusy] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [orgChoices, setOrgChoices] = useState<Array<{ id: string; name: string }>>([]);
@@ -128,9 +127,6 @@ export function OrgSettings() {
       setOrgData(data);
       setNameValue(data.name);
       setGoalValue(data.quarterlyGoal);
-      if (data.billing?.minimumQuantity) {
-        setStoreQuantity((current) => Math.max(current, data.billing!.minimumQuantity));
-      }
     } catch (err: any) {
       setError(err.message || 'Failed to load organization');
     } finally {
@@ -309,7 +305,7 @@ export function OrgSettings() {
         </CardContent>
       </Card>
 
-      {orgData.billing?.enabled && (
+      {(orgData.billing?.status === 'active' || (orgData.billing?.invoices?.length ?? 0) > 0) && (
         <Card sx={{ mb: 3 }}>
           <CardContent>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Monthly bill</Typography>
@@ -317,42 +313,6 @@ export function OrgSettings() {
               Each store is {orgData.billing?.unitLabel || '$65.00'} a month.
             </Typography>
             {orgData.billing?.alert && <Alert severity="warning" sx={{ mb: 2 }}>{orgData.billing.alert}</Alert>}
-            {orgData.billing?.needsCheckout && (
-              <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-                <TextField
-                  label="How many stores are you starting with?"
-                  type="number"
-                  size="small"
-                  value={storeQuantity}
-                  onChange={(event) => setStoreQuantity(Math.max(orgData.billing?.minimumQuantity || 1, parseInt(event.target.value, 10) || 1))}
-                  slotProps={{ htmlInput: { min: orgData.billing.minimumQuantity || 1 } }}
-                  sx={{ width: 280 }}
-                />
-                <Button
-                  variant="contained"
-                  disabled={billingBusy || orgData.billing.configured === false}
-                  onClick={async () => {
-                    setBillingBusy(true);
-                    setError('');
-                    try {
-                      const result = await api.post<{ url: string }>(`/organizations/${orgData.id}/billing`, {
-                        action: 'checkout',
-                        quantity: storeQuantity,
-                      });
-                      window.location.href = result.url;
-                    } catch (err: any) {
-                      setError(err.message || 'Could not start the bill');
-                      setBillingBusy(false);
-                    }
-                  }}
-                >
-                  {billingBusy ? <CircularProgress size={16} color="inherit" /> : `Start at $${((storeQuantity * (orgData.billing.unitCents || 6500)) / 100).toLocaleString()} a month`}
-                </Button>
-                <Typography variant="body2" color="text.secondary">
-                  You'll pay for the full month today. Adding another store later charges only the days left in that month.
-                </Typography>
-              </Box>
-            )}
             {orgData.billing?.status === 'active' && (
               <Box>
                 <Typography sx={{ mb: 1 }}>

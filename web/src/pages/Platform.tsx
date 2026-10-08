@@ -154,6 +154,21 @@ export function Platform() {
     }
   };
 
+  const chargeInStripe = async (org: PlatformOrg) => {
+    setSavingId(org.id);
+    setError('');
+    try {
+      const result = await api.post<{ url: string }>(`/organizations/${org.id}/billing`, {
+        action: 'checkout',
+        quantity: Math.max(org.storeCount, 1),
+      });
+      window.location.href = result.url;
+    } catch (err: any) {
+      setError(err.message || 'Could not open Stripe');
+      setSavingId(null);
+    }
+  };
+
   const openBillingPortal = async (orgId: string) => {
     setSavingId(orgId);
     setError('');
@@ -345,6 +360,11 @@ export function Platform() {
           )}
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
+          {selected && selected.billingEnabled && selected.subscriptionStatus !== 'active' && (
+            <Button variant="contained" onClick={() => chargeInStripe(selected)} disabled={savingId === selected.id}>
+              Charge in Stripe
+            </Button>
+          )}
           {selected && detail?.billing?.status === 'active' && (
             <Button onClick={() => openBillingPortal(selected.id)} disabled={savingId === selected.id}>Card on file</Button>
           )}
