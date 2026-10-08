@@ -23,7 +23,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (user?.is_global_admin) {
       orgs = await prisma.organization.findMany({ orderBy: { name: 'asc' } });
     } else {
-      const memberships = await prisma.organizationMember.findMany({ where: { user_id: uid }, select: { org_id: true } });
+      const memberships = await prisma.organizationMember.findMany({
+        where: { user_id: uid, is_admin: true },
+        select: { org_id: true },
+      });
       const orgIds = memberships.map(m => m.org_id);
       orgs = await prisma.organization.findMany({ where: { id: { in: orgIds } }, orderBy: { name: 'asc' } });
     }

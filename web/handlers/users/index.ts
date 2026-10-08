@@ -15,7 +15,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') {
     const rows = await prisma.user.findMany({
       orderBy: { email: 'asc' },
-      include: { store_permissions: { select: { store_id: true, can_edit: true } } },
+      include: {
+        store_permissions: { select: { store_id: true, can_edit: true } },
+        organization_memberships: {
+          select: { org_id: true, is_admin: true, org: { select: { name: true } } },
+        },
+      },
     });
     const withPerms = rows.map((r) => ({
       uid: r.id,
@@ -24,6 +29,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdAt: r.created_at,
       isGlobalAdmin: r.is_global_admin,
       storePermissions: r.store_permissions.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
+      orgMemberships: r.organization_memberships.map((membership) => ({
+        orgId: membership.org_id,
+        orgName: membership.org.name,
+        isAdmin: membership.is_admin,
+      })),
     }));
     return res.status(200).json(withPerms);
   }

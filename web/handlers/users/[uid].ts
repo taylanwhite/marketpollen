@@ -16,7 +16,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!targetUid) return res.status(400).json({ error: 'User uid required' });
 
   if (req.method === 'PATCH') {
-    const body = req.body as { isOrgAdmin?: boolean; orgId?: string; storePermissions?: { storeId: string; canEdit: boolean }[] };
+    const body = req.body as {
+      isOrgAdmin?: boolean;
+      orgId?: string;
+      scopedStoreIds?: string[];
+      storePermissions?: { storeId: string; canEdit: boolean }[];
+    };
     if (body.isOrgAdmin !== undefined && body.orgId) {
       await prisma.organizationMember.upsert({
         where: { user_id_org_id: { user_id: targetUid, org_id: body.orgId } },
@@ -25,7 +30,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
     if (Array.isArray(body.storePermissions)) {
-      await prisma.storePermission.deleteMany({ where: { user_id: targetUid } });
+      const scopedStoreIds = Array.isArray(body.scopedStoreIds) ? body.scopedStoreIds.filter(Boolean) : [];
+      await prisma.storePermission.deleteMany({
+        where: {
+          user_id: targetUid,
+          ...(scopedStoreIds.length > 0 ? { store_id: { in: scopedStoreIds } } : {}),
+        },
+      });
       for (const p of body.storePermissions) {
         if (!p.storeId) continue;
         await prisma.storePermission.upsert({

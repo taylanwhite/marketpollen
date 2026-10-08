@@ -28,6 +28,7 @@ import {
   IconButton,
   ToggleButtonGroup,
   ToggleButton,
+  MenuItem,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -46,6 +47,7 @@ type AccessLevel = 'none' | 'view' | 'full';
 
 interface UserWithPermissions extends User {
   email: string;
+  orgMemberships?: Array<{ orgId: string; orgName: string; isAdmin: boolean }>;
 }
 
 interface PendingInvite {
@@ -78,6 +80,8 @@ export function AdminPanel() {
   const [editingUser, setEditingUser] = useState<UserWithPermissions | null>(null);
   const [editAccessLevels, setEditAccessLevels] = useState<Map<string, AccessLevel>>(new Map());
   const [editIsOrgAdmin, setEditIsOrgAdmin] = useState(false);
+  const [editOrgId, setEditOrgId] = useState('');
+  const [orgChoices, setOrgChoices] = useState<Array<{ id: string; name: string }>>([]);
   
   // New user invitation
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
@@ -93,6 +97,13 @@ export function AdminPanel() {
       return;
     }
     loadData();
+    if (isAdmin()) {
+      api.get<Array<{ id: string; name: string }>>('/organizations')
+        .then((rows) => setOrgChoices(rows.map((org) => ({ id: org.id, name: org.name }))))
+        .catch(() => setOrgChoices([]));
+    } else if (currentOrg) {
+      setOrgChoices([{ id: currentOrg.id, name: currentOrg.name }]);
+    }
   }, [isAdmin, navigate]);
 
   const openInviteDialog = () => {
@@ -329,15 +340,22 @@ export function AdminPanel() {
     return perm.canEdit ? 'full' : 'view';
   };
 
-  const openEditModal = (user: UserWithPermissions) => {
-    setEditingUser(user);
-    
+  const applyOrgEditor = (user: UserWithPermissions, orgId: string) => {
+    setEditOrgId(orgId);
+    const membership = user.orgMemberships?.find((item) => item.orgId === orgId);
+    setEditIsOrgAdmin(!!membership?.isAdmin);
     const accessMap = new Map<string, AccessLevel>();
-    stores.forEach(store => {
-      const perm = user.storePermissions.find(p => p.storeId === store.id);
+    stores.filter((store) => store.organizationId === orgId).forEach((store) => {
+      const perm = user.storePermissions.find((item) => item.storeId === store.id);
       accessMap.set(store.id, getAccessLevel(perm));
     });
     setEditAccessLevels(accessMap);
+  };
+
+  const openEditModal = (user: UserWithPermissions) => {
+    setEditingUser(user);
+    const fallbackOrgId = currentOrg?.id || orgChoices[0]?.id || '';
+    applyOrgEditor(user, fallbackOrgId);
   };
 
   const closeEditModal = () => {
@@ -354,21 +372,23 @@ export function AdminPanel() {
     });
   };
 
+  const storesForEditOrg = () => stores.filter((store) => !editOrgId || store.organizationId === editOrgId);
+
   const handleGrantAllAccess = () => {
     const newMap = new Map<string, AccessLevel>();
-    stores.forEach(store => newMap.set(store.id, 'full'));
+    storesForEditOrg().forEach(store => newMap.set(store.id, 'full'));
     setEditAccessLevels(newMap);
   };
 
   const handleViewOnlyAll = () => {
     const newMap = new Map<string, AccessLevel>();
-    stores.forEach(store => newMap.set(store.id, 'view'));
+    storesForEditOrg().forEach(store => newMap.set(store.id, 'view'));
     setEditAccessLevels(newMap);
   };
 
   const handleRevokeAllAccess = () => {
     const newMap = new Map<string, AccessLevel>();
-    stores.forEach(store => newMap.set(store.id, 'none'));
+    storesForEditOrg().forEach(store => newMap.set(store.id, 'none'));
     setEditAccessLevels(newMap);
   };
 
@@ -379,8 +399,9 @@ export function AdminPanel() {
       // Convert access levels to StorePermission array
       // Only include stores with access (not 'none')
       const permissions: StorePermission[] = [];
+      const scopedIds = new Set(storesForEditOrg().map((store) => store.id));
       editAccessLevels.forEach((level, storeId) => {
-        if (level !== 'none') {
+        if (level !== 'none' && scopedIds.has(storeId)) {
           permissions.push({
             storeId,
             canEdit: level === 'full'
@@ -388,9 +409,13 @@ export function AdminPanel() {
         }
       });
 
-      const orgId = currentOrg?.id;
+      const orgId = editOrgId || currentOrg?.id;
+      const scopedStoreIds = stores
+        .filter((store) => store.organizationId === orgId)
+        .map((store) => store.id);
       await api.patch(`/users/${editingUser.uid}`, {
         storePermissions: permissions,
+        scopedStoreIds,
         isOrgAdmin: editIsOrgAdmin,
         orgId,
       });
@@ -404,23 +429,24 @@ export function AdminPanel() {
   };
 
   const getUserAccessSummary = (user: UserWithPermissions): string => {
-    if (user.isGlobalAdmin) return 'Global Admin';
+    if (user.isGlobalAdmin) return 'MarketPollen admin';
+
+    const adminOrgNames = (user.orgMemberships || []).filter((item) => item.isAdmin).map((item) => item.orgName);
+    const orgLabel = adminOrgNames.length > 0 ? `Admin of ${adminOrgNames.join(', ')}` : '';
     
     const accessCount = user.storePermissions.length;
     const fullAccessCount = user.storePermissions.filter(p => p.canEdit).length;
     
-    if (accessCount === 0) return 'No access';
-    if (accessCount === stores.length && fullAccessCount === stores.length) {
-      return 'All stores (edit)';
+    let storeSummary = 'No store access';
+    if (accessCount === 0) storeSummary = 'No store access';
+    else if (accessCount === stores.length && fullAccessCount === stores.length && stores.length > 0) {
+      storeSummary = 'Every store (edit)';
+    } else if (accessCount === stores.length && fullAccessCount === 0 && stores.length > 0) {
+      storeSummary = 'Every store (view)';
+    } else {
+      storeSummary = `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} edit)`;
     }
-    if (accessCount === stores.length && fullAccessCount === 0) {
-      return 'All stores (view)';
-    }
-    if (accessCount === stores.length) {
-      return `All stores (${fullAccessCount} edit, ${accessCount - fullAccessCount} view)`;
-    }
-    
-    return `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} edit)`;
+    return orgLabel ? `${orgLabel}. ${storeSummary}` : storeSummary;
   };
 
 
@@ -705,7 +731,21 @@ export function AdminPanel() {
                 </Typography>
               </Paper>
 
-              <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                {orgChoices.length > 1 && (
+                  <TextField
+                    select
+                    label="Organization"
+                    value={editOrgId}
+                    onChange={(event) => editingUser && applyOrgEditor(editingUser, event.target.value)}
+                    fullWidth
+                    size="small"
+                  >
+                    {orgChoices.map((org) => (
+                      <MenuItem key={org.id} value={org.id}>{org.name}</MenuItem>
+                    ))}
+                  </TextField>
+                )}
                 <FormControlLabel
                   control={
                     <Switch
@@ -716,9 +756,11 @@ export function AdminPanel() {
                   }
                   label={
                     <Box>
-                      <Typography variant="body1" sx={{ fontWeight: 500 }}>Organization Admin</Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                        Organization admin{orgChoices.find((org) => org.id === editOrgId) ? ` for ${orgChoices.find((org) => org.id === editOrgId)?.name}` : ''}
+                      </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Manage campaign settings, products, and store allocations
+                        They can rename this organization, change its products and goal, see every store in it, and open its bill. This does not apply to any other organization.
                       </Typography>
                     </Box>
                   }
@@ -740,11 +782,11 @@ export function AdminPanel() {
                   </Box>
 
                   <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
-                    Store Permissions
+                    Store access{orgChoices.find((org) => org.id === editOrgId) ? ` in ${orgChoices.find((org) => org.id === editOrgId)?.name}` : ''}
                   </Typography>
 
                   <List sx={{ bgcolor: 'grey.50', borderRadius: 1 }}>
-                    {stores.map((store, index) => {
+                    {stores.filter((store) => !editOrgId || store.organizationId === editOrgId).map((store, index) => {
                       const level = editAccessLevels.get(store.id) || 'none';
                       return (
                         <React.Fragment key={store.id}>

@@ -6,7 +6,7 @@ import { CampaignProduct } from '../types';
 import {
   Box, Typography, TextField, Button, Card, CardContent, Paper,
   IconButton, Switch, FormControlLabel, Alert, CircularProgress,
-  Dialog, DialogTitle, DialogContent, DialogActions, Chip,
+  Dialog, DialogTitle, DialogContent, DialogActions, Chip, MenuItem,
 } from '@mui/material';
 import {
   Settings as SettingsIcon, Add as AddIcon, Edit as EditIcon,
@@ -52,7 +52,7 @@ interface OrgData {
 }
 
 export function OrgSettings() {
-  const { currentOrg, isOrgAdminFn, isAdmin } = usePermissions();
+  const { currentOrg, permissions, isOrgAdminFn, isAdmin } = usePermissions();
   const [orgData, setOrgData] = useState<OrgData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -60,6 +60,7 @@ export function OrgSettings() {
   const [success, setSuccess] = useState('');
 
   const [goalValue, setGoalValue] = useState(10000);
+  const [nameValue, setNameValue] = useState('');
 
   const [productDialog, setProductDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState<CampaignProduct | null>(null);
@@ -69,9 +70,23 @@ export function OrgSettings() {
   const [storeQuantity, setStoreQuantity] = useState(1);
   const [priceInput, setPriceInput] = useState('65');
   const [billingBusy, setBillingBusy] = useState(false);
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const [orgChoices, setOrgChoices] = useState<Array<{ id: string; name: string }>>([]);
+
+  const activeOrgId = selectedOrgId || currentOrg?.id || null;
 
   useEffect(() => {
-    if (!currentOrg) return;
+    if (!isAdmin()) {
+      setOrgChoices(permissions.organizations.filter((org) => org.isAdmin).map((org) => ({ id: org.id, name: org.name })));
+      return;
+    }
+    api.get<Array<{ id: string; name: string }>>('/organizations')
+      .then((rows) => setOrgChoices(rows.map((org) => ({ id: org.id, name: org.name }))))
+      .catch(() => setOrgChoices([]));
+  }, [currentOrg?.id]);
+
+  useEffect(() => {
+    if (!activeOrgId) return;
     const sessionId = searchParams.get('session_id');
     const finish = () => {
       if (searchParams.get('billing') || sessionId) {
@@ -83,7 +98,7 @@ export function OrgSettings() {
     };
     if (searchParams.get('billing') === 'success' && sessionId) {
       setSuccess('Payment received. The monthly bill will show here once it is confirmed.');
-      api.post<{ status: string | null }>(`/organizations/${currentOrg.id}/billing`, { action: 'sync_checkout', sessionId })
+      api.post<{ status: string | null }>(`/organizations/${activeOrgId}/billing`, { action: 'sync_checkout', sessionId })
         .then((billing) => setSuccess(billing.status === 'active'
           ? 'Your monthly bill is active. You can add stores now.'
           : 'Payment received. If the bill is not shown yet, refresh this page in a moment.'))
@@ -99,14 +114,15 @@ export function OrgSettings() {
       finish();
     }
     loadOrgData();
-  }, [currentOrg?.id]);
+  }, [activeOrgId]);
 
   const loadOrgData = async () => {
-    if (!currentOrg) return;
+    if (!activeOrgId) return;
     setLoading(true);
     try {
-      const data = await api.get<OrgData>(`/organizations/${currentOrg.id}`);
+      const data = await api.get<OrgData>(`/organizations/${activeOrgId}`);
       setOrgData(data);
+      setNameValue(data.name);
       setGoalValue(data.quarterlyGoal);
       if (data.billing?.minimumQuantity) {
         setStoreQuantity((current) => Math.max(current, data.billing!.minimumQuantity));
@@ -119,6 +135,18 @@ export function OrgSettings() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const saveName = async () => {
+    if (!orgData || !nameValue.trim()) return;
+    setSaving(true);
+    setError(''); setSuccess('');
+    try {
+      await api.patch(`/organizations/${orgData.id}`, { name: nameValue.trim() });
+      setSuccess('Organization name updated.');
+      await loadOrgData();
+    } catch (err: any) { setError(err.message); }
+    finally { setSaving(false); }
   };
 
   const saveGoal = async () => {
@@ -208,8 +236,49 @@ export function OrgSettings() {
         <SettingsIcon /> {orgData.name} Settings
       </Typography>
 
+      {orgChoices.length > 1 && (
+        <TextField
+          select
+          label="Organization"
+          value={activeOrgId || ''}
+          onChange={(event) => setSelectedOrgId(event.target.value)}
+          size="small"
+          sx={{ mb: 3, minWidth: 280 }}
+        >
+          {orgChoices.map((org) => (
+            <MenuItem key={org.id} value={org.id}>{org.name}</MenuItem>
+          ))}
+        </TextField>
+      )}
+
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
+
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Organization name</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            This is the name your team sees. It only applies to this organization.
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+            <TextField
+              label="Name"
+              value={nameValue}
+              onChange={(event) => setNameValue(event.target.value)}
+              size="small"
+              sx={{ width: 320 }}
+            />
+            <Button
+              variant="contained"
+              startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <SaveIcon />}
+              onClick={saveName}
+              disabled={saving || !nameValue.trim() || nameValue.trim() === orgData.name}
+            >
+              Save
+            </Button>
+          </Box>
+        </CardContent>
+      </Card>
 
       {/* Quarterly Goal */}
       <Card sx={{ mb: 3 }}>
