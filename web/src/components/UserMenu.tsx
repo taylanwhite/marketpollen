@@ -163,6 +163,14 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
             >
               Admin
             </Typography>
+            {isAdmin() && (
+              <MenuItem onClick={() => go('/platform')} selected={isActive('/platform')}>
+                <ListItemIcon>
+                  <AdminIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText>Platform</ListItemText>
+              </MenuItem>
+            )}
             {(isOrgAdminFn() || isAdmin()) && (
               <MenuItem onClick={() => go('/org-settings')} selected={isActive('/org-settings')}>
                 <ListItemIcon>
@@ -179,12 +187,14 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
                 <ListItemText>Stores</ListItemText>
               </MenuItem>
             )}
-            <MenuItem onClick={() => go('/admin')} selected={isActive('/admin')}>
-              <ListItemIcon>
-                <AdminIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>User management</ListItemText>
-            </MenuItem>
+            {!isAdmin() && (
+              <MenuItem onClick={() => go('/admin')} selected={isActive('/admin')}>
+                <ListItemIcon>
+                  <AdminIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText>User management</ListItemText>
+              </MenuItem>
+            )}
             <Divider />
           </Box>
         )}

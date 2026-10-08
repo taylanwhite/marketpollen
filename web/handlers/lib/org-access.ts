@@ -1,5 +1,19 @@
 import { prisma } from './db.js';
 
+/** Every organization this person administers. `'all'` is a MarketPollen admin. */
+export async function adminOrgIds(uid: string): Promise<string[] | 'all'> {
+  const user = await prisma.user.findUnique({
+    where: { id: uid },
+    select: { is_global_admin: true },
+  });
+  if (user?.is_global_admin) return 'all';
+  const memberships = await prisma.organizationMember.findMany({
+    where: { user_id: uid, is_admin: true },
+    select: { org_id: true },
+  });
+  return memberships.map((membership) => membership.org_id);
+}
+
 export async function isOrgAdmin(uid: string, orgId: string): Promise<boolean> {
   const user = await prisma.user.findUnique({
     where: { id: uid },

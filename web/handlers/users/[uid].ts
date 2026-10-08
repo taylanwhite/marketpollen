@@ -1,16 +1,14 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
+import { adminOrgIds } from '../lib/org-access.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
-  const me = await prisma.user.findUnique({
-    where: { id: uid },
-    select: { is_global_admin: true },
-  });
-  if (!me?.is_global_admin) return res.status(403).json({ error: 'Admin required' });
+  const orgIds = await adminOrgIds(uid);
+  if (orgIds !== 'all' && orgIds.length === 0) return res.status(403).json({ error: 'Admin required' });
 
   const targetUid = (req.query?.uid as string)?.trim();
   if (!targetUid) return res.status(400).json({ error: 'User uid required' });
@@ -22,6 +20,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       scopedStoreIds?: string[];
       storePermissions?: { storeId: string; canEdit: boolean }[];
     };
+    if (orgIds !== 'all') {
+      if (!body.orgId || !orgIds.includes(body.orgId)) {
+        return res.status(403).json({ error: 'You can only manage people in your organization' });
+      }
+      const allowedStores = new Set((await prisma.store.findMany({
+        where: { organization_id: body.orgId },
+        select: { id: true },
+      })).map((store) => store.id));
+      const requestedIds = [
+        ...(body.scopedStoreIds || []),
+        ...(body.storePermissions || []).map((permission) => permission.storeId),
+      ];
+      if (requestedIds.some((storeId) => storeId && !allowedStores.has(storeId))) {
+        return res.status(403).json({ error: 'You can only manage stores in your organization' });
+      }
+    }
     if (body.isOrgAdmin !== undefined && body.orgId) {
       await prisma.organizationMember.upsert({
         where: { user_id_org_id: { user_id: targetUid, org_id: body.orgId } },

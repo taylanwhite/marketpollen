@@ -44,6 +44,7 @@ import storeProgressHandler from '../dist-handlers/store-progress.js';
 import calendarFeedPublicHandler from '../dist-handlers/calendar-feed.js';
 import storeCalendarFeedHandler from '../dist-handlers/stores/[id]/calendar-feed.js';
 import stripeWebhookHandler from '../dist-handlers/stripe-webhook.js';
+import platformHandler from '../dist-handlers/platform.js';
 import orgBillingHandler from '../dist-handlers/organizations/[id]/billing.js';
 import storeBillingHandler from '../dist-handlers/stores/[id]/billing.js';
 
@@ -125,6 +126,7 @@ app.post('/api/users/sync', route(usersSyncHandler));
 app.all('/api/users/:uid', withUid(usersUidHandler));
 app.post('/api/discovery/search', route(discoverySearchHandler));
 app.get('/api/discovered-places', route(discoveredPlacesHandler));
+app.get('/api/platform', route(platformHandler));
 app.get('/api/organizations', route(organizationsHandler));
 app.post('/api/organizations', route(organizationsHandler));
 app.all('/api/organizations/:id/products/:pid', withIdPid(orgProductIdHandler));

@@ -16,6 +16,7 @@ import { Calendar } from './pages/Calendar';
 import { Stores } from './pages/Stores';
 import { AdminPanel } from './pages/AdminPanel';
 import { OrgSettings } from './pages/OrgSettings';
+import { Platform } from './pages/Platform';
 import { StorePicker } from './pages/StorePicker';
 import { NoAccess } from './pages/NoAccess';
 import { Reports } from './pages/Reports';
@@ -107,6 +108,14 @@ function AppRoutes() {
               element={
                 <ProtectedRoute>
                   <AdminPanel />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/platform"
+              element={
+                <ProtectedRoute>
+                  <Platform />
                 </ProtectedRoute>
               }
             />

@@ -61,7 +61,7 @@ interface PendingInvite {
   status: 'pending' | 'accepted' | 'rejected';
 }
 
-export function AdminPanel() {
+export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   const { userId, userEmail } = useAuth();
   const { isAdmin, isOrgAdminFn, currentOrg } = usePermissions();
   const navigate = useNavigate();
@@ -482,9 +482,11 @@ export function AdminPanel() {
   return (
     <Box sx={{ width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: { xs: 2, sm: 3 } }}>
-        <Typography variant="h4" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
-          <AdminIcon sx={{ fontSize: { xs: '1.5rem', sm: '2rem' } }} /> User Management
-        </Typography>
+        {embedded ? <Box /> : (
+          <Typography variant="h4" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1, fontSize: { xs: '1.5rem', sm: '2rem' } }}>
+            <AdminIcon sx={{ fontSize: { xs: '1.5rem', sm: '2rem' } }} /> User Management
+          </Typography>
+        )}
         <Button variant="contained" startIcon={<SendIcon />} onClick={openInviteDialog}>
           Invite User
         </Button>

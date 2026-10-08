@@ -85,7 +85,9 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
 
   const storeOptional = location.pathname === '/select-store'
     || location.pathname === '/stores'
-    || location.pathname === '/org-settings';
+    || location.pathname === '/org-settings'
+    || location.pathname === '/platform'
+    || location.pathname === '/admin';
   if (!permissions.currentStoreId && !storeOptional) {
     return <Navigate to="/select-store" replace />;
   }

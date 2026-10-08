@@ -68,12 +68,16 @@ export function OrgSettings() {
   const [productSaving, setProductSaving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const [storeQuantity, setStoreQuantity] = useState(1);
-  const [priceInput, setPriceInput] = useState('65');
   const [billingBusy, setBillingBusy] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [orgChoices, setOrgChoices] = useState<Array<{ id: string; name: string }>>([]);
 
   const activeOrgId = selectedOrgId || currentOrg?.id || null;
+
+  useEffect(() => {
+    const requested = searchParams.get('org');
+    if (requested) setSelectedOrgId(requested);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!isAdmin()) {
@@ -126,9 +130,6 @@ export function OrgSettings() {
       setGoalValue(data.quarterlyGoal);
       if (data.billing?.minimumQuantity) {
         setStoreQuantity((current) => Math.max(current, data.billing!.minimumQuantity));
-      }
-      if (data.billing?.unitCents) {
-        setPriceInput((data.billing.unitCents / 100).toFixed(2).replace(/\.00$/, ''));
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load organization');
@@ -256,10 +257,7 @@ export function OrgSettings() {
 
       <Card sx={{ mb: 3 }}>
         <CardContent>
-          <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Organization name</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            This is the name your team sees. It only applies to this organization.
-          </Typography>
+          <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>Organization name</Typography>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
             <TextField
               label="Name"
@@ -311,7 +309,7 @@ export function OrgSettings() {
         </CardContent>
       </Card>
 
-      {(isAdmin() || orgData.billing?.enabled) && (
+      {orgData.billing?.enabled && (
         <Card sx={{ mb: 3 }}>
           <CardContent>
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Monthly bill</Typography>
@@ -319,62 +317,6 @@ export function OrgSettings() {
               Each store is {orgData.billing?.unitLabel || '$65.00'} a month.
             </Typography>
             {orgData.billing?.alert && <Alert severity="warning" sx={{ mb: 2 }}>{orgData.billing.alert}</Alert>}
-            {isAdmin() && orgData.billing?.status !== 'active' && (
-              <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', mb: 2 }}>
-                <TextField
-                  label="Price per store"
-                  type="number"
-                  size="small"
-                  value={priceInput}
-                  onChange={(event) => setPriceInput(event.target.value)}
-                  slotProps={{ htmlInput: { min: 1, step: '0.01' } }}
-                  sx={{ width: 160 }}
-                />
-                <Button
-                  variant="outlined"
-                  disabled={billingBusy}
-                  onClick={async () => {
-                    setBillingBusy(true);
-                    setError('');
-                    try {
-                      await api.post(`/organizations/${orgData.id}/billing`, {
-                        action: 'set_price',
-                        monthlyPrice: Number(priceInput),
-                      });
-                      setSuccess('Price saved.');
-                      await loadOrgData();
-                    } catch (err: any) {
-                      setError(err.message || 'Could not save the price');
-                    } finally {
-                      setBillingBusy(false);
-                    }
-                  }}
-                >
-                  Save price
-                </Button>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={!!orgData.billing?.enabled}
-                      disabled={billingBusy}
-                      onChange={async (event) => {
-                        setBillingBusy(true);
-                        setError('');
-                        try {
-                          await api.post(`/organizations/${orgData.id}/billing`, { action: 'enable', enabled: event.target.checked });
-                          await loadOrgData();
-                        } catch (err: any) {
-                          setError(err.message || 'Could not update billing');
-                        } finally {
-                          setBillingBusy(false);
-                        }
-                      }}
-                    />
-                  }
-                  label="Require a monthly bill before new stores can be added"
-                />
-              </Box>
-            )}
             {orgData.billing?.needsCheckout && (
               <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
                 <TextField
