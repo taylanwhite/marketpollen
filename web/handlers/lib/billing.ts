@@ -35,6 +35,10 @@ export type BillingQuote = {
   currentMonthlyCents: number;
   newMonthlyCents: number;
   periodEnd: string | null;
+  storeName?: string;
+  unitCents?: number;
+  orgName?: string;
+  card?: { brand: string; last4: string; expMonth: number; expYear: number } | null;
 };
 
 type OrgRecord = NonNullable<Awaited<ReturnType<typeof loadOrg>>>;
@@ -359,31 +363,56 @@ function checkoutQuote(storeName: string, unitCents: number): BillingQuote {
   };
 }
 
-async function defaultCardId(customerId: string | null): Promise<string | null> {
+async function cardFromPaymentMethod(paymentMethod: Stripe.PaymentMethod | string | null | undefined): Promise<{ id: string; brand: string; last4: string; expMonth: number; expYear: number } | null> {
+  if (!paymentMethod) return null;
+  const stripe = getStripe();
+  const method = typeof paymentMethod === 'string' ? await stripe.paymentMethods.retrieve(paymentMethod) : paymentMethod;
+  if (!method.card?.last4) return null;
+  return {
+    id: method.id,
+    brand: method.card.brand || 'card',
+    last4: method.card.last4,
+    expMonth: method.card.exp_month,
+    expYear: method.card.exp_year,
+  };
+}
+
+async function defaultCard(customerId: string | null): Promise<{ id: string; brand: string; last4: string; expMonth: number; expYear: number } | null> {
   if (!customerId || !process.env.STRIPE_SECRET_KEY) return null;
   const stripe = getStripe();
   const customer = await stripe.customers.retrieve(customerId, {
     expand: ['invoice_settings.default_payment_method'],
   });
   if (customer.deleted) return null;
-  const selected = customer.invoice_settings?.default_payment_method;
-  if (selected) return typeof selected === 'string' ? selected : selected.id;
+  const selected = await cardFromPaymentMethod(customer.invoice_settings?.default_payment_method);
+  if (selected) return selected;
   const cards = await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 });
-  return cards.data[0]?.id ?? null;
+  return cardFromPaymentMethod(cards.data[0]);
+}
+
+async function withInvoice(org: OrgRecord, quote: BillingQuote, storeName: string): Promise<BillingQuote> {
+  const card = await defaultCard(org.stripe_customer_id);
+  return {
+    ...quote,
+    storeName,
+    unitCents: unitOf(org),
+    orgName: org.name,
+    card: card ? { brand: card.brand, last4: card.last4, expMonth: card.expMonth, expYear: card.expYear } : null,
+  };
 }
 
 async function startSubscription(org: OrgRecord, quantity: number, idempotencyKey?: string): Promise<void> {
   if (!org.stripe_customer_id) {
     throw new BillingHttpError(402, 'Add a card before starting the subscription.');
   }
-  const cardId = await defaultCardId(org.stripe_customer_id);
-  if (!cardId) throw new BillingHttpError(402, 'Add a card before starting the subscription.');
+  const card = await defaultCard(org.stripe_customer_id);
+  if (!card) throw new BillingHttpError(402, 'Add a card before starting the subscription.');
   const stripe = getStripe();
   const subscription = await stripe.subscriptions.create(
     {
       customer: org.stripe_customer_id,
       items: [{ price: await priceForMonthlyAmount(unitOf(org)), quantity }],
-      default_payment_method: cardId,
+      default_payment_method: card.id,
       payment_behavior: 'error_if_incomplete',
       metadata: { organizationId: org.id },
     },
@@ -409,37 +438,35 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
   if (!org.billing_enabled) return null;
   const name = storeName.trim() || 'this store';
   if (isTrialActive(org)) {
-    return {
+    return withInvoice(org, {
       intent: 'add_store',
       needsCharge: false,
       needsCheckout: false,
       message: `Add ${name}. No cost until the trial ends. Then ${money(unitOf(org))} a month.`,
       dueTodayCents: 0,
       currentMonthlyCents: 0,
-      newMonthlyCents: 0,
+      newMonthlyCents: unitOf(org),
       periodEnd: org.trial_ends_at ? org.trial_ends_at.toISOString() : null,
-    };
+    }, name);
   }
   if (org.subscription_status !== 'active') {
     const unit = unitOf(org);
     const quantity = Math.max(1, seatCounts(org.stores).seatsInUse + 1);
-    const cardId = await defaultCardId(org.stripe_customer_id);
+    const card = await defaultCard(org.stripe_customer_id);
     const due = unit * quantity;
-    if (cardId) {
-      return {
+    if (card) {
+      return withInvoice(org, {
         intent: 'add_store',
         needsCharge: true,
         needsCheckout: false,
-        message: quantity === 1
-          ? `Add ${name}. Cost ${money(unit)} a month.`
-          : `Add ${name}. Cost ${money(unit)} a month. ${money(due)} due today.`,
+        message: `Add ${name}. Cost ${money(unit)} a month.`,
         dueTodayCents: due,
         currentMonthlyCents: 0,
         newMonthlyCents: due,
         periodEnd: null,
-      };
+      }, name);
     }
-    return checkoutQuote(name, unit);
+    return withInvoice(org, checkoutQuote(name, unit), name);
   }
   const blocked = requireActiveBill(org, name);
   if (blocked) return blocked;
@@ -447,7 +474,7 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
   const periodEnd = org.current_period_end;
   if (seatsInUse + 1 <= org.paid_quantity) {
     const current = org.paid_quantity * unitOf(org);
-    return {
+    return withInvoice(org, {
       intent: 'add_store',
       needsCharge: false,
       needsCheckout: false,
@@ -459,11 +486,11 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
         periodEnd,
       }),
       ...quoteBase(org, 0, current),
-    };
+    }, name);
   }
   const due = await previewIncrease(org, org.paid_quantity + 1);
   const next = (org.paid_quantity + 1) * unitOf(org);
-  return {
+  return withInvoice(org, {
     intent: 'add_store',
     needsCharge: true,
     needsCheckout: false,
@@ -475,7 +502,7 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
       periodEnd,
     }),
     ...quoteBase(org, due, next),
-  };
+  }, name);
 }
 
 export async function commitAddStoreCharge(input: {
@@ -484,12 +511,12 @@ export async function commitAddStoreCharge(input: {
   confirmCharge: boolean;
   expectedDueCents?: number;
   idempotencyKey?: string;
-}): Promise<{ charged: boolean }> {
+}): Promise<{ charged: boolean; quote: BillingQuote | null }> {
   const quote = await quoteAddStore(input.orgId, input.storeName);
   if (quote?.needsCheckout) {
     throw new BillingHttpError(402, quote.message, { needsCheckout: true, quote });
   }
-  if (!quote || !quote.needsCharge) return { charged: false };
+  if (!quote || !quote.needsCharge) return { charged: false, quote };
   if (!input.confirmCharge) {
     throw new BillingHttpError(409, quote.message, { quote });
   }
@@ -501,11 +528,11 @@ export async function commitAddStoreCharge(input: {
   if (org.subscription_status !== 'active') {
     const quantity = Math.max(1, Math.round(quote.newMonthlyCents / unitOf(org)));
     await startSubscription(org, quantity, input.idempotencyKey);
-    return { charged: true };
+    return { charged: true, quote };
   }
   await raisePaidQuantity(org, input.idempotencyKey);
   await alignRenewal(input.orgId);
-  return { charged: true };
+  return { charged: true, quote };
 }
 
 export async function noteStoreAdded(orgId: string | null, charged: boolean): Promise<void> {

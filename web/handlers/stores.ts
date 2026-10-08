@@ -4,6 +4,7 @@ import { getAuthUid } from './lib/auth.js';
 import { getAccessibleStores } from './lib/store-access.js';
 import { isOrgAdmin } from './lib/org-access.js';
 import { BillingHttpError, commitAddStoreCharge, noteStoreAdded } from './lib/billing.js';
+import { sendStoreInvoiceEmail } from './lib/payment-grace.js';
 import { STORE_UNIT_CENTS, pausedBanner, scheduledPauseBanner } from './lib/billing-copy.js';
 
 type StoreRow = {
@@ -139,7 +140,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           expectedDueCents: typeof body.expectedDueCents === 'number' ? body.expectedDueCents : undefined,
           idempotencyKey: body.idempotencyKey,
         })
-        : { charged: false };
+        : { charged: false, quote: null };
 
       const row = await prisma.store.create({
         data: {
@@ -167,7 +168,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         try {
           await noteStoreAdded(orgId, charge.charged);
         } catch (err) {
-          console.error('Store was created, but the next bill could not be updated', err);
+          console.error('Store was created, but the subscription could not be updated', err);
+        }
+        if (charge.quote) {
+          try {
+            await sendStoreInvoiceEmail(orgId, charge.quote);
+          } catch (err) {
+            console.error('Store was created, but the invoice email was not sent', err);
+          }
         }
       }
       return res.status(201).json(toStoreJson(row));

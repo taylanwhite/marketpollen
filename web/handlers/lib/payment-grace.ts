@@ -80,6 +80,78 @@ async function sendPaymentEmail(orgId: string, kind: 'start' | 'final'): Promise
 }
 
 /** Start the 7-day clock the first time a payment fails, and send the first reminder. */
+function money(cents: number): string {
+  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+}
+
+function brandName(brand: string): string {
+  const names: Record<string, string> = {
+    visa: 'Visa',
+    mastercard: 'Mastercard',
+    amex: 'American Express',
+    discover: 'Discover',
+  };
+  return names[brand] || brand.replace(/^\w/, (letter) => letter.toUpperCase());
+}
+
+export async function sendStoreInvoiceEmail(orgId: string, quote: {
+  storeName?: string;
+  orgName?: string;
+  unitCents?: number;
+  dueTodayCents: number;
+  currentMonthlyCents: number;
+  newMonthlyCents: number;
+  periodEnd: string | null;
+  card?: { brand: string; last4: string; expMonth: number; expYear: number } | null;
+}): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.error('RESEND_API_KEY is not configured; store invoice was not sent');
+    return;
+  }
+  const org = await prisma.organization.findUnique({
+    where: { id: orgId },
+    select: { name: true, created_by: true, stripe_customer_id: true },
+  });
+  if (!org) return;
+  const emails = await recipientEmails(orgId, org.created_by, org.stripe_customer_id);
+  if (emails.length === 0) return;
+
+  const storeName = quote.storeName || 'Store';
+  const orgName = quote.orgName || org.name;
+  const unit = money(quote.unitCents ?? 0);
+  const due = money(quote.dueTodayCents);
+  const lines = [
+    `Invoice`,
+    orgName,
+    new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+    ``,
+    storeName,
+    `Store subscription          ${unit} / month`,
+  ];
+  if ((quote.currentMonthlyCents ?? 0) > 0 && quote.newMonthlyCents !== quote.currentMonthlyCents) {
+    lines.push(`Current subscription       ${money(quote.currentMonthlyCents)} / month`);
+    lines.push(`Subscription after today   ${money(quote.newMonthlyCents)} / month`);
+  }
+  lines.push(``, `Due today                  ${due}`);
+  if (quote.dueTodayCents === 0) lines.push(`Nothing was charged.`);
+  if (quote.card) {
+    lines.push(
+      ``,
+      `Charged to`,
+      `${brandName(quote.card.brand)} ending in ${quote.card.last4}, expires ${quote.card.expMonth}/${quote.card.expYear}`,
+    );
+  }
+  const resend = new Resend(apiKey);
+  const { error } = await resend.emails.send({
+    from: fromEmail(),
+    to: emails,
+    subject: `Invoice for ${storeName}`,
+    text: `${lines.join('\n')}\n`,
+  });
+  if (error) console.error('Store invoice email failed', error);
+}
+
 export async function recordPaymentFailure(orgId: string): Promise<void> {
   const org = await prisma.organization.findUnique({ where: { id: orgId } });
   if (!org || org.subscription_status === 'active') return;

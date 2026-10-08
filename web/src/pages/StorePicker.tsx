@@ -550,7 +550,7 @@ export function StorePicker() {
         </CardContent>
       </Card>
 
-      <Dialog open={createOpen} onClose={creating ? undefined : () => setCreateOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={createOpen && !quote} onClose={creating ? undefined : () => setCreateOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Create store</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
