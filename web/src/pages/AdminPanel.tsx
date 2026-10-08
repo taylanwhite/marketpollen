@@ -762,7 +762,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                         Organization admin{orgChoices.find((org) => org.id === editOrgId) ? ` for ${orgChoices.find((org) => org.id === editOrgId)?.name}` : ''}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        They can rename this organization, change its products and goal, see every store in it, and open its bill. This does not apply to any other organization.
+                        They can rename this organization, change its products and goal, see every store in it, and open its subscription. This does not apply to any other organization.
                       </Typography>
                     </Box>
                   }

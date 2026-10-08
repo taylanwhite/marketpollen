@@ -17,7 +17,7 @@ export interface BillingQuote {
 }
 
 const TITLES: Record<BillingQuote['intent'], string> = {
-  add_store: 'Add this store?',
+  add_store: 'Add a store',
   resume_store: 'Turn this store back on?',
   pause_store: 'Pause this store?',
   keep_open: 'Keep this store open?',
@@ -61,7 +61,7 @@ export function BillingQuoteDialog({
         <Button onClick={onClose} disabled={loading}>Cancel</Button>
         {quote?.needsCheckout && onSetupBilling && (
           <Button variant="contained" onClick={onSetupBilling} disabled={loading}>
-            Set up the monthly bill
+            Add a card
           </Button>
         )}
         {quote && !quote.needsCheckout && (

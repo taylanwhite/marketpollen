@@ -85,7 +85,7 @@ function billLabel(org: PlatformOrg) {
   if (org.access?.mode === 'trial_ended') return 'Trial ended';
   if (org.access?.mode === 'grace') return `Payment due · ${days} day${days === 1 ? '' : 's'} left`;
   if (org.access?.mode === 'payment_locked') return 'Insufficient payment';
-  if (!org.billingEnabled) return 'Not billing';
+  if (!org.billingEnabled) return 'No subscription';
   if (org.subscriptionStatus === 'active') return `Paying ${money(org.monthlyPriceCents)} × ${org.paidQuantity}`;
   return 'Waiting for first payment';
 }
@@ -291,8 +291,8 @@ export function Platform() {
                     <TableCell>Organization</TableCell>
                     <TableCell>Stores</TableCell>
                     <TableCell>Price per store</TableCell>
-                    <TableCell>Require a bill</TableCell>
-                    <TableCell>Bill</TableCell>
+                    <TableCell>Require a subscription</TableCell>
+                    <TableCell>Subscription</TableCell>
                     <TableCell>Admins</TableCell>
                     <TableCell />
                   </TableRow>
@@ -366,15 +366,15 @@ export function Platform() {
               {error && <Alert severity="error">{error}</Alert>}
               {detail.billing?.alert && <Alert severity="warning">{detail.billing.alert}</Alert>}
               <Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Bill</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Subscription</Typography>
                 <Typography variant="body2" color="text.secondary">
                   {detail.billing?.enabled
                     ? detail.billing.status === 'active'
                       ? `${detail.billing.monthlyLabel} a month for ${detail.billing.paidQuantity} ${detail.billing.paidQuantity === 1 ? 'store' : 'stores'}, ${detail.billing.unitLabel} each.`
-                      : `Billing is required at ${detail.billing.unitLabel} a store. They have not paid yet.`
-                    : 'Billing is not required.'}
+                      : `A subscription is required at ${detail.billing.unitLabel} a store. They have not paid yet.`
+                    : 'No subscription is required.'}
                   {detail.billing?.status === 'active' && detail.billing.currentPeriodEnd && detail.billing.nextMonthlyLabel !== detail.billing.monthlyLabel && (
-                    <> Next bill on {new Date(detail.billing.currentPeriodEnd).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} is {detail.billing.nextMonthlyLabel}.</>
+                    <> The subscription renews on {new Date(detail.billing.currentPeriodEnd).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} at {detail.billing.nextMonthlyLabel}.</>
                   )}
                 </Typography>
               </Box>

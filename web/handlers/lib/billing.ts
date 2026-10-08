@@ -121,7 +121,7 @@ export async function setMonthlyPrice(orgId: string, cents: number): Promise<voi
   const org = await prisma.organization.findUnique({ where: { id: orgId } });
   if (!org) throw new BillingHttpError(404, 'Organization not found');
   if (org.subscription_status === 'active') {
-    throw new BillingHttpError(400, 'The monthly price is already set on an active bill.');
+    throw new BillingHttpError(400, 'The monthly price is already set on an active subscription.');
   }
   await prisma.organization.update({ where: { id: orgId }, data: { monthly_price_cents: cents } });
 }
@@ -214,7 +214,7 @@ function prorationDue(invoice: Stripe.Invoice): number {
 async function previewIncrease(org: OrgRecord, newQuantity: number): Promise<number> {
   if (newQuantity <= org.paid_quantity) return 0;
   if (!org.stripe_customer_id || !org.stripe_subscription_id || !org.stripe_subscription_item_id) {
-    throw new BillingHttpError(500, 'The monthly bill is missing a payment record. Start it again from organization settings.');
+    throw new BillingHttpError(500, 'The subscription is missing a payment record. Start it again from organization settings.');
   }
   const stripe = getStripe();
   const invoice = await stripe.invoices.createPreview({
@@ -307,7 +307,7 @@ async function alignRenewal(orgId: string): Promise<void> {
 
 async function raisePaidQuantity(org: OrgRecord, idempotencyKey?: string): Promise<void> {
   if (!org.stripe_subscription_id || !org.stripe_subscription_item_id) {
-    throw new BillingHttpError(500, 'The monthly bill is missing a payment record. Start it again from organization settings.');
+    throw new BillingHttpError(500, 'The subscription is missing a payment record. Start it again from organization settings.');
   }
   const stripe = getStripe();
   const nextPaid = org.paid_quantity + 1;
@@ -351,7 +351,7 @@ function checkoutQuote(storeName: string, unitCents: number): BillingQuote {
     intent: 'add_store',
     needsCharge: false,
     needsCheckout: true,
-    message: `${storeName} can't be added until this organization starts a monthly bill. Each store is ${money(unitCents)} a month.`,
+    message: `Add ${storeName}. Cost ${money(unitCents)} a month.`,
     dueTodayCents: 0,
     currentMonthlyCents: 0,
     newMonthlyCents: unitCents,
@@ -359,11 +359,44 @@ function checkoutQuote(storeName: string, unitCents: number): BillingQuote {
   };
 }
 
+async function defaultCardId(customerId: string | null): Promise<string | null> {
+  if (!customerId || !process.env.STRIPE_SECRET_KEY) return null;
+  const stripe = getStripe();
+  const customer = await stripe.customers.retrieve(customerId, {
+    expand: ['invoice_settings.default_payment_method'],
+  });
+  if (customer.deleted) return null;
+  const selected = customer.invoice_settings?.default_payment_method;
+  if (selected) return typeof selected === 'string' ? selected : selected.id;
+  const cards = await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 });
+  return cards.data[0]?.id ?? null;
+}
+
+async function startSubscription(org: OrgRecord, quantity: number, idempotencyKey?: string): Promise<void> {
+  if (!org.stripe_customer_id) {
+    throw new BillingHttpError(402, 'Add a card before starting the subscription.');
+  }
+  const cardId = await defaultCardId(org.stripe_customer_id);
+  if (!cardId) throw new BillingHttpError(402, 'Add a card before starting the subscription.');
+  const stripe = getStripe();
+  const subscription = await stripe.subscriptions.create(
+    {
+      customer: org.stripe_customer_id,
+      items: [{ price: await priceForMonthlyAmount(unitOf(org)), quantity }],
+      default_payment_method: cardId,
+      payment_behavior: 'error_if_incomplete',
+      metadata: { organizationId: org.id },
+    },
+    idempotencyKey ? { idempotencyKey } : undefined,
+  );
+  await persistSubscription(org.id, subscription);
+}
+
 function requireActiveBill(org: OrgRecord, storeName = 'This store'): BillingQuote | null {
   if (!org.billing_enabled) return null;
   if (isTrialActive(org)) return null;
   if (!stripeConfigured()) {
-    throw new BillingHttpError(500, 'Monthly billing is not configured yet. Add the Stripe key and the store price.');
+    throw new BillingHttpError(500, 'Subscriptions are not configured yet. Add the Stripe key and the store price.');
   }
   if (org.subscription_status !== 'active') return checkoutQuote(storeName, unitOf(org));
   return null;
@@ -380,12 +413,33 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
       intent: 'add_store',
       needsCharge: false,
       needsCheckout: false,
-      message: `${name} is included while the free trial is going. Nothing is charged today. After the trial, each store is ${money(unitOf(org))} a month.`,
+      message: `Add ${name}. No cost until the trial ends. Then ${money(unitOf(org))} a month.`,
       dueTodayCents: 0,
       currentMonthlyCents: 0,
       newMonthlyCents: 0,
       periodEnd: org.trial_ends_at ? org.trial_ends_at.toISOString() : null,
     };
+  }
+  if (org.subscription_status !== 'active') {
+    const unit = unitOf(org);
+    const quantity = Math.max(1, seatCounts(org.stores).seatsInUse + 1);
+    const cardId = await defaultCardId(org.stripe_customer_id);
+    const due = unit * quantity;
+    if (cardId) {
+      return {
+        intent: 'add_store',
+        needsCharge: true,
+        needsCheckout: false,
+        message: quantity === 1
+          ? `Add ${name}. Cost ${money(unit)} a month.`
+          : `Add ${name}. Cost ${money(unit)} a month. ${money(due)} due today.`,
+        dueTodayCents: due,
+        currentMonthlyCents: 0,
+        newMonthlyCents: due,
+        periodEnd: null,
+      };
+    }
+    return checkoutQuote(name, unit);
   }
   const blocked = requireActiveBill(org, name);
   if (blocked) return blocked;
@@ -444,6 +498,11 @@ export async function commitAddStoreCharge(input: {
   }
   const org = await loadOrg(input.orgId);
   if (!org) throw new BillingHttpError(404, 'Organization not found');
+  if (org.subscription_status !== 'active') {
+    const quantity = Math.max(1, Math.round(quote.newMonthlyCents / unitOf(org)));
+    await startSubscription(org, quantity, input.idempotencyKey);
+    return { charged: true };
+  }
   await raisePaidQuantity(org, input.idempotencyKey);
   await alignRenewal(input.orgId);
   return { charged: true };
@@ -475,12 +534,12 @@ export async function afterStoreDeleted(orgId: string | null, previousStatus: st
 export async function quotePauseStore(storeId: string): Promise<BillingQuote> {
   const store = await prisma.store.findUnique({ where: { id: storeId } });
   if (!store?.organization_id) {
-    throw new BillingHttpError(400, 'Pause is available once this organization is on a monthly bill.');
+    throw new BillingHttpError(400, 'Pause is available once this organization has a subscription.');
   }
   await settleDuePauses(store.organization_id);
   const org = await loadOrg(store.organization_id);
   if (!org?.billing_enabled || org.subscription_status !== 'active' || !org.current_period_end) {
-    throw new BillingHttpError(400, 'Pause is available once this organization is on a monthly bill.');
+    throw new BillingHttpError(400, 'Pause is available once this organization has a subscription.');
   }
   const fresh = org.stores.find((row) => row.id === storeId);
   if (!fresh || fresh.billing_status === 'paused') {
@@ -510,7 +569,7 @@ export async function pauseStore(storeId: string): Promise<BillingQuote> {
   const store = await prisma.store.findUnique({ where: { id: storeId } });
   if (!store?.organization_id) throw new BillingHttpError(404, 'Store not found');
   const org = await loadOrg(store.organization_id);
-  if (!org?.current_period_end) throw new BillingHttpError(400, 'Pause is available once this organization is on a monthly bill.');
+  if (!org?.current_period_end) throw new BillingHttpError(400, 'Pause is available once this organization has a subscription.');
   if (store.billing_status !== 'pause_scheduled') {
     await setRenewal(org.id, org.paid_quantity, scheduledRenewal(org) - 1);
     await prisma.store.update({
@@ -914,15 +973,15 @@ export async function updateBillingProfile(orgId: string, input: {
 
 export async function createCheckout(orgId: string, quantity: number): Promise<string> {
   if (!stripeConfigured()) {
-    throw new BillingHttpError(500, 'Monthly billing is not configured yet. Add the Stripe key and the store price.');
+    throw new BillingHttpError(500, 'Subscriptions are not configured yet. Add the Stripe key and the store price.');
   }
   const org = await loadOrg(orgId);
   if (!org) throw new BillingHttpError(404, 'Organization not found');
   if (!org.billing_enabled) {
-    throw new BillingHttpError(400, 'Turn on monthly billing for this organization before starting the bill.');
+    throw new BillingHttpError(400, 'Turn on the subscription for this organization before starting it.');
   }
   if (org.subscription_status === 'active') {
-    throw new BillingHttpError(400, 'This organization already has a monthly bill.');
+    throw new BillingHttpError(400, 'This organization already has a subscription.');
   }
   const minimum = Math.max(1, org.stores.filter((store) => !store.archived_at).length);
   if (!Number.isInteger(quantity) || quantity < minimum) {
@@ -958,7 +1017,7 @@ export async function createCheckout(orgId: string, quantity: number): Promise<s
 export async function createPortal(orgId: string): Promise<string> {
   const org = await prisma.organization.findUnique({ where: { id: orgId } });
   if (!org?.stripe_customer_id) {
-    throw new BillingHttpError(400, 'Save the billing contact before adding a card.');
+    throw new BillingHttpError(400, 'Save the account contact before adding a card.');
   }
   const stripe = getStripe();
   const session = await stripe.billingPortal.sessions.create({
@@ -972,7 +1031,7 @@ export async function setBillingEnabled(orgId: string, enabled: boolean): Promis
   const org = await prisma.organization.findUnique({ where: { id: orgId } });
   if (!org) throw new BillingHttpError(404, 'Organization not found');
   if (!enabled && org.subscription_status === 'active') {
-    throw new BillingHttpError(400, 'This organization is already on a monthly bill.');
+    throw new BillingHttpError(400, 'This organization already has a subscription.');
   }
   await prisma.organization.update({ where: { id: orgId }, data: { billing_enabled: enabled } });
 }
@@ -1076,7 +1135,7 @@ export async function applyStripeEvent(event: Stripe.Event): Promise<void> {
       ? 'A bank disputed a recent payment. Stores stay open. Update the card from organization settings if the payment needs to be made again.'
       : event.type === 'charge.refunded'
         ? 'A recent payment was refunded.'
-        : 'The card on file was flagged. Update the card before the next bill so new stores can keep being added.';
+        : 'The card on file was flagged. Update the card before the next subscription renewal so new stores can keep being added.';
     await setAlertForSubscription(subId, alert);
   }
 }

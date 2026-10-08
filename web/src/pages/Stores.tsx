@@ -648,7 +648,7 @@ export function Stores() {
             });
             window.location.href = result.url;
           } catch (err: any) {
-            setError(err.message || 'Could not start the monthly bill');
+            setError(err.message || 'Could not start the subscription');
             setQuoteLoading(false);
           }
         }}

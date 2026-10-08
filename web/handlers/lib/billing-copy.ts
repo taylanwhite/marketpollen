@@ -28,15 +28,12 @@ type QuoteInput = {
 
 export function addStoreMessage(input: QuoteInput): string {
   const name = input.storeName;
-  const from = money(input.currentMonthlyCents);
-  const to = money(input.newMonthlyCents);
-  if (input.dueTodayCents > 0) {
-    return `Adding ${name} raises the monthly total from ${from} to ${to}. You'll be charged ${money(input.dueTodayCents)} today for the days left in this month.`;
+  const added = input.newMonthlyCents - input.currentMonthlyCents;
+  if (added <= 0) return `Add ${name}. No additional cost.`;
+  if (input.dueTodayCents > 0 && input.dueTodayCents !== added) {
+    return `Add ${name}. Cost ${money(added)} a month. ${money(input.dueTodayCents)} due today.`;
   }
-  if (input.periodEnd) {
-    return `Adding ${name} doesn't change what you pay today. This organization is already paying for this store through ${longDate(input.periodEnd)}. The monthly total stays ${from}.`;
-  }
-  return `Adding ${name} doesn't change the monthly total. It stays ${from}.`;
+  return `Add ${name}. Cost ${money(added)} a month.`;
 }
 
 export function resumeStoreMessage(input: QuoteInput): string {
@@ -57,14 +54,14 @@ export function pauseStoreMessage(input: QuoteInput): string {
   const from = money(input.currentMonthlyCents);
   const to = money(input.newMonthlyCents);
   const date = input.periodEnd ? longDate(input.periodEnd) : 'the end of this month';
-  return `${name} stays open through ${date}, which is the end of the month already paid for. Nothing is charged today. On ${date} it locks, and it comes off the next bill. The monthly total goes from ${from} to ${to}. You can keep it open any time before ${date} and the bill stays the same.`;
+  return `${name} stays open through ${date}, which is the end of the month already paid for. Nothing is charged today. On ${date} it locks, and it comes off the next subscription. The monthly total goes from ${from} to ${to}. You can keep it open any time before ${date} and the subscription stays the same.`;
 }
 
 export function keepOpenMessage(input: QuoteInput & { otherPausesRemain: boolean }): string {
   const name = input.storeName;
   const current = money(input.currentMonthlyCents);
   if (input.otherPausesRemain && input.periodEnd) {
-    return `${name} stays open. Nothing is charged today. The monthly total stays ${current} until ${longDate(input.periodEnd)}. The next bill will be ${money(input.newMonthlyCents)}.`;
+    return `${name} stays open. Nothing is charged today. The monthly total stays ${current} until ${longDate(input.periodEnd)}. The next subscription charge will be ${money(input.newMonthlyCents)}.`;
   }
   return `${name} stays open. Nothing is charged today, and the monthly total stays ${current}.`;
 }
@@ -78,26 +75,26 @@ export function archiveStoreMessage(input: QuoteInput): string {
   const to = money(input.newMonthlyCents);
   const date = longDate(input.periodEnd);
   if (from === to) {
-    return `Archive ${name}? It will leave the store list now. Contacts, businesses, and past visits stay under Archived. You've already paid through ${date}, and the next bill stays ${to}.`;
+    return `Archive ${name}? It will leave the store list now. Contacts, businesses, and past visits stay under Archived. You've already paid through ${date}, and the next subscription charge stays ${to}.`;
   }
-  return `Archive ${name}? It will leave the store list now. Contacts, businesses, and past visits stay under Archived. You've already paid through ${date}, so nothing is refunded. It comes off the next bill, and the monthly total goes from ${from} to ${to}.`;
+  return `Archive ${name}? It will leave the store list now. Contacts, businesses, and past visits stay under Archived. You've already paid through ${date}, so nothing is refunded. It comes off the next subscription, and the monthly total goes from ${from} to ${to}.`;
 }
 
 export function deleteStoreMessage(input: QuoteInput): string {
   const name = input.storeName;
   const from = money(input.currentMonthlyCents);
   const to = money(input.newMonthlyCents);
-  const date = input.periodEnd ? longDate(input.periodEnd) : 'the next bill';
+  const date = input.periodEnd ? longDate(input.periodEnd) : 'the next subscription renewal';
   if (!input.periodEnd) {
     return `Remove ${name}? The store and everything in it are deleted now. This cannot be undone.`;
   }
-  return `Remove ${name}? The store and everything in it are deleted now. You've already paid through ${date}, so nothing is refunded. ${name} comes off the next bill, and the monthly total goes from ${from} to ${to}.`;
+  return `Remove ${name}? The store and everything in it are deleted now. You've already paid through ${date}, so nothing is refunded. ${name} comes off the next subscription, and the monthly total goes from ${from} to ${to}.`;
 }
 
 export function scheduledPauseBanner(storeName: string, pauseOn: Date, currentMonthlyCents: number, nextMonthlyCents: number): string {
-  return `${storeName} stays open through ${longDate(pauseOn)}. After that it locks, and it comes off the next bill. The monthly total goes from ${money(currentMonthlyCents)} to ${money(nextMonthlyCents)}.`;
+  return `${storeName} stays open through ${longDate(pauseOn)}. After that it locks, and it comes off the next subscription. The monthly total goes from ${money(currentMonthlyCents)} to ${money(nextMonthlyCents)}.`;
 }
 
 export function pausedBanner(storeName: string, unitCents = STORE_UNIT_CENTS): string {
-  return `${storeName} is paused. The last paid month has ended, so this store is locked and it isn't on the bill. You can look through contacts and past visits. Turning it back on adds ${money(unitCents)} a month.`;
+  return `${storeName} is paused. The last paid month has ended, so this store is locked and it isn't on the subscription. You can look through contacts and past visits. Turning it back on adds ${money(unitCents)} a month.`;
 }

@@ -210,7 +210,7 @@ export function StorePicker() {
       });
       window.location.href = result.url;
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Could not start the monthly bill');
+      setCreateError(err instanceof Error ? err.message : 'Could not start the subscription');
       setCreating(false);
     }
   };

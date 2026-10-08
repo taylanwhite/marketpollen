@@ -117,11 +117,11 @@ export function OrgSettings() {
       }
     };
     if (searchParams.get('billing') === 'success' && sessionId) {
-      setSuccess('Payment received. The monthly bill will show here once it is confirmed.');
+      setSuccess('Payment received. The subscription will show here once it is confirmed.');
       api.post<{ status: string | null }>(`/organizations/${activeOrgId}/billing`, { action: 'sync_checkout', sessionId })
         .then((billing) => setSuccess(billing.status === 'active'
-          ? 'Your monthly bill is active. You can add stores now.'
-          : 'Payment received. If the bill is not shown yet, refresh this page in a moment.'))
+          ? 'Your subscription is active. You can add stores now.'
+          : 'Payment received. If the subscription is not shown yet, refresh this page in a moment.'))
         .catch((err: Error) => setError(err.message || 'The payment is still processing. Refresh this page in a moment.'))
         .finally(() => {
           finish();
@@ -130,7 +130,7 @@ export function OrgSettings() {
       return;
     }
     if (searchParams.get('billing') === 'cancel') {
-      setError('The monthly bill was not started.');
+      setError('The subscription was not started.');
       finish();
     }
     loadOrgData();
@@ -281,7 +281,7 @@ export function OrgSettings() {
 
       <Tabs value={pageTab} onChange={(_event, value: 'settings' | 'billing') => setPageTab(value)} sx={{ mb: 3 }}>
         <Tab value="settings" label="Settings" />
-        <Tab value="billing" label="Billing" />
+        <Tab value="billing" label="Subscription" />
       </Tabs>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
@@ -378,7 +378,7 @@ export function OrgSettings() {
       {pageTab === 'billing' && <>
         <Card sx={{ mb: 3 }}>
           <CardContent>
-            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>Billing contact</Typography>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>Account contact</Typography>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
               <TextField label="Name" value={billingForm.name} onChange={(event) => setBillingForm({ ...billingForm, name: event.target.value })} />
               <TextField label="Email" value={billingForm.email} onChange={(event) => setBillingForm({ ...billingForm, email: event.target.value })} />
@@ -415,16 +415,16 @@ export function OrgSettings() {
                 setError('');
                 try {
                   await api.post(`/organizations/${orgData.id}/billing`, { action: 'update_profile', profile: billingForm });
-                  setSuccess('Billing contact saved.');
+                  setSuccess('Account contact saved.');
                   await loadOrgData();
                 } catch (err: any) {
-                  setError(err.message || 'Could not save the billing contact');
+                  setError(err.message || 'Could not save the account contact');
                 } finally {
                   setBillingBusy(false);
                 }
               }}
             >
-              Save billing contact
+              Save contact
             </Button>
           </CardContent>
         </Card>
@@ -457,7 +457,7 @@ export function OrgSettings() {
         </Card>
         <Card sx={{ mb: 3 }}>
           <CardContent>
-            <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Monthly bill</Typography>
+            <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Subscription</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               Each store is {orgData.billing?.unitLabel || '$65.00'} a month.
             </Typography>
@@ -468,7 +468,7 @@ export function OrgSettings() {
                   You're paying {orgData.billing.monthlyLabel} a month
                   {orgData.billing.paidQuantity ? ` for ${orgData.billing.paidQuantity} ${orgData.billing.paidQuantity === 1 ? 'store' : 'stores'}` : ''}.
                   {orgData.billing.currentPeriodEnd && orgData.billing.nextMonthlyLabel !== orgData.billing.monthlyLabel && (
-                    <> On {new Date(orgData.billing.currentPeriodEnd).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} the bill goes to {orgData.billing.nextMonthlyLabel}.</>
+                    <> On {new Date(orgData.billing.currentPeriodEnd).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} the subscription goes to {orgData.billing.nextMonthlyLabel}.</>
                   )}
                 </Typography>
               </Box>
@@ -507,7 +507,7 @@ export function OrgSettings() {
               );
             })}
             {orgData.billing?.enabled && orgData.billing.configured === false && (
-              <Alert severity="info" sx={{ mt: 2 }}>Monthly billing isn't configured yet.</Alert>
+              <Alert severity="info" sx={{ mt: 2 }}>Subscriptions aren't configured yet.</Alert>
             )}
           </CardContent>
         </Card>
