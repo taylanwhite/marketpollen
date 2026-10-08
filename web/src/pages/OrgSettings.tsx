@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { CampaignProduct } from '../types';
+import { AddressPicker } from '../components/AddressPicker';
 import {
   Box, Typography, TextField, Button, Card, CardContent, Paper,
   IconButton, Switch, FormControlLabel, Alert, CircularProgress,
@@ -383,7 +384,23 @@ export function OrgSettings() {
               <TextField label="Email" value={billingForm.email} onChange={(event) => setBillingForm({ ...billingForm, email: event.target.value })} />
               <TextField label="Phone" value={billingForm.phone} onChange={(event) => setBillingForm({ ...billingForm, phone: event.target.value })} />
               <TextField label="Country" value={billingForm.country} onChange={(event) => setBillingForm({ ...billingForm, country: event.target.value })} />
-              <TextField label="Address" value={billingForm.line1} onChange={(event) => setBillingForm({ ...billingForm, line1: event.target.value })} sx={{ gridColumn: { sm: '1 / -1' } }} />
+              <AddressPicker
+                label="Address"
+                value={{
+                  address: billingForm.line1,
+                  city: billingForm.city,
+                  state: billingForm.state,
+                  zipCode: billingForm.postalCode,
+                }}
+                onChange={(address) => setBillingForm({
+                  ...billingForm,
+                  line1: address.address,
+                  city: address.city,
+                  state: address.state,
+                  postalCode: address.zipCode,
+                })}
+                sx={{ gridColumn: { sm: '1 / -1' } }}
+              />
               <TextField label="Address line 2" value={billingForm.line2} onChange={(event) => setBillingForm({ ...billingForm, line2: event.target.value })} sx={{ gridColumn: { sm: '1 / -1' } }} />
               <TextField label="City" value={billingForm.city} onChange={(event) => setBillingForm({ ...billingForm, city: event.target.value })} />
               <TextField label="State" value={billingForm.state} onChange={(event) => setBillingForm({ ...billingForm, state: event.target.value })} />

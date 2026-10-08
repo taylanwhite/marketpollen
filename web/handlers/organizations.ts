@@ -1,6 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
+import { createDefaultCampaignProducts } from './lib/default-products.js';
 
 function toOrgJson(o: any) {
   return {
@@ -53,6 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await prisma.organizationMember.create({
       data: { user_id: uid, org_id: org.id, is_admin: true },
     });
+    await createDefaultCampaignProducts(org.id);
 
     return res.status(201).json(toOrgJson(org));
   }

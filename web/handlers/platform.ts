@@ -1,6 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
+import { createDefaultCampaignProducts } from './lib/default-products.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -13,6 +14,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     select: { is_global_admin: true },
   });
   if (!user?.is_global_admin) return res.status(403).json({ error: 'Admin required' });
+
+  const missingProducts = await prisma.organization.findMany({
+    where: { products: { none: {} } },
+    select: { id: true },
+  });
+  for (const org of missingProducts) {
+    await createDefaultCampaignProducts(org.id);
+  }
 
   const orgs = await prisma.organization.findMany({
     orderBy: { name: 'asc' },
