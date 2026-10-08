@@ -6,12 +6,19 @@ import { usePermissions } from '../contexts/PermissionContext';
 import { Store } from '../types';
 import { api } from '../api/client';
 import { BillingAccessGate } from '../components/BillingAccessGate';
+import { AddressPicker } from '../components/AddressPicker';
+import { BillingQuote, BillingQuoteDialog } from '../components/BillingQuoteDialog';
 import {
+  Alert,
   Box,
   Card,
   CardContent,
   Typography,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Grid,
   CircularProgress,
   LinearProgress,
@@ -20,6 +27,7 @@ import {
   InputLabel,
   MenuItem,
   Select,
+  TextField,
   keyframes,
 } from '@mui/material';
 import {
@@ -50,10 +58,22 @@ export function StorePicker() {
   const [loading, setLoading] = useState(true);
   const [progressMap, setProgressMap] = useState<Map<string, StoreProgress>>(new Map());
   const [selectedOrgId, setSelectedOrgId] = useState<string>(() => localStorage.getItem('selectedOrgId') || '');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
+  const [quote, setQuote] = useState<BillingQuote | null>(null);
+  const [form, setForm] = useState({ name: '', address: '', city: '', state: '', zipCode: '' });
 
   useEffect(() => {
     loadStores();
   }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('selectedOrgId') || '';
+    if (saved && permissions.organizations.some((org) => org.id === saved)) {
+      setSelectedOrgId(saved);
+    }
+  }, [permissions.currentStoreId, permissions.organizations]);
 
   const loadStores = async () => {
     try {
@@ -113,12 +133,94 @@ export function StorePicker() {
   };
 
   const showAllStores = visibleStores.length > 1 && (isAdmin() || isOrgAdminFn());
+  const canCreate = Boolean(activeOrgId) && (isAdmin() || !!activeOrg?.isAdmin) && !orgLocked;
+
+  const openCreate = () => {
+    setCreateError('');
+    setForm({ name: '', address: '', city: '', state: '', zipCode: '' });
+    setCreateOpen(true);
+  };
+
+  const finishCreate = (storeId: string) => {
+    localStorage.setItem('selectedStoreId', storeId);
+    if (activeOrgId) localStorage.setItem('selectedOrgId', activeOrgId);
+    window.location.assign('/dashboard');
+  };
+
+  const createStore = async (confirmCharge: boolean, dueTodayCents?: number) => {
+    const created = await api.post<Store>('/stores', {
+      name: form.name.trim(),
+      address: form.address.trim() || undefined,
+      city: form.city.trim() || undefined,
+      state: form.state.trim().toUpperCase() || undefined,
+      zipCode: form.zipCode.trim() || undefined,
+      organizationId: activeOrgId,
+      confirmCharge,
+      expectedDueCents: dueTodayCents,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    finishCreate(created.id);
+  };
+
+  const submitCreate = async () => {
+    if (!form.name.trim() || !activeOrgId) {
+      setCreateError('Store name is required');
+      return;
+    }
+    setCreating(true);
+    setCreateError('');
+    try {
+      const preview = await api.post<{ quote: BillingQuote | null }>(`/organizations/${activeOrgId}/billing`, {
+        action: 'preview',
+        intent: 'add_store',
+        storeName: form.name.trim(),
+      });
+      if (!preview.quote) {
+        await createStore(false);
+        return;
+      }
+      setQuote(preview.quote);
+      setCreating(false);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'Could not create the store');
+      setCreating(false);
+    }
+  };
+
+  const confirmCreate = async () => {
+    if (!quote) return;
+    setCreating(true);
+    setCreateError('');
+    try {
+      await createStore(quote.needsCharge, quote.dueTodayCents);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'Could not create the store');
+      setCreating(false);
+    }
+  };
+
+  const startCheckout = async () => {
+    if (!activeOrgId) return;
+    setCreating(true);
+    setCreateError('');
+    try {
+      const result = await api.post<{ url: string }>(`/organizations/${activeOrgId}/billing`, {
+        action: 'checkout',
+        quantity: Math.max(visibleStores.length + 1, 1),
+      });
+      window.location.href = result.url;
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'Could not start the monthly bill');
+      setCreating(false);
+    }
+  };
 
   const handleLogout = async () => {
     try {
       // Clear the remembered store so the next user on a shared device
       // doesn't auto-load this user's last selection.
       localStorage.removeItem('selectedStoreId');
+      localStorage.removeItem('selectedOrgId');
       await signOut();
       navigate('/login');
     } catch (error) {
@@ -151,7 +253,7 @@ export function StorePicker() {
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
               <CircularProgress />
             </Box>
-          ) : stores.length === 0 ? (
+          ) : stores.length === 0 && organizations.length === 0 ? (
             <Box sx={{ textAlign: 'center' }}>
               <Box
                 component="img"
@@ -283,6 +385,13 @@ export function StorePicker() {
                     <Typography color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
                       No stores in {activeOrg?.name || 'this organization'} yet.
                     </Typography>
+                    {canCreate && (
+                      <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+                          Create store
+                        </Button>
+                      </Box>
+                    )}
                   </Grid>
                 )}
                 {visibleStores.map((store) => (
@@ -422,7 +531,12 @@ export function StorePicker() {
                 ))}
               </Grid>
 
-              <Box sx={{ textAlign: 'center' }}>
+              <Box sx={{ textAlign: 'center', display: 'flex', justifyContent: 'center', gap: 1 }}>
+                {canCreate && visibleStores.length > 0 && (
+                  <Button variant="text" startIcon={<AddIcon />} onClick={openCreate}>
+                    Create store
+                  </Button>
+                )}
                 <Button
                   variant="text"
                   startIcon={<LogoutIcon />}
@@ -435,6 +549,50 @@ export function StorePicker() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={createOpen} onClose={creating ? undefined : () => setCreateOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Create store</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            This store will be added to {activeOrg?.name || 'this organization'}.
+          </Typography>
+          {createError && <Alert severity="error" sx={{ mb: 2 }}>{createError}</Alert>}
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 12 }}>
+              <TextField
+                label="Store name"
+                value={form.name}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                fullWidth
+                autoFocus
+                required
+              />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <AddressPicker
+                label="Address"
+                value={form}
+                onChange={(address) => setForm({ ...form, ...address })}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setCreateOpen(false)} disabled={creating}>Cancel</Button>
+          <Button variant="contained" onClick={submitCreate} disabled={creating || !form.name.trim()}>
+            {creating && !quote ? <CircularProgress size={18} color="inherit" /> : 'Continue'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <BillingQuoteDialog
+        quote={quote}
+        open={!!quote}
+        loading={creating}
+        onClose={() => { if (!creating) { setQuote(null); setCreating(false); } }}
+        onConfirm={confirmCreate}
+        onSetupBilling={startCheckout}
+      />
     </Box>
   );
 }

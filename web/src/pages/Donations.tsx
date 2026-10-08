@@ -193,9 +193,12 @@ export function Donations() {
         setBusinesses(new Map());
         return;
       }
+      const requestedStoreInOrg = !!storesParam
+        && storesParam !== 'all'
+        && (!currentOrg || currentOrg.stores.some((store) => store.id === storesParam));
       const scopeQuery = storesParam === 'all'
         ? (currentOrg?.id ? `orgId=${encodeURIComponent(currentOrg.id)}` : 'allStores=1')
-        : storesParam
+        : requestedStoreInOrg
           ? `storeId=${encodeURIComponent(storesParam)}`
           : `storeId=${permissions.currentStoreId}`;
 

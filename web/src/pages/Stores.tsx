@@ -86,6 +86,10 @@ export function Stores() {
   const canManage = isAdmin() || isOrgAdminFn();
 
   useEffect(() => {
+    if (currentOrg?.id) setOrganizationId(currentOrg.id);
+  }, [currentOrg?.id]);
+
+  useEffect(() => {
     if (!canManage) {
       navigate('/dashboard');
       return;
@@ -93,7 +97,10 @@ export function Stores() {
     loadStores();
   }, [canManage, navigate]);
 
-  const listedStores = storeTab === 'archived' ? archivedStores : stores;
+  const inCurrentOrg = (store: Store) => !currentOrg || store.organizationId === currentOrg.id;
+  const openInOrg = stores.filter(inCurrentOrg);
+  const archivedInOrg = archivedStores.filter(inCurrentOrg);
+  const listedStores = storeTab === 'archived' ? archivedInOrg : openInOrg;
 
   useEffect(() => {
     const source = listedStores;
@@ -349,8 +356,8 @@ export function Stores() {
         }}
         sx={{ mb: 2 }}
       >
-        <Tab value="open" label={`Stores (${stores.length})`} />
-        <Tab value="archived" label={`Archived (${archivedStores.length})`} />
+        <Tab value="open" label={`Stores (${openInOrg.length})`} />
+        <Tab value="archived" label={`Archived (${archivedInOrg.length})`} />
       </Tabs>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
@@ -625,7 +632,26 @@ export function Stores() {
         loading={quoteLoading}
         onClose={() => { if (!quoteLoading) { setQuote(null); setPendingAction(null); } }}
         onConfirm={confirmQuote}
-        onSetupBilling={() => navigate('/org-settings')}
+        onSetupBilling={async () => {
+          if (!targetOrgId) {
+            navigate('/org-settings');
+            return;
+          }
+          setQuoteLoading(true);
+          setError('');
+          try {
+            const existing = stores.filter((store) => store.organizationId === targetOrgId).length;
+            const quantity = Math.max(1, pendingAction?.type === 'create' ? existing + 1 : existing);
+            const result = await api.post<{ url: string }>(`/organizations/${targetOrgId}/billing`, {
+              action: 'checkout',
+              quantity,
+            });
+            window.location.href = result.url;
+          } catch (err: any) {
+            setError(err.message || 'Could not start the monthly bill');
+            setQuoteLoading(false);
+          }
+        }}
       />
     </Box>
   );

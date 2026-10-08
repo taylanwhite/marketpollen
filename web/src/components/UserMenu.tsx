@@ -1,4 +1,4 @@
-import { useState, MouseEvent } from 'react';
+import { useMemo, useState, MouseEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useClerk } from '@clerk/react';
 import { clearLocalUserData } from '../utils/clearLocalData';
@@ -14,6 +14,12 @@ import {
   Avatar,
   Typography,
   Box,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  TextField,
+  List,
+  ListItemButton,
 } from '@mui/material';
 import {
   SwapHoriz as SwapIcon,
@@ -23,6 +29,7 @@ import {
   Logout as LogoutIcon,
   Person as PersonIcon,
   Insights as ReportsIcon,
+  Business as OrgIcon,
 } from '@mui/icons-material';
 import { Store } from '../types';
 
@@ -35,10 +42,19 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { signOut } = useClerk();
-  const { isAdmin, isOrgAdminFn } = usePermissions();
+  const { permissions, currentOrg, setCurrentStore, isAdmin, isOrgAdminFn } = usePermissions();
   const { pendingCount, sync } = useOffline();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
+  const [orgDialogOpen, setOrgDialogOpen] = useState(false);
+  const [orgSearch, setOrgSearch] = useState('');
   const open = Boolean(anchorEl);
+  const organizations = useMemo(
+    () => [...permissions.organizations].sort((a, b) => a.name.localeCompare(b.name)),
+    [permissions.organizations],
+  );
+  const visibleOrgs = orgSearch.trim()
+    ? organizations.filter((org) => org.name.toLowerCase().includes(orgSearch.trim().toLowerCase()))
+    : organizations;
 
   const handleOpen = (event: MouseEvent<HTMLElement>) => setAnchorEl(event.currentTarget);
   const handleClose = () => setAnchorEl(null);
@@ -66,6 +82,7 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
 
     try {
       localStorage.removeItem('selectedStoreId');
+      localStorage.removeItem('selectedOrgId');
       // Drop the offline outbox + API response cache so the next user on a
       // shared device doesn't see this user's data.
       await clearLocalUserData();
@@ -74,6 +91,23 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
     } catch (error) {
       console.error('Error logging out:', error);
     }
+  };
+
+  const switchOrganization = (orgId: string) => {
+    const org = organizations.find((item) => item.id === orgId);
+    if (!org) return;
+    localStorage.setItem('selectedOrgId', org.id);
+    setOrgDialogOpen(false);
+    setOrgSearch('');
+    handleClose();
+    if (org.stores.length === 1) {
+      setCurrentStore(org.stores[0].id);
+      if (location.pathname === '/select-store') navigate('/dashboard');
+      else if (location.pathname === '/org-settings') navigate(`/org-settings?org=${org.id}`);
+      return;
+    }
+    setCurrentStore(null);
+    navigate('/select-store');
   };
 
   const isActive = (path: string) => location.pathname === path;
@@ -113,25 +147,36 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
           },
         }}
       >
-        {currentStore && (
-          <Box sx={{ px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', textTransform: 'uppercase', letterSpacing: 1 }}
-            >
-              Current store
-            </Typography>
-            <Typography
-              variant="body2"
-              sx={{
-                fontWeight: 600,
-                lineHeight: 1.3,
-                wordBreak: 'break-word',
-              }}
-            >
-              {currentStore.name}
-            </Typography>
+        {(currentOrg || currentStore) && (
+          <Box sx={{ px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
+            {currentOrg && (
+              <Box>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: 'block', textTransform: 'uppercase', letterSpacing: 1 }}
+                >
+                  Current organization
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.3, wordBreak: 'break-word' }}>
+                  {currentOrg.name}
+                </Typography>
+              </Box>
+            )}
+            {currentStore && (
+              <Box>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: 'block', textTransform: 'uppercase', letterSpacing: 1 }}
+                >
+                  Current store
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.3, wordBreak: 'break-word' }}>
+                  {currentStore.name}
+                </Typography>
+              </Box>
+            )}
           </Box>
         )}
 
@@ -143,17 +188,26 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
         </MenuItem>
         <Divider />
 
-        {hasMultipleStores && (
-          <>
-            <MenuItem onClick={() => go('/select-store')} selected={isActive('/select-store')}>
-              <ListItemIcon>
-                <SwapIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Change store</ListItemText>
-            </MenuItem>
-            <Divider />
-          </>
+        {organizations.length > 1 && (
+          <MenuItem onClick={() => { handleClose(); setOrgDialogOpen(true); }}>
+            <ListItemIcon>
+              <OrgIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Change organization</ListItemText>
+          </MenuItem>
         )}
+        {(hasMultipleStores || (currentOrg?.stores.length ?? 0) > 1) && (
+          <MenuItem onClick={() => {
+            if (currentOrg) localStorage.setItem('selectedOrgId', currentOrg.id);
+            go('/select-store');
+          }} selected={isActive('/select-store')}>
+            <ListItemIcon>
+              <SwapIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Change store</ListItemText>
+          </MenuItem>
+        )}
+        {(organizations.length > 1 || hasMultipleStores || (currentOrg?.stores.length ?? 0) > 1) && <Divider />}
 
         {showAdmin && (
           <Box sx={{ pt: 0.5 }}>
@@ -206,6 +260,40 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
           <ListItemText>Logout</ListItemText>
         </MenuItem>
       </Menu>
+
+      <Dialog open={orgDialogOpen} onClose={() => setOrgDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Change organization</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Stores, contacts, and reports follow the organization you pick.
+          </Typography>
+          {organizations.length > 6 && (
+            <TextField
+              size="small"
+              fullWidth
+              autoFocus
+              placeholder="Search organizations"
+              value={orgSearch}
+              onChange={(event) => setOrgSearch(event.target.value)}
+              sx={{ mb: 1 }}
+            />
+          )}
+          <List disablePadding>
+            {visibleOrgs.map((org) => (
+              <ListItemButton
+                key={org.id}
+                selected={org.id === currentOrg?.id}
+                onClick={() => switchOrganization(org.id)}
+              >
+                <ListItemText
+                  primary={org.name}
+                  secondary={org.stores.length === 0 ? 'No stores yet' : `${org.stores.length} store${org.stores.length === 1 ? '' : 's'}`}
+                />
+              </ListItemButton>
+            ))}
+          </List>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

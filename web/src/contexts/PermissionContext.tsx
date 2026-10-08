@@ -15,7 +15,7 @@ interface UserPermissions {
 
 interface PermissionContextType {
   permissions: UserPermissions;
-  setCurrentStore: (storeId: string) => void;
+  setCurrentStore: (storeId: string | null) => void;
   canView: (storeId?: string) => boolean;
   canEdit: (storeId?: string) => boolean;
   isAdmin: () => boolean;
@@ -163,8 +163,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     }
   };
 
-  const setCurrentStore = (storeId: string) => {
-    localStorage.setItem('selectedStoreId', storeId);
+  const setCurrentStore = (storeId: string | null) => {
+    if (storeId) localStorage.setItem('selectedStoreId', storeId);
+    else localStorage.removeItem('selectedStoreId');
     setPermissions(prev => ({
       ...prev,
       currentStoreId: storeId
@@ -201,11 +202,14 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     || permissions.organizations.some((org) => org.isAdmin && org.stores.length > 0);
 
   const currentOrg: Organization | null = (() => {
-    if (permissions.organizations.length === 0) return null;
-    if (!permissions.currentStoreId) return permissions.organizations[0] || null;
-    return permissions.organizations.find(o =>
-      o.stores.some(s => s.id === permissions.currentStoreId)
-    ) || permissions.organizations[0] || null;
+    const orgs = permissions.organizations;
+    if (orgs.length === 0) return null;
+    const byStore = permissions.currentStoreId
+      ? orgs.find((org) => org.stores.some((store) => store.id === permissions.currentStoreId))
+      : null;
+    if (byStore) return byStore;
+    const savedOrgId = typeof window !== 'undefined' ? localStorage.getItem('selectedOrgId') : null;
+    return orgs.find((org) => org.id === savedOrgId) || orgs[0] || null;
   })();
 
   return (
