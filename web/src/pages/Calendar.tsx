@@ -25,6 +25,11 @@ import {
   MenuItem,
   Alert,
   Tooltip,
+  Tabs,
+  Tab,
+  ToggleButton,
+  ToggleButtonGroup,
+  Collapse,
 } from '@mui/material';
 import {
   CalendarMonth as CalendarIcon,
@@ -54,6 +59,18 @@ import { PullToRefreshIndicator } from '../components/PullToRefreshIndicator';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { useTheme } from '@mui/material/styles';
 import { useMediaQuery } from '@mui/material';
+
+const DAY_LIST_PREVIEW = 6;
+const PLAN_TAB_KEY = 'planTab';
+
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function parseDateKey(key: string): Date {
+  const [year, month, day] = key.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
 
 interface CalendarEventDisplay {
   id: string;
@@ -116,7 +133,15 @@ export function Calendar() {
   const [editingEvent, setEditingEvent] = useState<CalendarEventDisplay | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [planDate, setPlanDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [planDate, setPlanDate] = useState(() => localDateKey(new Date()));
+  const [planTab, setPlanTab] = useState<'day' | 'calendar'>(() => {
+    const fromUrl = searchParams.get('tab');
+    if (fromUrl === 'day' || fromUrl === 'calendar') return fromUrl;
+    return localStorage.getItem(PLAN_TAB_KEY) === 'calendar' ? 'calendar' : 'day';
+  });
+  const [dayView, setDayView] = useState<'people' | 'route'>('people');
+  const [showAllPeople, setShowAllPeople] = useState(false);
+  const [openDraft, setOpenDraft] = useState<string | null>(null);
   const [dayPlan, setDayPlan] = useState<DayPlannerData | null>(null);
   const [dayPlanLoading, setDayPlanLoading] = useState(false);
   const [emailTarget, setEmailTarget] = useState<{ contactId: string; contactName: string } | null>(null);
@@ -426,6 +451,19 @@ export function Calendar() {
     setCurrentDate(newDate);
   };
 
+  const changePlanTab = (tab: 'day' | 'calendar') => {
+    setPlanTab(tab);
+    localStorage.setItem(PLAN_TAB_KEY, tab);
+  };
+
+  const shiftPlanDate = (days: number) => {
+    const next = parseDateKey(planDate);
+    next.setDate(next.getDate() + days);
+    setShowAllPeople(false);
+    setOpenDraft(null);
+    setPlanDate(localDateKey(next));
+  };
+
   const goToToday = () => {
     setCurrentDate(new Date());
     setSelectedDate(null);
@@ -683,24 +721,29 @@ export function Calendar() {
         refreshing={pullState.refreshing}
         willTrigger={pullState.willTrigger}
       />
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CalendarIcon /> Calendar
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 2 }}>
+        <Typography variant="h4" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1, fontSize: { xs: '1.6rem', sm: '2.125rem' } }}>
+          <CalendarIcon /> Plan
         </Typography>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          <Button
-            variant="outlined"
-            startIcon={<SyncIcon />}
-            onClick={() => setSyncOpen(true)}
-          >
-            Google Calendar
-          </Button>
+        <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+          {isMobile ? (
+            <Tooltip title="Google Calendar">
+              <IconButton onClick={() => setSyncOpen(true)} aria-label="Google Calendar" sx={{ width: 44, height: 44 }}>
+                <SyncIcon />
+              </IconButton>
+            </Tooltip>
+          ) : (
+            <Button variant="outlined" startIcon={<SyncIcon />} onClick={() => setSyncOpen(true)} sx={{ minHeight: 44 }}>
+              Google Calendar
+            </Button>
+          )}
           <Button
             variant="contained"
             startIcon={<AddIcon />}
             onClick={() => openCreateEventDialog()}
+            sx={{ minHeight: 44, flexShrink: 0 }}
           >
-            New Event
+            {isMobile ? 'Event' : 'New Event'}
           </Button>
         </Box>
       </Box>
@@ -708,344 +751,303 @@ export function Calendar() {
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
 
-      {/* Today summary banner */}
-      <Paper
-        sx={{
-          p: { xs: 1.5, sm: 2 },
-          mb: 2,
-          background: 'linear-gradient(135deg, rgba(245, 200, 66, 0.15) 0%, rgba(245, 200, 66, 0.05) 100%)',
-          border: '1px solid rgba(245, 200, 66, 0.4)',
-          borderRadius: 2,
-        }}
+      <Tabs
+        value={planTab}
+        onChange={(_event, value: 'day' | 'calendar') => changePlanTab(value)}
+        variant="fullWidth"
+        sx={{ mb: 2, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minHeight: 48, fontWeight: 600 } }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1.5, sm: 3 }, flexWrap: 'wrap' }}>
-          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
-            <Typography variant="h4" sx={{ fontWeight: 800, color: '#2d2d2d', lineHeight: 1 }}>
-              {todaySummary.eventsToday}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {todaySummary.eventsToday === 1 ? 'event today' : 'events today'}
-            </Typography>
-          </Box>
-          <Box sx={{ width: 1, height: 24, bgcolor: 'rgba(0,0,0,0.1)' }} />
-          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
-            <Typography variant="h5" sx={{ fontWeight: 700, color: '#2d2d2d', lineHeight: 1 }}>
-              {todaySummary.followUpsToday}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              follow-up{todaySummary.followUpsToday === 1 ? '' : 's'} due
-            </Typography>
-          </Box>
-          <Box sx={{ width: 1, height: 24, bgcolor: 'rgba(0,0,0,0.1)' }} />
-          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
-            <Typography variant="h5" sx={{ fontWeight: 700, color: '#2d2d2d', lineHeight: 1 }}>
-              {todaySummary.visitsLastWeek}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              visit{todaySummary.visitsLastWeek === 1 ? '' : 's'} this week
-            </Typography>
-          </Box>
-        </Box>
-      </Paper>
+        <Tab value="day" label={dayPlan ? `Day (${dayPlan.followUpTasks.length + dayPlan.optimizedRoute.length})` : 'Day'} />
+        <Tab value="calendar" label="Calendar" />
+      </Tabs>
 
-      {/* Recent visits — horizontally scrollable on mobile */}
-      {recentVisits.length > 0 && (
-        <Box sx={{ mb: 2 }}>
-          <Typography
-            variant="overline"
-            sx={{ color: 'text.secondary', fontWeight: 700, letterSpacing: 1, ml: 0.5 }}
-          >
-            Recent visits
-          </Typography>
-          <Box
-            sx={{
-              display: 'flex',
-              gap: 1.25,
-              overflowX: 'auto',
-              pb: 1,
-              mx: { xs: -1, sm: 0 },
-              px: { xs: 1, sm: 0 },
-              scrollSnapType: 'x mandatory',
-              WebkitOverflowScrolling: 'touch',
-              '&::-webkit-scrollbar': { display: 'none' },
-              scrollbarWidth: 'none',
-            }}
-          >
-            {recentVisits.map((visit, i) => {
-              const contact = contacts.get(visit.contactId);
-              const phone = contact?.phone;
-              return (
-                <Card
-                  key={`${visit.contactId}-${i}`}
-                  variant="outlined"
-                  sx={{
-                    flex: '0 0 auto',
-                    width: { xs: 220, sm: 260 },
-                    scrollSnapAlign: 'start',
-                    cursor: contact ? 'pointer' : 'default',
-                    transition: 'transform 0.15s, box-shadow 0.15s',
-                    '&:hover': contact ? { transform: 'translateY(-2px)', boxShadow: 2 } : undefined,
-                  }}
-                  onClick={() => {
-                    if (contact) navigate(`/dashboard?contact=${contact.id}`);
-                  }}
-                >
-                  <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                    <Typography
-                      variant="subtitle2"
-                      sx={{
-                        fontWeight: 700,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {visit.contactName}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                      {formatTimeAgo(visit.date)}
-                      {visit.type && ` · ${visit.type}`}
-                    </Typography>
-                    {visit.note && (
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{
-                          mt: 0.5,
-                          overflow: 'hidden',
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                          fontSize: '0.8rem',
-                          lineHeight: 1.3,
-                        }}
-                      >
-                        {visit.note}
-                      </Typography>
-                    )}
-                    {phone && (
-                      <Box sx={{ mt: 0.75, display: 'flex', gap: 0.5 }}>
-                        <Button
-                          size="small"
-                          component="a"
-                          href={`tel:${phone}`}
-                          onClick={(e) => e.stopPropagation()}
-                          startIcon={<PhoneIcon sx={{ fontSize: 14 }} />}
-                          sx={{ textTransform: 'none', minWidth: 0, py: 0.25, fontSize: '0.75rem' }}
-                        >
-                          Call
-                        </Button>
-                      </Box>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </Box>
-        </Box>
-      )}
+      {planTab === 'day' && permissions.currentStoreId && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
+          <Paper sx={{ p: { xs: 1, sm: 1.5 } }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <IconButton aria-label="Previous day" onClick={() => shiftPlanDate(-1)} sx={{ width: 44, height: 44, flexShrink: 0 }}>
+                <ChevronLeftIcon />
+              </IconButton>
+              <Box sx={{ flex: 1, minWidth: 0, textAlign: 'center' }}>
+                <Typography sx={{ fontWeight: 700 }} noWrap>
+                  {planDate === localDateKey(new Date()) ? 'Today' : parseDateKey(planDate).toLocaleDateString('en-US', { weekday: 'long' })}
+                  {', '}
+                  {parseDateKey(planDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </Typography>
+                {dayPlan && (
+                  <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                    {dayPlan.followUpTasks.length} to see · {dayPlan.optimizedRoute.length} on the route
+                  </Typography>
+                )}
+              </Box>
+              <IconButton aria-label="Next day" onClick={() => shiftPlanDate(1)} sx={{ width: 44, height: 44, flexShrink: 0 }}>
+                <ChevronRightIcon />
+              </IconButton>
+            </Box>
+            {planDate !== localDateKey(new Date()) && (
+              <Button fullWidth onClick={() => setPlanDate(localDateKey(new Date()))} sx={{ mt: 0.5, minHeight: 44 }}>
+                Back to today
+              </Button>
+            )}
+          </Paper>
 
-      {/* Day Planner (prioritized for field marketers) */}
-      {permissions.currentStoreId && (
-        <Paper sx={{ p: 2, mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
-            <PlannerIcon color="action" />
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              Day planner
-            </Typography>
-            <TextField
-              size="small"
-              type="date"
-              label="Plan for"
-              value={planDate}
-              onChange={(e) => setPlanDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-              sx={{ width: 160 }}
-            />
-            <Button
-              variant="outlined"
-              onClick={loadDayPlan}
-              disabled={dayPlanLoading}
-              startIcon={dayPlanLoading ? <CircularProgress size={16} /> : undefined}
-              sx={{ minHeight: 44, flexShrink: 0 }}
-            >
-              {dayPlanLoading ? 'Loading…' : 'Refresh'}
-            </Button>
-          </Box>
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            value={dayView}
+            onChange={(_event, value: 'people' | 'route' | null) => { if (value) setDayView(value); }}
+            sx={{ '& .MuiToggleButton-root': { minHeight: 44, textTransform: 'none', fontWeight: 600 } }}
+          >
+            <ToggleButton value="people">Who to see{dayPlan ? ` (${dayPlan.followUpTasks.length})` : ''}</ToggleButton>
+            <ToggleButton value="route">Driving order{dayPlan ? ` (${dayPlan.optimizedRoute.length})` : ''}</ToggleButton>
+          </ToggleButtonGroup>
+
           {dayPlanLoading && !dayPlan ? (
-            <Box sx={{ py: 3, display: 'flex', justifyContent: 'center' }}>
+            <Box sx={{ py: 4, display: 'flex', justifyContent: 'center' }}>
               <CircularProgress />
             </Box>
-          ) : dayPlan ? (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {/* Suggested follow-ups */}
-              <Box>
-                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, fontWeight: 600 }}>
-                  Suggested follow-ups
-                </Typography>
-                {dayPlan.followUpTasks.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    No follow-ups scheduled for this day.
-                  </Typography>
-                ) : (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {dayPlan.followUpTasks.map((task) => (
-                      <Card key={task.contactId} variant="outlined" sx={{ overflow: 'visible' }}>
-                        <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
-                          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, flexWrap: 'wrap' }}>
-                            {task.method === 'email' && <EmailIcon fontSize="small" color="primary" />}
-                            {task.method === 'call' && <PhoneIcon fontSize="small" color="success" />}
-                            {task.method === 'meeting' && <MeetingIcon fontSize="small" color="warning" />}
-                            {task.method === 'text' && <MessageIcon fontSize="small" color="info" />}
-                            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                              {task.method === 'email' ? 'Email' : task.method === 'call' ? 'Call' : task.method === 'meeting' ? 'Meeting' : task.method === 'text' ? 'Text' : 'Follow up'}{' '}
-                              {task.contactName}
-                            </Typography>
-                          </Box>
-                          {task.eventTitle && (
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                              {task.eventTitle}
+          ) : dayPlan && dayView === 'people' ? (
+            dayPlan.followUpTasks.length === 0 ? (
+              <Paper sx={{ p: 3, textAlign: 'center' }}>
+                <Typography color="text.secondary">No follow-ups on this day.</Typography>
+              </Paper>
+            ) : (
+              <Paper sx={{ overflow: 'hidden' }}>
+                {(showAllPeople ? dayPlan.followUpTasks : dayPlan.followUpTasks.slice(0, DAY_LIST_PREVIEW)).map((task, index) => {
+                  const taskKey = `${task.contactId}-${task.eventId || index}`;
+                  const methodLabel = task.method === 'email' ? 'Email' : task.method === 'call' ? 'Call' : task.method === 'meeting' ? 'Visit' : task.method === 'text' ? 'Text' : 'Follow up';
+                  return (
+                    <Box key={taskKey} sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, borderTop: index ? 1 : 0, borderColor: 'divider' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25 }}>
+                        <Box sx={{ pt: 0.25, flexShrink: 0 }}>
+                          {task.method === 'email' && <EmailIcon fontSize="small" color="primary" />}
+                          {task.method === 'call' && <PhoneIcon fontSize="small" color="success" />}
+                          {task.method === 'meeting' && <MeetingIcon fontSize="small" color="warning" />}
+                          {task.method === 'text' && <MessageIcon fontSize="small" color="info" />}
+                          {task.method === 'other' && <PlannerIcon fontSize="small" color="action" />}
+                        </Box>
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography sx={{ fontWeight: 650 }}>{task.contactName}</Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {[methodLabel, task.businessName].filter(Boolean).join(' · ')}
+                          </Typography>
+                          {task.message && (
+                            <Typography
+                              variant="body2"
+                              sx={{ mt: 0.5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}
+                            >
+                              {task.message}
                             </Typography>
                           )}
-                          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                            {task.message}
+                        </Box>
+                      </Box>
+                      <Collapse in={openDraft === taskKey} unmountOnExit>
+                        <Box sx={{ mt: 1.5, p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
+                          <Typography component="pre" variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit', m: 0 }}>
+                            {task.draftEmail}
                           </Typography>
-                          {task.method === 'email' && task.draftEmail && (
-                            <Box sx={{ mt: 1.5, p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
-                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-                                Suggested email to copy and paste:
-                              </Typography>
-                              <Typography
-                                component="pre"
-                                variant="body2"
-                                sx={{
-                                  whiteSpace: 'pre-wrap',
-                                  wordBreak: 'break-word',
-                                  fontFamily: 'inherit',
-                                  m: 0,
-                                }}
-                              >
-                                {task.draftEmail}
-                              </Typography>
-                              <Tooltip title="Copy email">
-                                <IconButton
-                                  size="small"
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(task.draftEmail!);
-                                    setSuccess('Copied to clipboard');
-                                    setTimeout(() => setSuccess(''), 2000);
-                                  }}
-                                  sx={{ mt: 0.5 }}
-                                >
-                                  <CopyIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                            </Box>
-                          )}
-                          <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
-                            <Button
-                              startIcon={<AIIcon />}
-                              onClick={() => setEmailTarget({ contactId: task.contactId, contactName: task.contactName })}
-                              sx={{ minHeight: 44, flexShrink: 0 }}
-                            >
-                              Generate Email
-                            </Button>
-                            <Button
-                              variant="outlined"
-                              color="success"
-                              startIcon={<CheckCircleIcon />}
-                              onClick={() => handleCompleteFollowUp(task)}
-                              sx={{ minHeight: 44, flexShrink: 0 }}
-                            >
-                              Done
-                            </Button>
-                          </Box>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </Box>
-                )}
-              </Box>
-              {/* Optimized route */}
-              <Box>
-                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.25, fontWeight: 600 }}>
-                  Driving order
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                  People to see today come first. New stops follow. Stops on hold stay off the route.
-                </Typography>
-                {dayPlan.optimizedRoute.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    No opportunities to visit. Add opportunities from the Discover page.
-                  </Typography>
-                ) : (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                      <RouteIcon fontSize="small" color="action" />
-                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                        Start: {dayPlan.storeName}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        {dayPlan.storeAddress}
-                      </Typography>
-                    </Box>
-                    {dayPlan.optimizedRoute.map((opp, idx) => {
-                      const addr = [opp.address, opp.city, opp.state, opp.zipCode].filter(Boolean).join(', ') || '—';
-                      return (
-                        <Box
-                          key={`${opp.kind || 'stop'}-${opp.id}`}
-                          sx={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1,
-                            flexWrap: 'wrap',
-                            pl: 2,
-                            borderLeft: 2,
-                            borderColor: 'divider',
-                          }}
-                        >
-                          <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 24, flexShrink: 0 }}>
-                            {idx + 1}.
-                          </Typography>
-                          <Box sx={{ flex: '1 1 160px', minWidth: 0 }}>
-                            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                              {opp.name}
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                              {opp.kind === 'visit' ? (opp.detail || 'Visit') : 'New stop'} · {addr}
-                            </Typography>
-                          </Box>
                           <Button
-                            variant="outlined"
-                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            sx={{ minHeight: 44, flexShrink: 0 }}
+                            startIcon={<CopyIcon />}
+                            onClick={() => {
+                              navigator.clipboard.writeText(task.draftEmail || '');
+                              setSuccess('Copied to clipboard');
+                              setTimeout(() => setSuccess(''), 2000);
+                            }}
+                            sx={{ mt: 1, minHeight: 44 }}
                           >
-                            Maps
+                            Copy
                           </Button>
                         </Box>
-                      );
-                    })}
-                    <Button
-                      variant="outlined"
-                      startIcon={<RouteIcon />}
-                      href={`https://www.google.com/maps/dir/${encodeURIComponent(dayPlan.storeAddress)}/${dayPlan.optimizedRoute.map((o) => [o.address, o.city, o.state, o.zipCode].filter(Boolean).join(', ')).filter(Boolean).map(encodeURIComponent).join('/')}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      sx={{ mt: 1, minHeight: 44, alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
-                    >
-                      Open full route in Google Maps
-                    </Button>
-                  </Box>
+                      </Collapse>
+                      <Box sx={{ display: 'flex', gap: 1, mt: 1.25, flexWrap: 'wrap', pl: { xs: 0, sm: 4 } }}>
+                        <Button
+                          variant="outlined"
+                          onClick={() => navigate(`/dashboard?contact=${task.contactId}`)}
+                          sx={{ minHeight: 44, flex: { xs: '1 1 0', sm: '0 0 auto' } }}
+                        >
+                          Open
+                        </Button>
+                        {task.method === 'email' && task.draftEmail ? (
+                          <Button
+                            variant="outlined"
+                            onClick={() => setOpenDraft(openDraft === taskKey ? null : taskKey)}
+                            sx={{ minHeight: 44, flex: { xs: '1 1 0', sm: '0 0 auto' } }}
+                          >
+                            {openDraft === taskKey ? 'Hide draft' : 'Draft'}
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="outlined"
+                            startIcon={<AIIcon />}
+                            onClick={() => setEmailTarget({ contactId: task.contactId, contactName: task.contactName })}
+                            sx={{ minHeight: 44, flex: { xs: '1 1 0', sm: '0 0 auto' } }}
+                          >
+                            Email
+                          </Button>
+                        )}
+                        <Button
+                          variant="contained"
+                          color="success"
+                          startIcon={<CheckCircleIcon />}
+                          onClick={() => handleCompleteFollowUp(task)}
+                          sx={{ minHeight: 44, flex: { xs: '1 1 0', sm: '0 0 auto' } }}
+                        >
+                          Done
+                        </Button>
+                      </Box>
+                    </Box>
+                  );
+                })}
+                {dayPlan.followUpTasks.length > DAY_LIST_PREVIEW && (
+                  <Button fullWidth onClick={() => setShowAllPeople(!showAllPeople)} sx={{ minHeight: 48, borderTop: 1, borderColor: 'divider', borderRadius: 0 }}>
+                    {showAllPeople ? 'Show fewer' : `Show all ${dayPlan.followUpTasks.length}`}
+                  </Button>
                 )}
+              </Paper>
+            )
+          ) : dayPlan && dayView === 'route' ? (
+            dayPlan.optimizedRoute.length === 0 ? (
+              <Paper sx={{ p: 3, textAlign: 'center' }}>
+                <Typography color="text.secondary">No stops with an address for this day.</Typography>
+              </Paper>
+            ) : (
+              <Paper sx={{ overflow: 'hidden' }}>
+                <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <RouteIcon fontSize="small" color="action" />
+                  <Typography variant="body2" color="text.secondary" noWrap sx={{ minWidth: 0 }}>
+                    Start at {dayPlan.storeName}
+                  </Typography>
+                </Box>
+                {dayPlan.optimizedRoute.map((stop, index) => {
+                  const addr = [stop.address, stop.city, stop.state, stop.zipCode].filter(Boolean).join(', ');
+                  return (
+                    <Box
+                      key={`${stop.kind || 'stop'}-${stop.id}`}
+                      sx={{ px: { xs: 1.5, sm: 2 }, py: 1, borderTop: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 1.25 }}
+                    >
+                      <Box
+                        sx={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          flexShrink: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.8rem',
+                          fontWeight: 700,
+                          bgcolor: stop.kind === 'visit' ? 'primary.main' : 'action.selected',
+                          color: stop.kind === 'visit' ? 'primary.contrastText' : 'text.primary',
+                        }}
+                      >
+                        {index + 1}
+                      </Box>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography sx={{ fontWeight: 600 }} noWrap>{stop.name}</Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                          {stop.kind === 'visit' ? (stop.detail || 'Visit') : 'New stop'}{addr ? ` · ${addr}` : ''}
+                        </Typography>
+                      </Box>
+                      {addr && (
+                        <Button
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          sx={{ minHeight: 44, minWidth: 64, flexShrink: 0 }}
+                        >
+                          Maps
+                        </Button>
+                      )}
+                    </Box>
+                  );
+                })}
+                <Box sx={{ p: { xs: 1.5, sm: 2 }, borderTop: 1, borderColor: 'divider' }}>
+                  <Button
+                    variant="contained"
+                    fullWidth
+                    startIcon={<RouteIcon />}
+                    href={`https://www.google.com/maps/dir/${encodeURIComponent(dayPlan.storeAddress)}/${dayPlan.optimizedRoute.map((o) => [o.address, o.city, o.state, o.zipCode].filter(Boolean).join(', ')).filter(Boolean).map(encodeURIComponent).join('/')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    sx={{ minHeight: 48 }}
+                  >
+                    Open route in Google Maps
+                  </Button>
+                </Box>
+              </Paper>
+            )
+          ) : null}
+
+          {recentVisits.length > 0 && (
+            <Box>
+              <Typography variant="overline" sx={{ color: 'text.secondary', fontWeight: 700, letterSpacing: 1, ml: 0.5 }}>
+                Recent visits · {todaySummary.visitsLastWeek} this week
+              </Typography>
+              <Box
+                sx={{
+                  display: 'flex',
+                  gap: 1.25,
+                  overflowX: 'auto',
+                  pb: 1,
+                  mx: { xs: -1, sm: 0 },
+                  px: { xs: 1, sm: 0 },
+                  scrollSnapType: 'x mandatory',
+                  WebkitOverflowScrolling: 'touch',
+                  '&::-webkit-scrollbar': { display: 'none' },
+                  scrollbarWidth: 'none',
+                }}
+              >
+                {recentVisits.map((visit, i) => {
+                  const contact = contacts.get(visit.contactId);
+                  const phone = contact?.phone;
+                  return (
+                    <Card
+                      key={`${visit.contactId}-${i}`}
+                      variant="outlined"
+                      sx={{ flex: '0 0 auto', width: { xs: 220, sm: 260 }, scrollSnapAlign: 'start', cursor: contact ? 'pointer' : 'default' }}
+                      onClick={() => {
+                        if (contact) navigate(`/dashboard?contact=${contact.id}`);
+                      }}
+                    >
+                      <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                        <Typography variant="subtitle2" noWrap sx={{ fontWeight: 700 }}>
+                          {visit.contactName}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                          {formatTimeAgo(visit.date)}
+                          {visit.type && ` · ${visit.type}`}
+                        </Typography>
+                        {visit.note && (
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            sx={{ mt: 0.5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontSize: '0.8rem', lineHeight: 1.3 }}
+                          >
+                            {visit.note}
+                          </Typography>
+                        )}
+                        {phone && (
+                          <Button
+                            component="a"
+                            href={`tel:${phone}`}
+                            onClick={(e) => e.stopPropagation()}
+                            startIcon={<PhoneIcon />}
+                            sx={{ mt: 0.75, minHeight: 40, textTransform: 'none' }}
+                          >
+                            Call
+                          </Button>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
               </Box>
             </Box>
-          ) : null}
-        </Paper>
+          )}
+        </Box>
       )}
 
-      {/* Calendar Header */}
+      {planTab === 'calendar' && (
       <Paper sx={{ p: { xs: 1, sm: 2 }, mb: 3 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: { xs: 1, sm: 2 } }}>
           {/* Title block: arrows hug the month label tightly on mobile so
@@ -1146,7 +1148,7 @@ export function Calendar() {
                   }}
                   onClick={() => {
                     if (date) {
-                      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+                      const key = localDateKey(date);
                       if (key !== planDate) setDayPlan(null);
                       setSelectedDate(date);
                       setPlanDate(key);
@@ -1323,6 +1325,7 @@ export function Calendar() {
           </Box>
         )}
       </Paper>
+      )}
 
       <Dialog
         open={!!selectedDate}

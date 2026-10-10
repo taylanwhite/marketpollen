@@ -66,6 +66,8 @@ import {
   Popover,
   Badge,
   Stack,
+  Menu,
+  ListItemIcon,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -86,6 +88,9 @@ import {
   UploadFile as UploadIcon,
   EventAvailable as EventAvailableIcon,
   Check as CheckIcon,
+  MoreVert as MoreVertIcon,
+  CallMerge as MergeIcon,
+  SwapVert as SwapIcon,
 } from '@mui/icons-material';
 
 function contactBusinessIds(contact: Contact): string[] {
@@ -105,7 +110,7 @@ function contactStatusLabel(contact: Contact): string | null {
 
 export function Dashboard() {
   const { userId } = useAuth();
-  const { permissions, canEdit, isAdmin, isOrgAdminFn, currentOrg, loading: permissionsLoading } = usePermissions();
+  const { permissions, canEdit, loading: permissionsLoading } = usePermissions();
   const { triggerRefresh, setLastDonationMouths, dataVersion, bumpDataVersion } = useDonation();
   const { syncedCount, isOnline } = useOffline();
   const { products } = useCampaign();
@@ -125,12 +130,7 @@ export function Dashboard() {
   const [showForm, setShowForm] = useState(openNewContact && !!businessFilter);
   const [importOpen, setImportOpen] = useState(false);
   const [importNotice, setImportNotice] = useState('');
-  const [handoffOpen, setHandoffOpen] = useState(false);
-  const [handoffFrom, setHandoffFrom] = useState<string | null>(null);
-  const [handoffTo, setHandoffTo] = useState<string | null>(null);
-  const [handoffBusy, setHandoffBusy] = useState(false);
-  const [handoffError, setHandoffError] = useState('');
-  const [handoffRecipients, setHandoffRecipients] = useState<Array<{ id: string; name: string }>>([]);
+  const [businessMenu, setBusinessMenu] = useState<{ anchor: HTMLElement; business: Business } | null>(null);
   const [keepBusiness, setKeepBusiness] = useState<Business | null>(null);
   const [foldBusiness, setFoldBusiness] = useState<Business | null>(null);
   const [mergeBusy, setMergeBusy] = useState(false);
@@ -424,36 +424,6 @@ export function Dashboard() {
         return a.name.localeCompare(b.name);
       });
   }, [businessRecords, contacts, searchTerm, businessSort]);
-
-  const bookPeople = useMemo(() => {
-    const people = new Map<string, string>();
-    contacts.forEach((contact) => {
-      if (contact.createdBy) people.set(contact.createdBy, contact.createdByName || 'Marketer');
-    });
-    businessRecords.forEach((business) => {
-      if (business.createdBy && !people.has(business.createdBy)) people.set(business.createdBy, 'Marketer');
-    });
-    return [...people.entries()]
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [contacts, businessRecords]);
-
-  useEffect(() => {
-    if (!handoffOpen || !currentOrg?.id) return;
-    let cancelled = false;
-    api.get<{ members: Array<{ userId: string; email: string; displayName: string | null }> }>(`/organizations/${currentOrg.id}`)
-      .then((org) => {
-        if (cancelled) return;
-        setHandoffRecipients(org.members.map((member) => ({
-          id: member.userId,
-          name: member.displayName || member.email,
-        })).sort((a, b) => a.name.localeCompare(b.name)));
-      })
-      .catch(() => {
-        if (!cancelled) setHandoffRecipients([]);
-      });
-    return () => { cancelled = true; };
-  }, [handoffOpen, currentOrg?.id]);
 
   const marketers = useMemo(() => {
     const names = new Set<string>();
@@ -802,30 +772,12 @@ export function Dashboard() {
     }
   };
 
-  const handoffPreview = {
-    contacts: handoffFrom ? contacts.filter((contact) => contact.createdBy === handoffFrom).length : 0,
-    businesses: handoffFrom ? businessRecords.filter((business) => business.createdBy === handoffFrom).length : 0,
-  };
+  const businessPlace = (business: Business) =>
+    [business.address, business.city].filter(Boolean).join(', ');
 
-  const submitHandoff = async () => {
-    if (!permissions.currentStoreId || !handoffFrom || !handoffTo || handoffFrom === handoffTo) return;
-    try {
-      setHandoffBusy(true);
-      setHandoffError('');
-      const result = await api.post<{ contacts: number; businesses: number; toName: string }>(
-        `/stores/${permissions.currentStoreId}/handoff`,
-        { fromUserId: handoffFrom, toUserId: handoffTo },
-      );
-      setHandoffOpen(false);
-      setHandoffFrom(null);
-      setHandoffTo(null);
-      setImportNotice(`Handed off ${result.contacts} contact${result.contacts === 1 ? '' : 's'} and ${result.businesses} business${result.businesses === 1 ? '' : 'es'} to ${result.toName}.`);
-      loadData();
-    } catch (error) {
-      setHandoffError(error instanceof Error ? error.message : 'Could not hand off this book');
-    } finally {
-      setHandoffBusy(false);
-    }
+  const contactCountLabel = (businessId: string) => {
+    const count = contacts.filter((contact) => contactBusinessIds(contact).includes(businessId)).length;
+    return `${count} contact${count === 1 ? '' : 's'}`;
   };
 
   const submitMerge = async () => {
@@ -953,19 +905,6 @@ export function Dashboard() {
             </TextField>
           )}
           
-          {(isAdmin() || isOrgAdminFn()) && (
-            <Button
-              variant="outlined"
-              onClick={() => {
-                setHandoffError('');
-                setHandoffOpen(true);
-              }}
-              sx={{ minHeight: 44, flexShrink: 0 }}
-            >
-              Hand off book
-            </Button>
-          )}
-
           {canEdit() && (
             <>
               <Button
@@ -1351,31 +1290,32 @@ export function Dashboard() {
                           navigate(`/dashboard?business=${business.id}`);
                         }}
                       >
-                        <CardContent>
-                          <Typography variant="h6" sx={{ fontWeight: 600 }}>{business.name}</Typography>
-                          {place && (
-                            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{place}</Typography>
-                          )}
+                        <CardContent sx={{ '&:last-child': { pb: 2 } }}>
+                          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography variant="h6" sx={{ fontWeight: 600, lineHeight: 1.3 }}>{business.name}</Typography>
+                              {place && (
+                                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{place}</Typography>
+                              )}
+                            </Box>
+                            {canEdit() && (
+                              <IconButton
+                                aria-label={`More actions for ${business.name}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setBusinessMenu({ anchor: event.currentTarget, business });
+                                }}
+                                sx={{ width: 44, height: 44, flexShrink: 0, mt: -1, mr: -1 }}
+                              >
+                                <MoreVertIcon />
+                              </IconButton>
+                            )}
+                          </Box>
                           <Chip
                             size="small"
                             sx={{ mt: 1.5 }}
                             label={`${people.length} contact${people.length === 1 ? '' : 's'}`}
                           />
-                          {canEdit() && (
-                            <Button
-                              variant="outlined"
-                              fullWidth
-                              sx={{ mt: 2, minHeight: 44 }}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setMergeError('');
-                                setFoldBusiness(null);
-                                setKeepBusiness(business);
-                              }}
-                            >
-                              Merge
-                            </Button>
-                          )}
                         </CardContent>
                       </Card>
                     </Grid>
@@ -1605,68 +1545,17 @@ export function Dashboard() {
         </Dialog>
 
         <Dialog
-          open={handoffOpen}
-          onClose={() => { if (!handoffBusy) setHandoffOpen(false); }}
-          fullWidth
-          maxWidth="sm"
-        >
-          <DialogTitle>Hand off a book</DialogTitle>
-          <DialogContent>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Moves this store’s contacts and businesses from one marketer to another. Visit notes stay with the person who wrote them.
-            </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <Autocomplete
-                options={bookPeople}
-                getOptionLabel={(person) => person.name}
-                isOptionEqualToValue={(option, value) => option.id === value.id}
-                value={bookPeople.find((person) => person.id === handoffFrom) || null}
-                onChange={(_event, value) => setHandoffFrom(value?.id || null)}
-                renderInput={(params) => <TextField {...params} label="From" placeholder="Current marketer" />}
-              />
-              <Autocomplete
-                options={(handoffRecipients.length ? handoffRecipients : bookPeople).filter((person) => person.id !== handoffFrom)}
-                getOptionLabel={(person) => person.name}
-                isOptionEqualToValue={(option, value) => option.id === value.id}
-                value={(handoffRecipients.length ? handoffRecipients : bookPeople).find((person) => person.id === handoffTo) || null}
-                onChange={(_event, value) => setHandoffTo(value?.id || null)}
-                renderInput={(params) => <TextField {...params} label="To" placeholder="New marketer" />}
-              />
-              {handoffFrom && (
-                <Typography variant="body2">
-                  {handoffPreview.contacts} contact{handoffPreview.contacts === 1 ? '' : 's'} and {handoffPreview.businesses} business{handoffPreview.businesses === 1 ? '' : 'es'} will move.
-                </Typography>
-              )}
-              {handoffError && <Alert severity="error">{handoffError}</Alert>}
-            </Box>
-          </DialogContent>
-          <DialogActions sx={{ px: 2, py: 2, gap: 1, flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'stretch', '& > :not(style)': { m: 0 } }}>
-            <Button onClick={() => setHandoffOpen(false)} disabled={handoffBusy} sx={{ minHeight: 44 }}>
-              Cancel
-            </Button>
-            <Button
-              variant="contained"
-              onClick={submitHandoff}
-              disabled={handoffBusy || !handoffFrom || !handoffTo || handoffFrom === handoffTo || (handoffPreview.contacts === 0 && handoffPreview.businesses === 0)}
-              sx={{ minHeight: 44 }}
-            >
-              {handoffBusy ? 'Handing off…' : 'Hand off'}
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        <Dialog
           open={!!keepBusiness}
           onClose={() => { if (!mergeBusy) setKeepBusiness(null); }}
           fullWidth
           maxWidth="sm"
         >
-          <DialogTitle>Merge businesses</DialogTitle>
+          <DialogTitle>Merge duplicate</DialogTitle>
           <DialogContent>
             {keepBusiness && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 0.5 }}>
                 <Typography variant="body2" color="text.secondary">
-                  Keep <strong>{keepBusiness.name}</strong>. The business you pick is removed, and its contacts, visits, and calendar items move here.
+                  Pick the duplicate. Its contacts, visits, and calendar items move to the business you keep, and the duplicate is removed.
                 </Typography>
                 <Autocomplete
                   options={businessRecords.filter((business) => business.id !== keepBusiness.id)}
@@ -1674,8 +1563,53 @@ export function Dashboard() {
                   isOptionEqualToValue={(option, value) => option.id === value.id}
                   value={foldBusiness}
                   onChange={(_event, value) => setFoldBusiness(value)}
-                  renderInput={(params) => <TextField {...params} label="Fold in" placeholder="Type a business" />}
+                  renderOption={(props, business) => {
+                    const { key, ...optionProps } = props as typeof props & { key: string };
+                    return (
+                      <Box component="li" key={key} {...optionProps} sx={{ display: 'block !important', py: 1 }}>
+                        <Typography sx={{ fontWeight: 600 }}>{business.name}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {[businessPlace(business), contactCountLabel(business.id)].filter(Boolean).join(' · ')}
+                        </Typography>
+                      </Box>
+                    );
+                  }}
+                  renderInput={(params) => <TextField {...params} label="Duplicate" placeholder="Type a business name" autoFocus />}
                 />
+                <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
+                  <Box sx={{ p: 1.5, bgcolor: 'action.hover' }}>
+                    <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 1.5 }}>Keep</Typography>
+                    <Typography sx={{ fontWeight: 650 }}>{keepBusiness.name}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {[businessPlace(keepBusiness), contactCountLabel(keepBusiness.id)].filter(Boolean).join(' · ')}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ p: 1.5, borderTop: 1, borderColor: 'divider' }}>
+                    <Typography variant="overline" color="text.secondary" sx={{ lineHeight: 1.5 }}>Remove</Typography>
+                    {foldBusiness ? (
+                      <>
+                        <Typography sx={{ fontWeight: 650 }}>{foldBusiness.name}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {[businessPlace(foldBusiness), `${contactCountLabel(foldBusiness.id)} will move`].filter(Boolean).join(' · ')}
+                        </Typography>
+                      </>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">Choose the duplicate above.</Typography>
+                    )}
+                  </Box>
+                </Box>
+                {foldBusiness && (
+                  <Button
+                    startIcon={<SwapIcon />}
+                    onClick={() => {
+                      setKeepBusiness(foldBusiness);
+                      setFoldBusiness(keepBusiness);
+                    }}
+                    sx={{ minHeight: 44, alignSelf: 'flex-start' }}
+                  >
+                    Keep {foldBusiness.name} instead
+                  </Button>
+                )}
                 {mergeError && <Alert severity="error">{mergeError}</Alert>}
               </Box>
             )}
@@ -1695,6 +1629,42 @@ export function Dashboard() {
             </Button>
           </DialogActions>
         </Dialog>
+
+        <Menu
+          anchorEl={businessMenu?.anchor}
+          open={!!businessMenu}
+          onClose={() => setBusinessMenu(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        >
+          <MenuItem
+            sx={{ minHeight: 48 }}
+            onClick={() => {
+              const business = businessMenu?.business;
+              setBusinessMenu(null);
+              if (!business) return;
+              setPageTab('contacts');
+              navigate(`/dashboard?business=${business.id}`);
+            }}
+          >
+            <ListItemIcon><PersonIcon fontSize="small" /></ListItemIcon>
+            View contacts
+          </MenuItem>
+          <MenuItem
+            sx={{ minHeight: 48 }}
+            onClick={() => {
+              const business = businessMenu?.business;
+              setBusinessMenu(null);
+              if (!business) return;
+              setMergeError('');
+              setFoldBusiness(null);
+              setKeepBusiness(business);
+            }}
+          >
+            <ListItemIcon><MergeIcon fontSize="small" /></ListItemIcon>
+            Merge a duplicate into this
+          </MenuItem>
+        </Menu>
 
         <ImportCustomersDialog
           open={importOpen}

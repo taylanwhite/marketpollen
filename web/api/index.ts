@@ -49,7 +49,6 @@ import orgBillingHandler from '../dist-handlers/organizations/[id]/billing.js';
 import orgMembersHandler from '../dist-handlers/organizations/[id]/members.js';
 import billingCronHandler from '../dist-handlers/billing-cron.js';
 import storeBillingHandler from '../dist-handlers/stores/[id]/billing.js';
-import storeHandoffHandler from '../dist-handlers/stores/[id]/handoff.js';
 import importCustomersHandler from '../dist-handlers/import-customers.js';
 
 
@@ -94,7 +93,6 @@ app.get('/api/store-progress', route(storeProgressHandler));
 app.get('/api/stores/:id/calendar-feed', withId(storeCalendarFeedHandler));
 app.post('/api/stores/:id/calendar-feed', withId(storeCalendarFeedHandler));
 app.all('/api/stores/:id/billing', withId(storeBillingHandler));
-app.post('/api/stores/:id/handoff', withId(storeHandoffHandler));
 app.all('/api/stores/:id', withId(storesIdHandler));
 app.get('/api/calendar-feed/:id', withId(calendarFeedPublicHandler));
 app.head('/api/calendar-feed/:id', withId(calendarFeedPublicHandler));
