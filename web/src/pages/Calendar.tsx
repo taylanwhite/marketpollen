@@ -73,6 +73,7 @@ interface CalendarEventDisplay {
 interface DayPlannerFollowUp {
   contactId: string;
   contactName: string;
+  businessName?: string;
   method: 'email' | 'call' | 'meeting' | 'text' | 'other';
   message: string;
   draftEmail?: string;
@@ -83,6 +84,8 @@ interface DayPlannerFollowUp {
 interface DayPlannerOpportunity {
   id: string;
   name: string;
+  kind?: 'visit' | 'stop';
+  detail?: string;
   address?: string | null;
   city?: string | null;
   state?: string | null;
@@ -229,6 +232,7 @@ export function Calendar() {
   const loadDayPlan = async () => {
     if (!permissions.currentStoreId || !planDate) return;
     try {
+      setDayPlan(null);
       setDayPlanLoading(true);
       const data = await api.get<DayPlannerData>(
         `/day-planner?storeId=${permissions.currentStoreId}&date=${planDate}`
@@ -859,11 +863,11 @@ export function Calendar() {
               sx={{ width: 160 }}
             />
             <Button
-              size="small"
               variant="outlined"
               onClick={loadDayPlan}
               disabled={dayPlanLoading}
               startIcon={dayPlanLoading ? <CircularProgress size={16} /> : undefined}
+              sx={{ minHeight: 44, flexShrink: 0 }}
             >
               {dayPlanLoading ? 'Loading…' : 'Refresh'}
             </Button>
@@ -940,18 +944,18 @@ export function Calendar() {
                           )}
                           <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                             <Button
-                              size="small"
                               startIcon={<AIIcon />}
                               onClick={() => setEmailTarget({ contactId: task.contactId, contactName: task.contactName })}
+                              sx={{ minHeight: 44, flexShrink: 0 }}
                             >
                               Generate Email
                             </Button>
                             <Button
-                              size="small"
                               variant="outlined"
                               color="success"
                               startIcon={<CheckCircleIcon />}
                               onClick={() => handleCompleteFollowUp(task)}
+                              sx={{ minHeight: 44, flexShrink: 0 }}
                             >
                               Done
                             </Button>
@@ -965,10 +969,10 @@ export function Calendar() {
               {/* Optimized route */}
               <Box>
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.25, fontWeight: 600 }}>
-                  Planned route (store → opportunities, least distance)
+                  Driving order
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                  Stops on hold are left off this route.
+                  People to see today come first. New stops follow. Stops on hold stay off the route.
                 </Typography>
                 {dayPlan.optimizedRoute.length === 0 ? (
                   <Typography variant="body2" color="text.secondary">
@@ -989,33 +993,34 @@ export function Calendar() {
                       const addr = [opp.address, opp.city, opp.state, opp.zipCode].filter(Boolean).join(', ') || '—';
                       return (
                         <Box
-                          key={opp.id}
+                          key={`${opp.kind || 'stop'}-${opp.id}`}
                           sx={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: 1,
+                            flexWrap: 'wrap',
                             pl: 2,
                             borderLeft: 2,
                             borderColor: 'divider',
                           }}
                         >
-                          <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 24 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 24, flexShrink: 0 }}>
                             {idx + 1}.
                           </Typography>
-                          <Box sx={{ flex: 1 }}>
+                          <Box sx={{ flex: '1 1 160px', minWidth: 0 }}>
                             <Typography variant="body2" sx={{ fontWeight: 500 }}>
                               {opp.name}
                             </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {addr}
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              {opp.kind === 'visit' ? (opp.detail || 'Visit') : 'New stop'} · {addr}
                             </Typography>
                           </Box>
                           <Button
-                            size="small"
                             variant="outlined"
                             href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`}
                             target="_blank"
                             rel="noopener noreferrer"
+                            sx={{ minHeight: 44, flexShrink: 0 }}
                           >
                             Maps
                           </Button>
@@ -1023,13 +1028,12 @@ export function Calendar() {
                       );
                     })}
                     <Button
-                      size="small"
                       variant="outlined"
                       startIcon={<RouteIcon />}
                       href={`https://www.google.com/maps/dir/${encodeURIComponent(dayPlan.storeAddress)}/${dayPlan.optimizedRoute.map((o) => [o.address, o.city, o.state, o.zipCode].filter(Boolean).join(', ')).filter(Boolean).map(encodeURIComponent).join('/')}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      sx={{ mt: 1, alignSelf: 'flex-start' }}
+                      sx={{ mt: 1, minHeight: 44, alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
                     >
                       Open full route in Google Maps
                     </Button>
@@ -1142,8 +1146,10 @@ export function Calendar() {
                   }}
                   onClick={() => {
                     if (date) {
+                      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+                      if (key !== planDate) setDayPlan(null);
                       setSelectedDate(date);
-                      setPlanDate(date.toISOString().split('T')[0]);
+                      setPlanDate(key);
                     }
                   }}
                 >
@@ -1264,7 +1270,6 @@ export function Calendar() {
                                       }}
                                       onClick={(e: React.MouseEvent) => {
                                         e.stopPropagation();
-                                        setSelectedDate(date);
                                         openEditEventDialog(event);
                                       }}
                                     />
@@ -1319,27 +1324,99 @@ export function Calendar() {
         )}
       </Paper>
 
-      {/* Selected Date Events */}
-      {selectedDate && selectedDateEvents.length > 0 && (
-        <Paper sx={{ p: 3, mb: 3 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              Events on {selectedDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-            </Typography>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={() => openCreateEventDialog(selectedDate)}
-            >
-              Add Event
-            </Button>
-          </Box>
+      <Dialog
+        open={!!selectedDate}
+        onClose={() => setSelectedDate(null)}
+        maxWidth="sm"
+        fullWidth
+        scroll="paper"
+      >
+        {selectedDate && (
+          <>
+            <DialogTitle sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1.5 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600, flex: '1 1 160px', minWidth: 0 }}>
+                {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+              </Typography>
+              <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                onClick={() => openCreateEventDialog(selectedDate)}
+                sx={{ minHeight: 44, flexShrink: 0 }}
+              >
+                Add event
+              </Button>
+            </DialogTitle>
+            <DialogContent dividers>
+          {dayPlanLoading && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+              <CircularProgress size={22} />
+            </Box>
+          )}
+          {dayPlan && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, mb: selectedDateEvents.length ? 3 : 0 }}>
+              <Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Who to see</Typography>
+                {dayPlan.followUpTasks.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">No follow-ups on this day.</Typography>
+                ) : dayPlan.followUpTasks.map((task, index) => (
+                  <Box key={`${task.contactId}-${task.eventId || index}`} sx={{ py: 1.25, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <Typography sx={{ fontWeight: 650 }}>{task.contactName}</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {[task.businessName, task.method === 'meeting' ? 'Visit' : task.method === 'call' ? 'Call' : task.method === 'text' ? 'Text' : task.method === 'email' ? 'Email' : 'Follow up'].filter(Boolean).join(' · ')}
+                    </Typography>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => navigate(`/dashboard?contact=${task.contactId}`)}
+                      sx={{ mt: 1, minHeight: 44 }}
+                    >
+                      Open contact
+                    </Button>
+                  </Box>
+                ))}
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Driving order</Typography>
+                {dayPlan.optimizedRoute.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">No stops with an address for this day.</Typography>
+                ) : (
+                  <>
+                    {dayPlan.optimizedRoute.map((stop, index) => (
+                      <Box key={`${stop.kind || 'stop'}-${stop.id}`} sx={{ py: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                        <Typography sx={{ fontWeight: 650 }}>{index + 1}. {stop.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {stop.kind === 'visit' ? (stop.detail || 'Visit') : 'New stop'}
+                          {stop.address ? ` · ${[stop.address, stop.city].filter(Boolean).join(', ')}` : ''}
+                        </Typography>
+                      </Box>
+                    ))}
+                    <Button
+                      variant="outlined"
+                      fullWidth
+                      sx={{ mt: 1.5, minHeight: 44 }}
+                      href={`https://www.google.com/maps/dir/${encodeURIComponent(dayPlan.storeAddress)}/${dayPlan.optimizedRoute.map((stop) => [stop.address, stop.city, stop.state, stop.zipCode].filter(Boolean).join(', ')).filter(Boolean).map(encodeURIComponent).join('/')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open route in Maps
+                    </Button>
+                  </>
+                )}
+              </Box>
+            </Box>
+          )}
+          {selectedDateEvents.length > 0 && (
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>On the calendar</Typography>
+          )}
+          {selectedDateEvents.length === 0 && !dayPlanLoading && (dayPlan?.followUpTasks.length || 0) === 0 && (dayPlan?.optimizedRoute.length || 0) === 0 ? (
+            <Typography color="text.secondary">Nothing scheduled for this day.</Typography>
+          ) : selectedDateEvents.length === 0 ? null : (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {selectedDateEvents.map((event) => (
               <Card key={event.id} variant="outlined">
                 <CardContent>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 1 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: '1 1 180px', minWidth: 0, flexWrap: 'wrap' }}>
                       {getMethodIcon(event.type)}
                       <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                         {event.title}
@@ -1348,7 +1425,7 @@ export function Calendar() {
                         <Chip label={event.contactName} size="small" variant="outlined" />
                       )}
                     </Box>
-                    <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flexShrink: 0, justifyContent: 'flex-end' }}>
                       {event.status === 'scheduled' && (
                         <>
                           <Tooltip title="Mark as completed">
@@ -1356,6 +1433,7 @@ export function Calendar() {
                               size="small"
                               color="success"
                               onClick={() => handleCompleteEvent(event)}
+                              sx={{ width: 44, height: 44, flexShrink: 0 }}
                             >
                               <CheckCircleIcon fontSize="small" />
                             </IconButton>
@@ -1365,6 +1443,7 @@ export function Calendar() {
                               size="small"
                               color="error"
                               onClick={() => handleCancelEvent(event)}
+                              sx={{ width: 44, height: 44, flexShrink: 0 }}
                             >
                               <CancelIcon fontSize="small" />
                             </IconButton>
@@ -1377,6 +1456,7 @@ export function Calendar() {
                             size="small"
                             color="primary"
                             onClick={() => setEmailTarget({ contactId: event.contactId!, contactName: event.contactName! })}
+                            sx={{ width: 44, height: 44, flexShrink: 0 }}
                           >
                             <AIIcon fontSize="small" />
                           </IconButton>
@@ -1386,6 +1466,7 @@ export function Calendar() {
                         <IconButton
                           size="small"
                           onClick={() => openEditEventDialog(event)}
+                          sx={{ width: 44, height: 44, flexShrink: 0 }}
                         >
                           <EditIcon fontSize="small" />
                         </IconButton>
@@ -1395,6 +1476,7 @@ export function Calendar() {
                           size="small"
                           color="error"
                           onClick={() => handleDeleteEvent(event.id)}
+                          sx={{ width: 44, height: 44, flexShrink: 0 }}
                         >
                           <DeleteIcon fontSize="small" />
                         </IconButton>
@@ -1442,10 +1524,9 @@ export function Calendar() {
                   )}
                   {event.contactId && (
                     <Button
-                      size="small"
                       variant="outlined"
                       onClick={() => navigate(`/dashboard?contact=${event.contactId}`)}
-                      sx={{ mt: 1 }}
+                      sx={{ mt: 1, minHeight: 44 }}
                     >
                       View Contact
                     </Button>
@@ -1454,8 +1535,14 @@ export function Calendar() {
               </Card>
             ))}
           </Box>
-        </Paper>
-      )}
+          )}
+            </DialogContent>
+            <DialogActions sx={{ px: 2, py: 2, flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'stretch', '& > :not(style)': { minHeight: 44, m: 0 } }}>
+              <Button onClick={() => setSelectedDate(null)} sx={{ minHeight: 44 }}>Close</Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
 
       {/* Create/Edit Event Dialog */}
       <Dialog 
@@ -1563,9 +1650,9 @@ export function Calendar() {
             />
           </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={closeEventDialog}>Cancel</Button>
-          <Button onClick={handleSaveEvent} variant="contained">
+        <DialogActions sx={{ px: 2, py: 2, gap: 1, flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'stretch', '& > :not(style)': { m: 0 } }}>
+          <Button onClick={closeEventDialog} sx={{ minHeight: 44 }}>Cancel</Button>
+          <Button onClick={handleSaveEvent} variant="contained" sx={{ minHeight: 44 }}>
             {editingEvent ? 'Update' : 'Create'} Event
           </Button>
         </DialogActions>

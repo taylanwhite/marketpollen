@@ -51,6 +51,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(toBusinessJson(updated));
   }
 
+  if (req.method === 'POST' && (req.body as { action?: string })?.action === 'merge') {
+    const intoId = String((req.body as { intoId?: string })?.intoId || '').trim();
+    if (!intoId || intoId === id) return res.status(400).json({ error: 'Choose a different business to keep' });
+    const keeper = await prisma.business.findUnique({ where: { id: intoId } });
+    if (!keeper || keeper.store_id !== business.store_id) {
+      return res.status(404).json({ error: 'That business is not in this store' });
+    }
+
+    const moved = await prisma.$transaction(async (tx) => {
+      const moving = await tx.contact.findMany({ where: { business_id: id }, select: { id: true, contact_id: true } });
+      const taken = new Set(
+        (await tx.contact.findMany({ where: { business_id: intoId }, select: { contact_id: true } })).map((row) => row.contact_id),
+      );
+      for (const contact of moving) {
+        let contactId = contact.contact_id;
+        if (taken.has(contactId)) contactId = `${contact.contact_id}-${contact.id.slice(0, 8)}`;
+        taken.add(contactId);
+        await tx.contact.update({
+          where: { id: contact.id },
+          data: { business_id: intoId, contact_id: contactId },
+        });
+      }
+      const links = await tx.contactBusiness.findMany({ where: { business_id: id } });
+      for (const link of links) {
+        const already = await tx.contactBusiness.findUnique({
+          where: { contact_id_business_id: { contact_id: link.contact_id, business_id: intoId } },
+        });
+        await tx.contactBusiness.delete({
+          where: { contact_id_business_id: { contact_id: link.contact_id, business_id: id } },
+        });
+        if (!already) {
+          await tx.contactBusiness.create({
+            data: { contact_id: link.contact_id, business_id: intoId },
+          });
+        }
+      }
+      await tx.calendarEvent.updateMany({ where: { business_id: id }, data: { business_id: intoId } });
+      await tx.opportunity.updateMany({ where: { business_id: id }, data: { business_id: intoId } });
+      await tx.business.delete({ where: { id } });
+      return moving.length;
+    });
+
+    return res.status(200).json({ keptId: intoId, keptName: keeper.name, contacts: moved });
+  }
+
   if (req.method === 'DELETE') {
     await prisma.business.delete({ where: { id } });
     return res.status(204).end();

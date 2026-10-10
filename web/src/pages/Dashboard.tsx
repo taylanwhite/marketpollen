@@ -62,6 +62,10 @@ import {
   Tooltip,
   Tabs,
   Tab,
+  Autocomplete,
+  Popover,
+  Badge,
+  Stack,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -101,7 +105,7 @@ function contactStatusLabel(contact: Contact): string | null {
 
 export function Dashboard() {
   const { userId } = useAuth();
-  const { permissions, canEdit, loading: permissionsLoading } = usePermissions();
+  const { permissions, canEdit, isAdmin, isOrgAdminFn, currentOrg, loading: permissionsLoading } = usePermissions();
   const { triggerRefresh, setLastDonationMouths, dataVersion, bumpDataVersion } = useDonation();
   const { syncedCount, isOnline } = useOffline();
   const { products } = useCampaign();
@@ -121,6 +125,16 @@ export function Dashboard() {
   const [showForm, setShowForm] = useState(openNewContact && !!businessFilter);
   const [importOpen, setImportOpen] = useState(false);
   const [importNotice, setImportNotice] = useState('');
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const [handoffFrom, setHandoffFrom] = useState<string | null>(null);
+  const [handoffTo, setHandoffTo] = useState<string | null>(null);
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffError, setHandoffError] = useState('');
+  const [handoffRecipients, setHandoffRecipients] = useState<Array<{ id: string; name: string }>>([]);
+  const [keepBusiness, setKeepBusiness] = useState<Business | null>(null);
+  const [foldBusiness, setFoldBusiness] = useState<Business | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeError, setMergeError] = useState('');
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [followUpSuggestions, setFollowUpSuggestions] = useState<FollowUpSuggestion[]>([]);
   const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false);
@@ -129,6 +143,15 @@ export function Dashboard() {
   const [copyToastOpen, setCopyToastOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showNoDonationsOnly, setShowNoDonationsOnly] = useState(false);
+  const [contactSort, setContactSort] = useState('newest');
+  const [businessSort, setBusinessSort] = useState('name');
+  const [marketerFilter, setMarketerFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [followUpFilter, setFollowUpFilter] = useState('');
+  const [infoFilter, setInfoFilter] = useState('');
+  const [cityFilter, setCityFilter] = useState('');
+  const [visitFilter, setVisitFilter] = useState('');
+  const [filterAnchor, setFilterAnchor] = useState<HTMLElement | null>(null);
   
   // Quick reachout dialog
   const [quickReachoutContact, setQuickReachoutContact] = useState<Contact | null>(null);
@@ -190,6 +213,58 @@ export function Dashboard() {
     if (showNoDonationsOnly) {
       filtered = filtered.filter(c => !c.reachouts.some(r => !!r.donation));
     }
+
+    if (marketerFilter) {
+      filtered = filtered.filter(c => (c.createdByName || '') === marketerFilter);
+    }
+
+    if (statusFilter) {
+      filtered = filtered.filter(c => statusFilter === 'new'
+        ? contactStatusLabel(c) === 'new'
+        : (c.status || 'new') === statusFilter);
+    }
+
+    if (followUpFilter) {
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      filtered = filtered.filter(c => {
+        const followUp = c.suggestedFollowUpDate ? new Date(c.suggestedFollowUpDate) : null;
+        if (followUpFilter === 'none') return !followUp;
+        if (!followUp || Number.isNaN(followUp.getTime())) return false;
+        if (followUpFilter === 'overdue') return followUp < startOfToday;
+        return followUp >= startOfToday;
+      });
+    }
+
+    if (infoFilter) {
+      filtered = filtered.filter(c => {
+        const hasPhone = !!c.phone?.trim();
+        const hasEmail = !!c.email?.trim();
+        if (infoFilter === 'has-phone') return hasPhone;
+        if (infoFilter === 'missing-phone') return !hasPhone;
+        if (infoFilter === 'has-email') return hasEmail;
+        return !hasEmail;
+      });
+    }
+
+    if (cityFilter) {
+      const city = cityFilter.toLowerCase();
+      filtered = filtered.filter(c => contactBusinessIds(c).some((id) => {
+        const business = businessRecords.find((item) => item.id === id);
+        return (business?.city || '').toLowerCase() === city;
+      }));
+    }
+
+    if (visitFilter) {
+      const now = Date.now();
+      filtered = filtered.filter(c => {
+        const visited = c.lastReachoutDate ? new Date(c.lastReachoutDate).getTime() : 0;
+        if (visitFilter === 'never') return !visited;
+        if (!visited) return false;
+        if (visitFilter === 'week') return now - visited <= 7 * 24 * 60 * 60 * 1000;
+        return now - visited > 30 * 24 * 60 * 60 * 1000;
+      });
+    }
     
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
@@ -213,8 +288,25 @@ export function Dashboard() {
       });
     }
     
+    const byTime = (value?: Date | string | null) => {
+      if (!value) return 0;
+      const date = value instanceof Date ? value : new Date(value);
+      return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+    };
+    filtered.sort((a, b) => {
+      if (contactSort === 'oldest') return byTime(a.createdAt) - byTime(b.createdAt);
+      if (contactSort === 'last-visit') return byTime(b.lastReachoutDate) - byTime(a.lastReachoutDate);
+      if (contactSort === 'name') {
+        const aName = `${a.firstName || ''} ${a.lastName || ''}`.trim();
+        const bName = `${b.firstName || ''} ${b.lastName || ''}`.trim();
+        return aName.localeCompare(bName);
+      }
+      if (contactSort === 'marketer') return (a.createdByName || '').localeCompare(b.createdByName || '');
+      return byTime(b.createdAt) - byTime(a.createdAt);
+    });
+
     setFilteredContacts(filtered);
-  }, [businessFilter, contacts, searchTerm, businesses, businessRecords, showNoDonationsOnly]);
+  }, [businessFilter, contacts, searchTerm, businesses, businessRecords, showNoDonationsOnly, marketerFilter, contactSort, statusFilter, followUpFilter, infoFilter, cityFilter, visitFilter]);
 
   useEffect(() => {
     if (!contactFilter || contacts.length === 0) return;
@@ -319,8 +411,83 @@ export function Dashboard() {
           .toLowerCase();
         return haystack.includes(term);
       })
+      .sort((a, b) => {
+        if (businessSort === 'newest') {
+          const aTime = new Date(a.createdAt).getTime() || 0;
+          const bTime = new Date(b.createdAt).getTime() || 0;
+          return bTime - aTime;
+        }
+        if (businessSort === 'contacts') {
+          const count = (business: Business) => contacts.filter((contact) => contactBusinessIds(contact).includes(business.id)).length;
+          return count(b) - count(a);
+        }
+        return a.name.localeCompare(b.name);
+      });
+  }, [businessRecords, contacts, searchTerm, businessSort]);
+
+  const bookPeople = useMemo(() => {
+    const people = new Map<string, string>();
+    contacts.forEach((contact) => {
+      if (contact.createdBy) people.set(contact.createdBy, contact.createdByName || 'Marketer');
+    });
+    businessRecords.forEach((business) => {
+      if (business.createdBy && !people.has(business.createdBy)) people.set(business.createdBy, 'Marketer');
+    });
+    return [...people.entries()]
+      .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [businessRecords, contacts, searchTerm]);
+  }, [contacts, businessRecords]);
+
+  useEffect(() => {
+    if (!handoffOpen || !currentOrg?.id) return;
+    let cancelled = false;
+    api.get<{ members: Array<{ userId: string; email: string; displayName: string | null }> }>(`/organizations/${currentOrg.id}`)
+      .then((org) => {
+        if (cancelled) return;
+        setHandoffRecipients(org.members.map((member) => ({
+          id: member.userId,
+          name: member.displayName || member.email,
+        })).sort((a, b) => a.name.localeCompare(b.name)));
+      })
+      .catch(() => {
+        if (!cancelled) setHandoffRecipients([]);
+      });
+    return () => { cancelled = true; };
+  }, [handoffOpen, currentOrg?.id]);
+
+  const marketers = useMemo(() => {
+    const names = new Set<string>();
+    contacts.forEach((contact) => {
+      if (contact.createdByName) names.add(contact.createdByName);
+    });
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [contacts]);
+
+  const cities = useMemo(() => {
+    const names = new Set<string>();
+    businessRecords.forEach((business) => {
+      if (business.city) names.add(business.city);
+    });
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [businessRecords]);
+
+  const extraFilterCount = [
+    showNoDonationsOnly,
+    statusFilter,
+    followUpFilter,
+    infoFilter,
+    cityFilter,
+    visitFilter,
+  ].filter(Boolean).length;
+
+  const clearExtraFilters = () => {
+    setShowNoDonationsOnly(false);
+    setStatusFilter('');
+    setFollowUpFilter('');
+    setInfoFilter('');
+    setCityFilter('');
+    setVisitFilter('');
+  };
 
   const handleContactClick = (contact: Contact) => {
     if (isMobile) {
@@ -635,6 +802,53 @@ export function Dashboard() {
     }
   };
 
+  const handoffPreview = {
+    contacts: handoffFrom ? contacts.filter((contact) => contact.createdBy === handoffFrom).length : 0,
+    businesses: handoffFrom ? businessRecords.filter((business) => business.createdBy === handoffFrom).length : 0,
+  };
+
+  const submitHandoff = async () => {
+    if (!permissions.currentStoreId || !handoffFrom || !handoffTo || handoffFrom === handoffTo) return;
+    try {
+      setHandoffBusy(true);
+      setHandoffError('');
+      const result = await api.post<{ contacts: number; businesses: number; toName: string }>(
+        `/stores/${permissions.currentStoreId}/handoff`,
+        { fromUserId: handoffFrom, toUserId: handoffTo },
+      );
+      setHandoffOpen(false);
+      setHandoffFrom(null);
+      setHandoffTo(null);
+      setImportNotice(`Handed off ${result.contacts} contact${result.contacts === 1 ? '' : 's'} and ${result.businesses} business${result.businesses === 1 ? '' : 'es'} to ${result.toName}.`);
+      loadData();
+    } catch (error) {
+      setHandoffError(error instanceof Error ? error.message : 'Could not hand off this book');
+    } finally {
+      setHandoffBusy(false);
+    }
+  };
+
+  const submitMerge = async () => {
+    if (!keepBusiness || !foldBusiness) return;
+    try {
+      setMergeBusy(true);
+      setMergeError('');
+      const result = await api.post<{ keptName: string; contacts: number }>(
+        `/businesses/${foldBusiness.id}`,
+        { action: 'merge', intoId: keepBusiness.id },
+      );
+      if (businessFilter === foldBusiness.id) navigate(keepBusiness ? `/dashboard?business=${keepBusiness.id}` : '/dashboard');
+      setKeepBusiness(null);
+      setFoldBusiness(null);
+      setImportNotice(`Merged into ${result.keptName}. ${result.contacts} contact${result.contacts === 1 ? '' : 's'} moved.`);
+      loadData();
+    } catch (error) {
+      setMergeError(error instanceof Error ? error.message : 'Could not merge these businesses');
+    } finally {
+      setMergeBusy(false);
+    }
+  };
+
   if (loading) {
     return (
       <Box>
@@ -670,7 +884,7 @@ export function Dashboard() {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             size="small"
-            sx={{ flexGrow: 1, maxWidth: 400 }}
+            sx={{ flex: '1 1 200px', minWidth: 0, maxWidth: 400 }}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -680,54 +894,85 @@ export function Dashboard() {
             }}
           />
           
-          {pageTab === 'contacts' && (
+          {pageTab === 'contacts' ? (
+            <>
+              <Autocomplete
+                size="small"
+                options={businessRecords}
+                getOptionLabel={(business) => business.name}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+                value={businessRecords.find((business) => business.id === businessFilter) || null}
+                onChange={(_event, value) => navigate(value ? `/dashboard?business=${value.id}` : '/dashboard')}
+                sx={{ minWidth: 220, flex: '1 1 220px', maxWidth: 320 }}
+                renderInput={(params) => (
+                  <TextField {...params} label="Business" placeholder="Type a business" />
+                )}
+              />
+              <TextField
+                select
+                size="small"
+                label="Sort"
+                value={contactSort}
+                onChange={(event) => setContactSort(event.target.value)}
+                sx={{ minWidth: 150 }}
+              >
+                <MenuItem value="newest">Newest</MenuItem>
+                <MenuItem value="oldest">Oldest</MenuItem>
+                <MenuItem value="last-visit">Last visit</MenuItem>
+                <MenuItem value="name">Name</MenuItem>
+                <MenuItem value="marketer">Marketer</MenuItem>
+              </TextField>
+              <Autocomplete
+                size="small"
+                options={marketers}
+                value={marketerFilter || null}
+                onChange={(_event, value) => setMarketerFilter(value || '')}
+                sx={{ minWidth: 200, flex: '1 1 180px', maxWidth: 260 }}
+                renderInput={(params) => (
+                  <TextField {...params} label="Created by" placeholder="Marketer" />
+                )}
+              />
+              <Badge color="primary" badgeContent={extraFilterCount} invisible={extraFilterCount === 0}>
+                <Button variant="outlined" onClick={(event) => setFilterAnchor(event.currentTarget)} sx={{ minHeight: 44, flexShrink: 0 }}>
+                  More filters
+                </Button>
+              </Badge>
+            </>
+          ) : (
             <TextField
               select
               size="small"
-              label="Business"
-              value={businessFilter || ''}
-              onChange={(event) => {
-                const id = event.target.value;
-                navigate(id ? `/dashboard?business=${id}` : '/dashboard');
-              }}
-              sx={{ minWidth: 200 }}
+              label="Sort"
+              value={businessSort}
+              onChange={(event) => setBusinessSort(event.target.value)}
+              sx={{ minWidth: 160 }}
             >
-              <MenuItem value="">All businesses</MenuItem>
-              {businessRecords.map((business) => (
-                <MenuItem key={business.id} value={business.id}>{business.name}</MenuItem>
-              ))}
+              <MenuItem value="name">Name</MenuItem>
+              <MenuItem value="newest">Newest</MenuItem>
+              <MenuItem value="contacts">Most contacts</MenuItem>
             </TextField>
           )}
-
-          {businessFilter && businesses.get(businessFilter) && (
-            <Chip
-              label={`Viewing: ${businesses.get(businessFilter)}`}
-              onDelete={() => navigate('/dashboard')}
-              color="primary"
-              variant="outlined"
-            />
-          )}
-
-          {pageTab === 'contacts' && (
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={showNoDonationsOnly}
-                  onChange={(e) => setShowNoDonationsOnly(e.target.checked)}
-                  size="small"
-                />
-              }
-              label="No donations"
-              sx={{ mr: 'auto' }}
-            />
-          )}
           
+          {(isAdmin() || isOrgAdminFn()) && (
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setHandoffError('');
+                setHandoffOpen(true);
+              }}
+              sx={{ minHeight: 44, flexShrink: 0 }}
+            >
+              Hand off book
+            </Button>
+          )}
+
           {canEdit() && (
             <>
               <Button
                 variant="outlined"
                 startIcon={<UploadIcon />}
                 onClick={() => setImportOpen(true)}
+                sx={{ minHeight: 44, flexShrink: 0 }}
               >
                 Import
               </Button>
@@ -735,6 +980,7 @@ export function Dashboard() {
                 variant="contained"
                 startIcon={showForm ? <CloseIcon /> : <AddIcon />}
                 onClick={() => setShowForm(!showForm)}
+                sx={{ minHeight: 44, flexShrink: 0 }}
               >
                 {showForm ? 'Cancel' : 'Add Contact'}
               </Button>
@@ -742,6 +988,62 @@ export function Dashboard() {
           )}
         </Box>
       </Paper>
+
+      <Popover
+        open={Boolean(filterAnchor)}
+        anchorEl={filterAnchor}
+        onClose={() => setFilterAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+      >
+        <Box sx={{ p: 2, width: 320 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+            <Typography sx={{ fontWeight: 700 }}>More filters</Typography>
+            {extraFilterCount > 0 && (
+              <Button size="small" onClick={clearExtraFilters}>Clear</Button>
+            )}
+          </Box>
+          <Stack spacing={1.5}>
+            <FormControlLabel
+              control={<Checkbox checked={showNoDonationsOnly} onChange={(event) => setShowNoDonationsOnly(event.target.checked)} size="small" />}
+              label="No donations"
+            />
+            <TextField select size="small" label="Status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} fullWidth>
+              <MenuItem value="">Any status</MenuItem>
+              <MenuItem value="new">New</MenuItem>
+              <MenuItem value="contacted">Contacted</MenuItem>
+              <MenuItem value="active">Active</MenuItem>
+              <MenuItem value="converted">Converted</MenuItem>
+              <MenuItem value="inactive">Inactive</MenuItem>
+            </TextField>
+            <TextField select size="small" label="Follow-up" value={followUpFilter} onChange={(event) => setFollowUpFilter(event.target.value)} fullWidth>
+              <MenuItem value="">Any follow-up</MenuItem>
+              <MenuItem value="due">Due</MenuItem>
+              <MenuItem value="overdue">Overdue</MenuItem>
+              <MenuItem value="none">None scheduled</MenuItem>
+            </TextField>
+            <TextField select size="small" label="Phone or email" value={infoFilter} onChange={(event) => setInfoFilter(event.target.value)} fullWidth>
+              <MenuItem value="">Any</MenuItem>
+              <MenuItem value="has-phone">Has a phone</MenuItem>
+              <MenuItem value="missing-phone">Missing a phone</MenuItem>
+              <MenuItem value="has-email">Has an email</MenuItem>
+              <MenuItem value="missing-email">Missing an email</MenuItem>
+            </TextField>
+            <TextField select size="small" label="City" value={cityFilter} onChange={(event) => setCityFilter(event.target.value)} fullWidth>
+              <MenuItem value="">Any city</MenuItem>
+              {cities.map((city) => (
+                <MenuItem key={city} value={city}>{city}</MenuItem>
+              ))}
+            </TextField>
+            <TextField select size="small" label="Last visit" value={visitFilter} onChange={(event) => setVisitFilter(event.target.value)} fullWidth>
+              <MenuItem value="">Any time</MenuItem>
+              <MenuItem value="week">Visited this week</MenuItem>
+              <MenuItem value="older-30">No visit in 30 days</MenuItem>
+              <MenuItem value="never">Never visited</MenuItem>
+            </TextField>
+          </Stack>
+        </Box>
+      </Popover>
 
       {/* Contact Form */}
       <Collapse in={showForm && canEdit()}>
@@ -1059,6 +1361,21 @@ export function Dashboard() {
                             sx={{ mt: 1.5 }}
                             label={`${people.length} contact${people.length === 1 ? '' : 's'}`}
                           />
+                          {canEdit() && (
+                            <Button
+                              variant="outlined"
+                              fullWidth
+                              sx={{ mt: 2, minHeight: 44 }}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setMergeError('');
+                                setFoldBusiness(null);
+                                setKeepBusiness(business);
+                              }}
+                            >
+                              Merge
+                            </Button>
+                          )}
                         </CardContent>
                       </Card>
                     </Grid>
@@ -1284,6 +1601,98 @@ export function Dashboard() {
               Regenerate Followup
             </Button>
             <Button onClick={handleCloseFollowUpDialog}>Close</Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog
+          open={handoffOpen}
+          onClose={() => { if (!handoffBusy) setHandoffOpen(false); }}
+          fullWidth
+          maxWidth="sm"
+        >
+          <DialogTitle>Hand off a book</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Moves this store’s contacts and businesses from one marketer to another. Visit notes stay with the person who wrote them.
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Autocomplete
+                options={bookPeople}
+                getOptionLabel={(person) => person.name}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+                value={bookPeople.find((person) => person.id === handoffFrom) || null}
+                onChange={(_event, value) => setHandoffFrom(value?.id || null)}
+                renderInput={(params) => <TextField {...params} label="From" placeholder="Current marketer" />}
+              />
+              <Autocomplete
+                options={(handoffRecipients.length ? handoffRecipients : bookPeople).filter((person) => person.id !== handoffFrom)}
+                getOptionLabel={(person) => person.name}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+                value={(handoffRecipients.length ? handoffRecipients : bookPeople).find((person) => person.id === handoffTo) || null}
+                onChange={(_event, value) => setHandoffTo(value?.id || null)}
+                renderInput={(params) => <TextField {...params} label="To" placeholder="New marketer" />}
+              />
+              {handoffFrom && (
+                <Typography variant="body2">
+                  {handoffPreview.contacts} contact{handoffPreview.contacts === 1 ? '' : 's'} and {handoffPreview.businesses} business{handoffPreview.businesses === 1 ? '' : 'es'} will move.
+                </Typography>
+              )}
+              {handoffError && <Alert severity="error">{handoffError}</Alert>}
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ px: 2, py: 2, gap: 1, flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'stretch', '& > :not(style)': { m: 0 } }}>
+            <Button onClick={() => setHandoffOpen(false)} disabled={handoffBusy} sx={{ minHeight: 44 }}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              onClick={submitHandoff}
+              disabled={handoffBusy || !handoffFrom || !handoffTo || handoffFrom === handoffTo || (handoffPreview.contacts === 0 && handoffPreview.businesses === 0)}
+              sx={{ minHeight: 44 }}
+            >
+              {handoffBusy ? 'Handing off…' : 'Hand off'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog
+          open={!!keepBusiness}
+          onClose={() => { if (!mergeBusy) setKeepBusiness(null); }}
+          fullWidth
+          maxWidth="sm"
+        >
+          <DialogTitle>Merge businesses</DialogTitle>
+          <DialogContent>
+            {keepBusiness && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 0.5 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Keep <strong>{keepBusiness.name}</strong>. The business you pick is removed, and its contacts, visits, and calendar items move here.
+                </Typography>
+                <Autocomplete
+                  options={businessRecords.filter((business) => business.id !== keepBusiness.id)}
+                  getOptionLabel={(business) => business.name}
+                  isOptionEqualToValue={(option, value) => option.id === value.id}
+                  value={foldBusiness}
+                  onChange={(_event, value) => setFoldBusiness(value)}
+                  renderInput={(params) => <TextField {...params} label="Fold in" placeholder="Type a business" />}
+                />
+                {mergeError && <Alert severity="error">{mergeError}</Alert>}
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 2, py: 2, gap: 1, flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'stretch', '& > :not(style)': { m: 0 } }}>
+            <Button onClick={() => setKeepBusiness(null)} disabled={mergeBusy} sx={{ minHeight: 44 }}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={submitMerge}
+              disabled={mergeBusy || !foldBusiness}
+              sx={{ minHeight: 44 }}
+            >
+              {mergeBusy ? 'Merging…' : 'Merge'}
+            </Button>
           </DialogActions>
         </Dialog>
 
