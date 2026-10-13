@@ -58,13 +58,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (await rejectIfStoreLocked(res, body.storeId, uid)) return;
 
+    const email = body.email.trim().toLowerCase();
+    const existingUser = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (existingUser) {
+      await prisma.storePermission.upsert({
+        where: { user_id_store_id: { user_id: existingUser.id, store_id: body.storeId } },
+        create: { user_id: existingUser.id, store_id: body.storeId, can_edit: body.canEdit === true },
+        update: { can_edit: body.canEdit === true },
+      });
+    }
     const row = await prisma.invite.create({
       data: {
-        email: body.email.trim().toLowerCase(),
+        email,
         store_id: body.storeId,
         can_edit: body.canEdit === true,
         invited_by: uid,
-        status: 'pending',
+        status: existingUser ? 'accepted' : 'pending',
         is_global_admin: false,
       },
     });

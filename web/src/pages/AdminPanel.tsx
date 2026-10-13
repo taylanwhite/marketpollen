@@ -89,6 +89,8 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   // New user invitation
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState('');
+  const [inviteOrgId, setInviteOrgId] = useState('');
+  const [inviteAsOrgAdmin, setInviteAsOrgAdmin] = useState(true);
   const [inviteAccessLevels, setInviteAccessLevels] = useState<Map<string, AccessLevel>>(new Map());
   const [inviteLoading, setInviteLoading] = useState(false);
   const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
@@ -109,17 +111,30 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
     }
   }, [isAdmin, navigate]);
 
+  const storesInOrg = (orgId: string) => stores.filter((store) => store.organizationId === orgId);
+
+  const accessForOrg = (orgId: string, level: AccessLevel) => {
+    const next = new Map<string, AccessLevel>();
+    storesInOrg(orgId).forEach((store) => next.set(store.id, level));
+    return next;
+  };
+
   const openInviteDialog = () => {
+    const orgId = orgChoices.some((org) => org.id === currentOrg?.id)
+      ? currentOrg?.id || ''
+      : orgChoices[0]?.id || '';
     setNewUserEmail('');
-    const defaultMap = new Map<string, AccessLevel>();
-    stores.forEach(store => defaultMap.set(store.id, 'full'));
-    setInviteAccessLevels(defaultMap);
+    setInviteOrgId(orgId);
+    setInviteAsOrgAdmin(canGrantAdmin);
+    setInviteAccessLevels(accessForOrg(orgId, 'full'));
     setInviteDialogOpen(true);
   };
 
   const closeInviteDialog = () => {
     setInviteDialogOpen(false);
     setNewUserEmail('');
+    setInviteOrgId('');
+    setInviteAsOrgAdmin(false);
     setInviteAccessLevels(new Map());
   };
 
@@ -244,15 +259,20 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
 
     try {
       const email = newUserEmail.toLowerCase().trim();
+      const orgStores = storesInOrg(inviteOrgId);
       const permissions: StorePermission[] = [];
-      inviteAccessLevels.forEach((level, storeId) => {
-        if (level !== 'none') {
-          permissions.push({ storeId, canEdit: level === 'full' });
-        }
+      orgStores.forEach((store) => {
+        const level = inviteAccessLevels.get(store.id) || 'none';
+        if (level !== 'none') permissions.push({ storeId: store.id, canEdit: level === 'full' });
       });
 
-      if (permissions.length === 0) {
-        setError('Select at least one store with access.');
+      if (!inviteOrgId) {
+        setError('Choose an organization.');
+        setInviteLoading(false);
+        return;
+      }
+      if (permissions.length === 0 && !inviteAsOrgAdmin) {
+        setError('Give them a store, or make them an organization admin so they can set the new store up.');
         setInviteLoading(false);
         return;
       }
@@ -264,19 +284,24 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
           canEdit: p.canEdit,
         });
       }
+      if (inviteAsOrgAdmin && canGrantAdmin) {
+        await api.post(`/organizations/${inviteOrgId}/members`, { email });
+      }
       
       // Reload invites to show the new one
       await loadPendingInvites();
       
-      // Send invitation email
+      // The owner invite already sends its own email.
       try {
         if (!userId) {
           throw new Error('User not authenticated');
         }
-        await api.post('/send-invite-email', {
-          email: newUserEmail.toLowerCase().trim(),
-          invitedByEmail: userEmail || '',
-        });
+        if (!(inviteAsOrgAdmin && canGrantAdmin)) {
+          await api.post('/send-invite-email', {
+            email: newUserEmail.toLowerCase().trim(),
+            invitedByEmail: userEmail || '',
+          });
+        }
         setSuccess(`Invitation email sent to ${newUserEmail}.`);
       } catch (emailError: any) {
         console.error('Error sending email:', emailError);
@@ -666,66 +691,100 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
               autoFocus
             />
 
-            {stores.length > 0 && (
-              <>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Store Permissions</Typography>
-                  <Box sx={{ display: 'flex', gap: 0.5 }}>
-                    <Button size="small" onClick={() => {
-                      const m = new Map<string, AccessLevel>();
-                      stores.forEach(s => m.set(s.id, 'full'));
-                      setInviteAccessLevels(m);
-                    }}>All Edit</Button>
-                    <Button size="small" onClick={() => {
-                      const m = new Map<string, AccessLevel>();
-                      stores.forEach(s => m.set(s.id, 'view'));
-                      setInviteAccessLevels(m);
-                    }}>All View</Button>
-                    <Button size="small" color="error" onClick={() => {
-                      const m = new Map<string, AccessLevel>();
-                      stores.forEach(s => m.set(s.id, 'none'));
-                      setInviteAccessLevels(m);
-                    }}>None</Button>
-                  </Box>
-                </Box>
+            {orgChoices.length > 1 ? (
+              <TextField
+                select
+                label="Organization"
+                value={inviteOrgId}
+                onChange={(event) => {
+                  const orgId = event.target.value;
+                  setInviteOrgId(orgId);
+                  setInviteAccessLevels(accessForOrg(orgId, 'full'));
+                }}
+                fullWidth
+                size="small"
+              >
+                {orgChoices.map((org) => (
+                  <MenuItem key={org.id} value={org.id}>{org.name}</MenuItem>
+                ))}
+              </TextField>
+            ) : orgChoices[0] ? (
+              <Typography variant="body2" color="text.secondary">
+                Inviting into {orgChoices[0].name}
+              </Typography>
+            ) : null}
 
-                {stores.map((store) => {
-                  const level = inviteAccessLevels.get(store.id) || 'full';
-                  return (
-                    <Box key={store.id}>
-                      <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
-                        {store.name}
-                      </Typography>
-                      <ToggleButtonGroup
-                        value={level}
-                        exclusive
-                        onChange={(_, v) => {
-                          if (v !== null) {
-                            setInviteAccessLevels(prev => {
-                              const next = new Map(prev);
-                              next.set(store.id, v);
-                              return next;
-                            });
-                          }
-                        }}
-                        size="small"
-                        fullWidth
-                      >
-                        <ToggleButton value="none" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
-                          <BlockIcon sx={{ fontSize: 14, mr: 0.5 }} /> None
-                        </ToggleButton>
-                        <ToggleButton value="view" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
-                          <ViewIcon sx={{ fontSize: 14, mr: 0.5 }} /> View
-                        </ToggleButton>
-                        <ToggleButton value="full" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
-                          <EditNoteIcon sx={{ fontSize: 14, mr: 0.5 }} /> Edit
-                        </ToggleButton>
-                      </ToggleButtonGroup>
-                    </Box>
-                  );
-                })}
-              </>
+            {canGrantAdmin && (
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={inviteAsOrgAdmin}
+                    onChange={(event) => setInviteAsOrgAdmin(event.target.checked)}
+                  />
+                }
+                label={
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>Organization admin</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      They can finish signup, billing, and the stores in this organization.
+                    </Typography>
+                  </Box>
+                }
+              />
             )}
+
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                {orgChoices.find((org) => org.id === inviteOrgId)?.name || 'Stores'}
+              </Typography>
+              {storesInOrg(inviteOrgId).length > 0 && (
+                <Box sx={{ display: 'flex', gap: 0.5 }}>
+                  <Button size="small" onClick={() => setInviteAccessLevels(accessForOrg(inviteOrgId, 'full'))}>All Edit</Button>
+                  <Button size="small" onClick={() => setInviteAccessLevels(accessForOrg(inviteOrgId, 'view'))}>All View</Button>
+                  <Button size="small" color="error" onClick={() => setInviteAccessLevels(accessForOrg(inviteOrgId, 'none'))}>None</Button>
+                </Box>
+              )}
+            </Box>
+
+            {storesInOrg(inviteOrgId).length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No stores yet. An organization admin can create the first one.
+              </Typography>
+            ) : storesInOrg(inviteOrgId).map((store) => {
+              const level = inviteAccessLevels.get(store.id) || 'full';
+              return (
+                <Box key={store.id}>
+                  <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
+                    {store.name}
+                  </Typography>
+                  <ToggleButtonGroup
+                    value={level}
+                    exclusive
+                    onChange={(_, v) => {
+                      if (v !== null) {
+                        setInviteAccessLevels(prev => {
+                          const next = new Map(prev);
+                          next.set(store.id, v);
+                          return next;
+                        });
+                      }
+                    }}
+                    size="small"
+                    fullWidth
+                  >
+                    <ToggleButton value="none" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
+                      <BlockIcon sx={{ fontSize: 14, mr: 0.5 }} /> None
+                    </ToggleButton>
+                    <ToggleButton value="view" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
+                      <ViewIcon sx={{ fontSize: 14, mr: 0.5 }} /> View
+                    </ToggleButton>
+                    <ToggleButton value="full" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
+                      <EditNoteIcon sx={{ fontSize: 14, mr: 0.5 }} /> Edit
+                    </ToggleButton>
+                  </ToggleButtonGroup>
+                </Box>
+              );
+            })}
           </Box>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>

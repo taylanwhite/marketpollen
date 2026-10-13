@@ -26,6 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       where: { id: uid },
       data: { email, display_name: body.displayName ?? null },
     });
+    await acceptStoreInvites(uid, email);
     await acceptOwnerInvites(uid, email);
     return respondWithUser(res, uid, 200);
   }
@@ -101,6 +102,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   await acceptOwnerInvites(uid, email);
 
   return respondWithUser(res, uid, 201);
+}
+
+async function acceptStoreInvites(userId: string, email: string) {
+  const invites = await prisma.invite.findMany({
+    where: { email: email.toLowerCase(), status: 'pending', is_global_admin: false },
+  });
+  for (const invite of invites) {
+    await prisma.storePermission.upsert({
+      where: { user_id_store_id: { user_id: userId, store_id: invite.store_id } },
+      create: { user_id: userId, store_id: invite.store_id, can_edit: invite.can_edit },
+      update: { can_edit: invite.can_edit },
+    });
+    await prisma.invite.update({
+      where: { id: invite.id },
+      data: { status: 'accepted' },
+    });
+  }
 }
 
 async function acceptOwnerInvites(userId: string, email: string) {
