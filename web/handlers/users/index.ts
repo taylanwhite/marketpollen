@@ -10,6 +10,7 @@ function toUserJson(
     email: string;
     display_name: string | null;
     created_at: Date;
+    is_global_admin: boolean;
     store_permissions: Array<{ store_id: string; can_edit: boolean }>;
     organization_memberships: Array<{ org_id: string; is_admin: boolean; org: { name: string } }>;
   },
@@ -51,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         select: { id: true },
       })).map((store) => store.id));
     const orgIdSet = orgIds === 'all' ? null : new Set(orgIds);
-    const rows = await prisma.user.findMany({
+    const found = await prisma.user.findMany({
       where: orgIds === 'all' ? undefined : {
         OR: [
           { organization_memberships: { some: { org_id: { in: orgIds } } } },
@@ -66,6 +67,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         },
       },
     });
+    const rows = orgIds === 'all'
+      ? found
+      : found.filter((user) => !user.is_global_admin && !isKingAdminEmail(user.email));
     return res.status(200).json(rows.map((user) => toUserJson(user, { storeIds, orgIds: orgIdSet })));
   }
 

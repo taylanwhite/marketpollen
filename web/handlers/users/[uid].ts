@@ -15,6 +15,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const targetUid = (req.query?.uid as string)?.trim();
   if (!targetUid) return res.status(400).json({ error: 'User uid required' });
 
+  const target = await prisma.user.findUnique({
+    where: { id: targetUid },
+    select: { email: true, is_global_admin: true },
+  });
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if ((target.is_global_admin || isKingAdminEmail(target.email)) && orgIds !== 'all') {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
   if (req.method === 'PATCH') {
     const body = req.body as {
       isOrgAdmin?: boolean;

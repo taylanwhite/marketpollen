@@ -3,6 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { rejectIfStoreLocked } from './lib/store-access.js';
 import { adminOrgIds } from './lib/org-access.js';
+import { isKingAdminEmail } from './lib/king-admin-email.js';
 
 function toInviteJson(r: { id: string; email: string; store_id: string; can_edit: boolean; invited_by: string; invited_at: Date; status: string; is_global_admin: boolean }) {
   return {
@@ -43,7 +44,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           : undefined,
       orderBy: { invited_at: 'desc' },
     });
-    return res.status(200).json(rows.map(toInviteJson));
+    const visible = orgIds === 'all'
+      ? rows
+      : rows.filter((row) => !row.is_global_admin && !isKingAdminEmail(row.email));
+    return res.status(200).json(visible.map(toInviteJson));
   }
 
   if (req.method === 'POST') {

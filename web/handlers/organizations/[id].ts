@@ -2,6 +2,8 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { isOrgAdmin } from '../lib/org-access.js';
+import { isKingAdmin } from '../lib/king-admin.js';
+import { isKingAdminEmail } from '../lib/king-admin-email.js';
 import { billingView } from '../lib/billing.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -22,7 +24,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       prisma.campaignProduct.findMany({ where: { org_id: id }, orderBy: { display_order: 'asc' } }),
       prisma.organizationMember.findMany({
         where: { org_id: id },
-        include: { user: { select: { id: true, email: true, display_name: true } } },
+        include: { user: { select: { id: true, email: true, display_name: true, is_global_admin: true } } },
       }),
       prisma.organizationInvite.findMany({
         where: { org_id: id, status: 'pending' },
@@ -48,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         isActive: p.is_active,
         reachoutColumn: p.reachout_column,
       })),
-      members: members.map(m => ({
+      members: (await isKingAdmin(uid) ? members : members.filter((member) => !member.user.is_global_admin && !isKingAdminEmail(member.user.email))).map(m => ({
         userId: m.user.id,
         email: m.user.email,
         displayName: m.user.display_name,
