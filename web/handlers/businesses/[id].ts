@@ -2,8 +2,24 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
+import { businessCorporateData } from '../lib/contact-profile.js';
 
-function toBusinessJson(r: { id: string; store_id: string; name: string; address: string | null; city: string | null; state: string | null; zip_code: string | null; place_id: string | null; created_at: Date; created_by: string }) {
+function toBusinessJson(r: {
+  id: string;
+  store_id: string;
+  name: string;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip_code: string | null;
+  place_id: string | null;
+  is_corporate_account: boolean;
+  tax_exempt_number: string | null;
+  card_on_file_last4: string | null;
+  corporate_status: string | null;
+  created_at: Date;
+  created_by: string;
+}) {
   return {
     id: r.id,
     storeId: r.store_id,
@@ -13,6 +29,10 @@ function toBusinessJson(r: { id: string; store_id: string; name: string; address
     state: r.state ?? undefined,
     zipCode: r.zip_code ?? undefined,
     placeId: r.place_id ?? undefined,
+    isCorporateAccount: r.is_corporate_account === true,
+    taxExemptNumber: r.tax_exempt_number ?? null,
+    cardOnFileLast4: r.card_on_file_last4 ?? null,
+    corporateStatus: r.corporate_status === 'inactive' ? 'inactive' : r.is_corporate_account ? 'active' : null,
     createdAt: r.created_at,
     createdBy: r.created_by,
   };
@@ -36,7 +56,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (await rejectIfStoreLocked(res, business.store_id, uid)) return;
 
   if (req.method === 'PATCH') {
-    const body = req.body as { name?: string; address?: string; city?: string; state?: string; zipCode?: string; placeId?: string };
+    const body = req.body as {
+      name?: string;
+      address?: string;
+      city?: string;
+      state?: string;
+      zipCode?: string;
+      placeId?: string;
+      isCorporateAccount?: boolean;
+      taxExemptNumber?: string | null;
+      cardOnFileLast4?: string | null;
+      corporateStatus?: string | null;
+    };
     const updated = await prisma.business.update({
       where: { id },
       data: {
@@ -46,6 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...(body?.state !== undefined && { state: body.state }),
         ...(body?.zipCode !== undefined && { zip_code: body.zipCode }),
         ...(body?.placeId !== undefined && { place_id: body.placeId || null }),
+        ...businessCorporateData(body, true),
       },
     });
     return res.status(200).json(toBusinessJson(updated));

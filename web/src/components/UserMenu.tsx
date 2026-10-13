@@ -30,7 +30,6 @@ import {
   Person as PersonIcon,
   Insights as ReportsIcon,
   Business as OrgIcon,
-  Apartment as CorporateIcon,
 } from '@mui/icons-material';
 import { Store } from '../types';
 
@@ -186,12 +185,6 @@ export function UserMenu({ currentStore, hasMultipleStores }: UserMenuProps) {
             <ReportsIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText>Reports</ListItemText>
-        </MenuItem>
-        <MenuItem onClick={() => go('/corporate-accounts')} selected={isActive('/corporate-accounts')} sx={{ display: { sm: 'none' } }}>
-          <ListItemIcon>
-            <CorporateIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>Corporate Accounts</ListItemText>
         </MenuItem>
         <Divider />
 

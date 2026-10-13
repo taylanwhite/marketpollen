@@ -79,6 +79,10 @@ export interface Business {
   state?: string | null;
   zipCode?: string | null;
   placeId?: string | null; // Google Places ID; set when created from an opportunity
+  isCorporateAccount?: boolean;
+  taxExemptNumber?: string | null;
+  cardOnFileLast4?: string | null;
+  corporateStatus?: 'active' | 'inactive' | null;
   createdAt: Date;
   createdBy: string; // user uid
 }
@@ -191,10 +195,6 @@ export interface Contact {
   lastReachoutDate?: Date | null;
   status?: 'new' | 'contacted' | 'active' | 'converted' | 'inactive';
   organizationType?: string | null;
-  isCorporateAccount?: boolean;
-  taxExemptNumber?: string | null;
-  cardOnFileLast4?: string | null;
-  corporateStatus?: 'active' | 'inactive' | null;
   updatedAt?: Date | null;
 }
 

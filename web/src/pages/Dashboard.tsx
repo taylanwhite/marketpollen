@@ -9,7 +9,8 @@ import { ContactForm } from '../components/ContactForm';
 import { ImportCustomersDialog } from '../components/ImportCustomersDialog';
 import { connectionValue } from '../utils/connectionLabel';
 import { PhoneLink } from '../components/PhoneLink';
-import { knownOrganizationTypes } from '../utils/organizationTypes';
+import { knownOrganizationTypes, corporateAccountFromBusiness, corporateAccountPayload, type CorporateAccountFields } from '../utils/organizationTypes';
+import { CorporateAccountEditor } from '../components/ContactProfileFields';
 
 // Heavy modals — pulled in on demand to keep the contacts list snappy on
 // first paint, especially on slow LTE.
@@ -133,6 +134,10 @@ export function Dashboard() {
   const [importOpen, setImportOpen] = useState(false);
   const [importNotice, setImportNotice] = useState('');
   const [businessMenu, setBusinessMenu] = useState<{ anchor: HTMLElement; business: Business } | null>(null);
+  const [corporateOnly, setCorporateOnly] = useState(false);
+  const [corporateBusiness, setCorporateBusiness] = useState<Business | null>(null);
+  const [corporateDraft, setCorporateDraft] = useState<CorporateAccountFields>(corporateAccountFromBusiness(null));
+  const [corporateSaving, setCorporateSaving] = useState(false);
   const [keepBusiness, setKeepBusiness] = useState<Business | null>(null);
   const [foldBusiness, setFoldBusiness] = useState<Business | null>(null);
   const [mergeBusy, setMergeBusy] = useState(false);
@@ -427,6 +432,7 @@ export function Dashboard() {
     const term = searchTerm.trim().toLowerCase();
     return businessRecords
       .filter((business) => {
+        if (corporateOnly && !business.isCorporateAccount) return false;
         if (!term) return true;
         const people = contacts
           .filter((contact) => contactBusinessIds(contact).includes(business.id))
@@ -449,7 +455,7 @@ export function Dashboard() {
         }
         return a.name.localeCompare(b.name);
       });
-  }, [businessRecords, contacts, searchTerm, businessSort]);
+  }, [businessRecords, contacts, searchTerm, businessSort, corporateOnly]);
 
   const marketers = useMemo(() => {
     const names = new Set<string>();
@@ -861,6 +867,24 @@ export function Dashboard() {
   const businessPlace = (business: Business) =>
     [business.address, business.city].filter(Boolean).join(', ');
 
+  const saveCorporateAccount = async () => {
+    if (!corporateBusiness) return;
+    setCorporateSaving(true);
+    try {
+      const saved = await api.patch<Business>(`/businesses/${corporateBusiness.id}`, corporateAccountPayload(corporateDraft));
+      setBusinessRecords((current) => current.map((business) => (
+        business.id === corporateBusiness.id ? { ...business, ...saved } : business
+      )));
+      setCorporateBusiness(null);
+      haptics.success();
+    } catch (error) {
+      console.error('Error saving corporate account:', error);
+      haptics.error();
+    } finally {
+      setCorporateSaving(false);
+    }
+  };
+
   const contactCountLabel = (businessId: string) => {
     const count = contacts.filter((contact) => contactBusinessIds(contact).includes(businessId)).length;
     return `${count} contact${count === 1 ? '' : 's'}`;
@@ -991,6 +1015,11 @@ export function Dashboard() {
               </Badge>
             </>
           ) : (
+            <>
+            <FormControlLabel
+              control={<Checkbox checked={corporateOnly} onChange={(event) => setCorporateOnly(event.target.checked)} size="small" />}
+              label="Corporate accounts"
+            />
             <TextField
               select
               size="small"
@@ -1003,6 +1032,7 @@ export function Dashboard() {
               <MenuItem value="newest">Newest</MenuItem>
               <MenuItem value="contacts">Most contacts</MenuItem>
             </TextField>
+            </>
           )}
           
           {canEdit() && (
@@ -1391,7 +1421,7 @@ export function Dashboard() {
             filteredBusinesses.length === 0 ? (
               <Paper sx={{ p: 4, textAlign: 'center' }}>
                 <Typography color="text.secondary">
-                  {searchTerm ? 'No businesses match your search' : 'No businesses yet. Add one when you add a contact.'}
+                  {searchTerm || corporateOnly ? 'No businesses match your search' : 'No businesses yet. Add one when you add a contact.'}
                 </Typography>
               </Paper>
             ) : (
@@ -1429,11 +1459,15 @@ export function Dashboard() {
                               </IconButton>
                             )}
                           </Box>
-                          <Chip
-                            size="small"
-                            sx={{ mt: 1.5 }}
-                            label={`${people.length} contact${people.length === 1 ? '' : 's'}`}
-                          />
+                          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1.5 }}>
+                            <Chip
+                              size="small"
+                              label={`${people.length} contact${people.length === 1 ? '' : 's'}`}
+                            />
+                            {business.isCorporateAccount && (
+                              <Chip size="small" color="primary" variant="outlined" label="Corporate account" />
+                            )}
+                          </Box>
                         </CardContent>
                       </Card>
                     </Grid>
@@ -1505,8 +1539,8 @@ export function Dashboard() {
                         {contact.organizationType && (
                           <Chip label={contact.organizationType} size="small" variant="outlined" />
                         )}
-                        {contact.isCorporateAccount && (
-                          <Chip label="Corporate" size="small" color="primary" variant="outlined" />
+                        {contactBusinessIds(contact).some((id) => businessRecords.some((business) => business.id === id && business.isCorporateAccount)) && (
+                          <Chip label="Corporate account" size="small" color="primary" variant="outlined" />
                         )}
                         <Chip 
                           label={`${contact.reachouts.length} reachouts`} 
@@ -1785,6 +1819,21 @@ export function Dashboard() {
           </DialogActions>
         </Dialog>
 
+        <Dialog open={!!corporateBusiness} onClose={() => { if (!corporateSaving) setCorporateBusiness(null); }} fullWidth maxWidth="xs">
+          <DialogTitle>{corporateBusiness?.name}</DialogTitle>
+          <DialogContent>
+            <Box sx={{ pt: 1 }}>
+              <CorporateAccountEditor value={corporateDraft} onChange={setCorporateDraft} disabled={corporateSaving} />
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setCorporateBusiness(null)} disabled={corporateSaving}>Cancel</Button>
+            <Button variant="contained" onClick={saveCorporateAccount} disabled={corporateSaving}>
+              {corporateSaving ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
         <Menu
           anchorEl={businessMenu?.anchor}
           open={!!businessMenu}
@@ -1804,6 +1853,19 @@ export function Dashboard() {
           >
             <ListItemIcon><PersonIcon fontSize="small" /></ListItemIcon>
             View contacts
+          </MenuItem>
+          <MenuItem
+            sx={{ minHeight: 48 }}
+            onClick={() => {
+              const business = businessMenu?.business;
+              setBusinessMenu(null);
+              if (!business) return;
+              setCorporateBusiness(business);
+              setCorporateDraft(corporateAccountFromBusiness(business));
+            }}
+          >
+            <ListItemIcon><BusinessIcon fontSize="small" /></ListItemIcon>
+            Corporate account
           </MenuItem>
           <MenuItem
             sx={{ minHeight: 48 }}

@@ -156,6 +156,10 @@ model Business {
   state      String?
   zip_code   String?
   place_id   String?
+  is_corporate_account Boolean @default(false)
+  tax_exempt_number    String?
+  card_on_file_last4   String?
+  corporate_status     String?
   created_at DateTime @default(now())
   created_by String
 
@@ -214,10 +218,6 @@ model Contact {
   last_reachout_date         DateTime?
   status                     String?
   organization_type          String?
-  is_corporate_account       Boolean   @default(false)
-  tax_exempt_number          String?
-  card_on_file_last4         String?
-  corporate_status           String?
   created_at                 DateTime  @default(now())
   updated_at                 DateTime  @default(now()) @updatedAt
   created_by                 String

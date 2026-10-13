@@ -54,10 +54,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       status?: string;
       businessIds?: string[];
       organizationType?: string | null;
-      isCorporateAccount?: boolean;
-      taxExemptNumber?: string | null;
-      cardOnFileLast4?: string | null;
-      corporateStatus?: string | null;
     };
     if (!body?.businessId) return res.status(400).json({ error: 'businessId is required' });
 

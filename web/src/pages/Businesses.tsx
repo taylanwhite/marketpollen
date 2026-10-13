@@ -6,6 +6,8 @@ import { Business, Contact } from '../types';
 import { AddressPicker } from '../components/AddressPicker';
 import { ImportCustomersDialog } from '../components/ImportCustomersDialog';
 import { PlaceMatchPicker, type PlaceResult } from '../components/PlaceMatchPicker';
+import { CorporateAccountEditor } from '../components/ContactProfileFields';
+import { corporateAccountFromBusiness, corporateAccountPayload, type CorporateAccountFields } from '../utils/organizationTypes';
 import {
   Box,
   Typography,
@@ -58,6 +60,7 @@ export function Businesses() {
     state: '',
     zipCode: ''
   });
+  const [corporateDraft, setCorporateDraft] = useState<CorporateAccountFields>(corporateAccountFromBusiness(null));
   const [editLoading, setEditLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -135,6 +138,7 @@ export function Businesses() {
       state: business.state || '',
       zipCode: business.zipCode || ''
     });
+    setCorporateDraft(corporateAccountFromBusiness(business));
     setError('');
     setSuccess('');
   };
@@ -148,6 +152,7 @@ export function Businesses() {
       state: '',
       zipCode: ''
     });
+    setCorporateDraft(corporateAccountFromBusiness(null));
     setError('');
     setSuccess('');
   };
@@ -206,7 +211,8 @@ export function Businesses() {
         address: editFormData.address.trim() || undefined,
         city: editFormData.city.trim() || undefined,
         state: editFormData.state.trim().toUpperCase() || undefined,
-        zipCode: editFormData.zipCode.trim() || undefined
+        zipCode: editFormData.zipCode.trim() || undefined,
+        ...corporateAccountPayload(corporateDraft),
       });
 
       setSuccess('Business updated successfully!');
@@ -425,8 +431,9 @@ export function Businesses() {
                   fullWidth
                 />
               </Box>
+              </Box>
+              <CorporateAccountEditor value={corporateDraft} onChange={setCorporateDraft} disabled={editLoading} />
             </Box>
-          </Box>
 
             {/* Google Place Link Section */}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>

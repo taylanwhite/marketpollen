@@ -20,7 +20,6 @@ import { Platform } from './pages/Platform';
 import { StorePicker } from './pages/StorePicker';
 import { NoAccess } from './pages/NoAccess';
 import { Reports } from './pages/Reports';
-import { CorporateAccounts } from './pages/CorporateAccounts';
 import './App.css';
 
 const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
@@ -77,14 +76,6 @@ function AppRoutes() {
               element={
                 <ProtectedRoute>
                   <Donations />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/corporate-accounts"
-              element={
-                <ProtectedRoute>
-                  <CorporateAccounts />
                 </ProtectedRoute>
               }
             />

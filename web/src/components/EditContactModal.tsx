@@ -112,10 +112,6 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   });
   const [profile, setProfile] = useState<ContactProfileExtras>({
     organizationType: contact.organizationType || '',
-    isCorporateAccount: contact.isCorporateAccount === true,
-    taxExemptNumber: contact.taxExemptNumber || '',
-    cardOnFileLast4: contact.cardOnFileLast4 || '',
-    corporateStatus: contact.corporateStatus || '',
   });
   
   // Note: newReachout, rawNotes, includeDonation, donationData removed - they were part of the "Add Reachout" tab that was removed

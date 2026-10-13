@@ -14,6 +14,7 @@ import {
   knownOrganizationTypes,
   organizationTypeSections,
   type ContactProfileExtras,
+  type CorporateAccountFields,
 } from '../utils/organizationTypes';
 
 export function ContactProfileFields({
@@ -42,11 +43,11 @@ export function ContactProfileFields({
           const next = event.target.value;
           if (next === '__other__') {
             setOtherMode(true);
-            if (!custom) onChange({ ...value, organizationType: '' });
+            if (!custom) onChange({ organizationType: '' });
             return;
           }
           setOtherMode(false);
-          onChange({ ...value, organizationType: next });
+          onChange({ organizationType: next });
         }}
         fullWidth
         disabled={disabled}
@@ -65,12 +66,26 @@ export function ContactProfileFields({
         <TextField
           label="Other organization type"
           value={value.organizationType}
-          onChange={(event) => onChange({ ...value, organizationType: event.target.value })}
+          onChange={(event) => onChange({ organizationType: event.target.value })}
           fullWidth
           disabled={disabled}
         />
       )}
+    </Box>
+  );
+}
 
+export function CorporateAccountEditor({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: CorporateAccountFields;
+  onChange: (next: CorporateAccountFields) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <FormControlLabel
         control={
           <Switch
@@ -93,12 +108,8 @@ export function ContactProfileFields({
           </Box>
         }
       />
-
       <Collapse in={value.isCorporateAccount}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: 2, bgcolor: 'rgba(245, 200, 66, 0.12)', borderRadius: 2 }}>
-          <Typography variant="body2" color="text.secondary">
-            Company, phone, and email stay in the fields already on this card. Organization type is the business type.
-          </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <TextField
             label="Tax exempt #"
             value={value.taxExemptNumber}
@@ -109,10 +120,7 @@ export function ContactProfileFields({
           <TextField
             label="Card on file (last 4)"
             value={value.cardOnFileLast4}
-            onChange={(event) => {
-              const digits = event.target.value.replace(/\D/g, '').slice(-4);
-              onChange({ ...value, cardOnFileLast4: digits });
-            }}
+            onChange={(event) => onChange({ ...value, cardOnFileLast4: event.target.value.replace(/\D/g, '').slice(-4) })}
             fullWidth
             disabled={disabled}
             helperText="Last 4 digits only. Full card numbers are not saved."
@@ -120,7 +128,7 @@ export function ContactProfileFields({
           />
           <TextField
             select
-            label="Corporate account status"
+            label="Status"
             value={value.corporateStatus === 'inactive' ? 'inactive' : 'active'}
             onChange={(event) => onChange({ ...value, corporateStatus: event.target.value })}
             fullWidth

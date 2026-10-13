@@ -41,10 +41,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastReachoutDate?: string | Date | null;
       status?: string | null;
       organizationType?: string | null;
-      isCorporateAccount?: boolean;
-      taxExemptNumber?: string | null;
-      cardOnFileLast4?: string | null;
-      corporateStatus?: string | null;
       businessId?: string;
       businessIds?: string[];
       reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; customItems?: Record<string, number>; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean; noFollowUp?: boolean } }>;

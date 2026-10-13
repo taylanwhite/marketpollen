@@ -25,24 +25,30 @@ export function cleanTaxExempt(value: unknown): string | null {
 
 type ProfileBody = {
   organizationType?: string | null;
+};
+
+export function contactProfileData(body: ProfileBody, partial: boolean) {
+  const data: { organization_type?: string | null } = {};
+  if (!partial || body.organizationType !== undefined) {
+    data.organization_type = cleanOrganizationType(body.organizationType);
+  }
+  return data;
+}
+
+type CorporateBody = {
   isCorporateAccount?: boolean;
   taxExemptNumber?: string | null;
   cardOnFileLast4?: string | null;
   corporateStatus?: string | null;
 };
 
-export function contactProfileData(body: ProfileBody, partial: boolean) {
+export function businessCorporateData(body: CorporateBody, partial: boolean) {
   const data: {
-    organization_type?: string | null;
     is_corporate_account?: boolean;
     tax_exempt_number?: string | null;
     card_on_file_last4?: string | null;
     corporate_status?: string | null;
   } = {};
-
-  if (!partial || body.organizationType !== undefined) {
-    data.organization_type = cleanOrganizationType(body.organizationType);
-  }
   if (!partial || body.isCorporateAccount !== undefined) {
     data.is_corporate_account = body.isCorporateAccount === true;
   }
@@ -55,6 +61,5 @@ export function contactProfileData(body: ProfileBody, partial: boolean) {
   if (!partial || body.corporateStatus !== undefined) {
     data.corporate_status = cleanCorporateStatus(body.corporateStatus);
   }
-
   return data;
 }
