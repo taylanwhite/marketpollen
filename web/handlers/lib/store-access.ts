@@ -1,6 +1,6 @@
 import { prisma } from './db.js';
 import { isOrgAdmin } from './org-access.js';
-import { isKingAdmin } from './king-admin.js';
+import { isPlatformAdmin } from './king-admin.js';
 import { STORE_ARCHIVED_MESSAGE, STORE_PAUSED_MESSAGE } from './billing-copy.js';
 import { billingAccess } from './org-billing-access.js';
 
@@ -31,7 +31,7 @@ export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, ui
   if (store.organization) {
     const access = billingAccess(store.organization);
     if (access.mode === 'trial_ended' || access.mode === 'payment_locked') {
-      if (!(uid && await isKingAdmin(uid))) {
+      if (!(uid && await isPlatformAdmin(uid))) {
         res.status(403).json({
           error: access.mode === 'trial_ended'
             ? 'Trial is done, please pay.'
@@ -61,7 +61,7 @@ export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, ui
  * Org admin without a store invite can view, not write.
  */
 export async function canAccessStore(uid: string, storeId: string): Promise<boolean> {
-  if (await isKingAdmin(uid)) return true;
+  if (await isPlatformAdmin(uid)) return true;
   const perm = await prisma.storePermission.findUnique({
     where: { user_id_store_id: { user_id: uid, store_id: storeId } },
   });
@@ -84,7 +84,7 @@ export async function canViewStore(uid: string, storeId: string): Promise<boolea
 export type AccessibleStores = { all: true } | { ids: string[] };
 
 export async function getAccessibleStores(uid: string): Promise<AccessibleStores> {
-  if (await isKingAdmin(uid)) return { all: true };
+  if (await isPlatformAdmin(uid)) return { all: true };
 
   const [perms, adminOrgs] = await Promise.all([
     prisma.storePermission.findMany({

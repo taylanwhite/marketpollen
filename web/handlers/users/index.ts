@@ -31,7 +31,7 @@ function toUserJson(
     email: user.email,
     displayName: user.display_name ?? undefined,
     createdAt: user.created_at,
-    isGlobalAdmin: isKingAdminEmail(user.email),
+    isGlobalAdmin: user.is_global_admin || isKingAdminEmail(user.email),
     storePermissions,
     orgMemberships,
   };

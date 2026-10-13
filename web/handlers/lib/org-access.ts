@@ -1,9 +1,9 @@
 import { prisma } from './db.js';
-import { isKingAdmin } from './king-admin.js';
+import { isPlatformAdmin } from './king-admin.js';
 
 /** Every organization this person administers. `'all'` is only the platform owner. */
 export async function adminOrgIds(uid: string): Promise<string[] | 'all'> {
-  if (await isKingAdmin(uid)) return 'all';
+  if (await isPlatformAdmin(uid)) return 'all';
   const memberships = await prisma.organizationMember.findMany({
     where: { user_id: uid, is_admin: true },
     select: { org_id: true },
@@ -12,7 +12,7 @@ export async function adminOrgIds(uid: string): Promise<string[] | 'all'> {
 }
 
 export async function isOrgAdmin(uid: string, orgId: string): Promise<boolean> {
-  if (await isKingAdmin(uid)) return true;
+  if (await isPlatformAdmin(uid)) return true;
 
   const member = await prisma.organizationMember.findUnique({
     where: { user_id_org_id: { user_id: uid, org_id: orgId } },
@@ -21,7 +21,7 @@ export async function isOrgAdmin(uid: string, orgId: string): Promise<boolean> {
 }
 
 export async function isOrgMember(uid: string, orgId: string): Promise<boolean> {
-  if (await isKingAdmin(uid)) return true;
+  if (await isPlatformAdmin(uid)) return true;
 
   const member = await prisma.organizationMember.findUnique({
     where: { user_id_org_id: { user_id: uid, org_id: orgId } },

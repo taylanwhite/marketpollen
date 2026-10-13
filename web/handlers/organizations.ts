@@ -3,7 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { createDefaultCampaignProducts } from './lib/default-products.js';
 import { trialEndFromNow } from './lib/org-billing-access.js';
-import { isKingAdmin } from './lib/king-admin.js';
+import { isPlatformAdmin } from './lib/king-admin.js';
 
 function toOrgJson(o: any) {
   return {
@@ -21,7 +21,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'GET') {
     let orgs;
-    if (await isKingAdmin(uid)) {
+    if (await isPlatformAdmin(uid)) {
       orgs = await prisma.organization.findMany({ orderBy: { name: 'asc' } });
     } else {
       const memberships = await prisma.organizationMember.findMany({
@@ -36,7 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'POST') {
-    if (!(await isKingAdmin(uid))) return res.status(403).json({ error: 'Only the platform owner can create organizations' });
+    if (!(await isPlatformAdmin(uid))) return res.status(403).json({ error: 'Only the platform owner can create organizations' });
 
     const body = req.body as { name: string; quarterlyGoal?: number; trial?: boolean };
     if (!body?.name?.trim()) return res.status(400).json({ error: 'name is required' });

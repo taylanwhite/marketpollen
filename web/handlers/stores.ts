@@ -3,7 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { getAccessibleStores } from './lib/store-access.js';
 import { isOrgAdmin } from './lib/org-access.js';
-import { isKingAdmin } from './lib/king-admin.js';
+import { isPlatformAdmin } from './lib/king-admin.js';
 import { BillingHttpError, commitAddStoreCharge, noteStoreAdded } from './lib/billing.js';
 import { sendStoreInvoiceEmail } from './lib/payment-grace.js';
 import { STORE_UNIT_CENTS, pausedBanner, scheduledPauseBanner } from './lib/billing-copy.js';
@@ -127,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (orgId) {
       if (!(await isOrgAdmin(uid, orgId))) return res.status(403).json({ error: 'Org admin required' });
-    } else if (!(await isKingAdmin(uid))) {
+    } else if (!(await isPlatformAdmin(uid))) {
       return res.status(403).json({ error: 'Org admin required' });
     }
 

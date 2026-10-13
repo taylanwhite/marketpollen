@@ -82,6 +82,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   const [editingUser, setEditingUser] = useState<UserWithPermissions | null>(null);
   const [editAccessLevels, setEditAccessLevels] = useState<Map<string, AccessLevel>>(new Map());
   const [editIsOrgAdmin, setEditIsOrgAdmin] = useState(false);
+  const [editIsGlobalAdmin, setEditIsGlobalAdmin] = useState(false);
   const [editOrgId, setEditOrgId] = useState('');
   const [orgChoices, setOrgChoices] = useState<Array<{ id: string; name: string }>>([]);
   
@@ -356,6 +357,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
 
   const openEditModal = (user: UserWithPermissions) => {
     setEditingUser(user);
+    setEditIsGlobalAdmin(user.isGlobalAdmin);
     const fallbackOrgId = currentOrg?.id || orgChoices[0]?.id || '';
     applyOrgEditor(user, fallbackOrgId);
   };
@@ -364,6 +366,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
     setEditingUser(null);
     setEditAccessLevels(new Map());
     setEditIsOrgAdmin(false);
+    setEditIsGlobalAdmin(false);
   };
 
   const handleAccessLevelChange = (storeId: string, level: AccessLevel) => {
@@ -418,7 +421,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
       await api.patch(`/users/${editingUser.uid}`, {
         storePermissions: permissions,
         scopedStoreIds,
-        ...(canGrantAdmin ? { isOrgAdmin: editIsOrgAdmin } : {}),
+        ...(canGrantAdmin ? { isOrgAdmin: editIsOrgAdmin, isGlobalAdmin: editIsGlobalAdmin } : {}),
         orgId,
       });
 
@@ -431,9 +434,13 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   };
 
   const getUserAccessSummary = (user: UserWithPermissions): string => {
-    if (user.isGlobalAdmin) return 'MarketPollen admin';
-
     const adminOrgNames = (user.orgMemberships || []).filter((item) => item.isAdmin).map((item) => item.orgName);
+    if (user.isGlobalAdmin) {
+      return adminOrgNames.length > 0
+        ? `MarketPollen admin. Admin of ${adminOrgNames.join(', ')}`
+        : 'MarketPollen admin';
+    }
+
     const orgLabel = adminOrgNames.length > 0 ? `Admin of ${adminOrgNames.join(', ')}` : '';
     
     const accessCount = user.storePermissions.length;
@@ -545,7 +552,10 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                           <Chip label="You" size="small" color="primary" variant="outlined" />
                         )}
                         {user.isGlobalAdmin && (
-                          <Chip label="Admin" size="small" color="secondary" icon={<AdminIcon />} />
+                          <Chip label="Super user" size="small" color="secondary" icon={<AdminIcon />} />
+                        )}
+                        {!user.isGlobalAdmin && user.orgMemberships?.some((item) => item.isAdmin) && (
+                          <Chip label="Org admin" size="small" variant="outlined" />
                         )}
                       </Box>
                     }
@@ -749,6 +759,26 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                       <MenuItem key={org.id} value={org.id}>{org.name}</MenuItem>
                     ))}
                   </TextField>
+                )}
+                {canGrantAdmin && (
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={editIsGlobalAdmin || isKingAdminEmail(editingUser.email)}
+                        onChange={(e) => setEditIsGlobalAdmin(e.target.checked)}
+                        color="primary"
+                        disabled={isKingAdminEmail(editingUser.email)}
+                      />
+                    }
+                    label={
+                      <Box>
+                        <Typography variant="body1" sx={{ fontWeight: 500 }}>Super user</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          They can see every organization. Only you can grant or remove this.
+                        </Typography>
+                      </Box>
+                    }
+                  />
                 )}
                 <FormControlLabel
                   control={

@@ -13,7 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const user = await prisma.user.findUnique({
     where: { id: uid },
-    select: { id: true, email: true, display_name: true, created_at: true },
+    select: { id: true, email: true, display_name: true, created_at: true, is_global_admin: true },
   });
 
   if (!user) {
@@ -67,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     access: billingAccess(org),
   });
 
-  const platformOwner = isKingAdminEmail(user.email);
+  const platformOwner = isKingAdminEmail(user.email) || user.is_global_admin === true;
   let organizations: ReturnType<typeof mapOrg>[];
   if (platformOwner) {
     const allOrgs = await prisma.organization.findMany({

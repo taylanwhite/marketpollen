@@ -2,7 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { isOrgAdmin } from '../lib/org-access.js';
-import { isKingAdmin } from '../lib/king-admin.js';
+import { isPlatformAdmin } from '../lib/king-admin.js';
 import { isKingAdminEmail } from '../lib/king-admin-email.js';
 import { billingView } from '../lib/billing.js';
 
@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         isActive: p.is_active,
         reachoutColumn: p.reachout_column,
       })),
-      members: (await isKingAdmin(uid) ? members : members.filter((member) => !member.user.is_global_admin && !isKingAdminEmail(member.user.email))).map(m => ({
+      members: (await isPlatformAdmin(uid) ? members : members.filter((member) => !member.user.is_global_admin && !isKingAdminEmail(member.user.email))).map(m => ({
         userId: m.user.id,
         email: m.user.email,
         displayName: m.user.display_name,

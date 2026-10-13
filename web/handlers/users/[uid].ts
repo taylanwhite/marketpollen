@@ -27,6 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'PATCH') {
     const body = req.body as {
       isOrgAdmin?: boolean;
+      isGlobalAdmin?: boolean;
       orgId?: string;
       scopedStoreIds?: string[];
       storePermissions?: { storeId: string; canEdit: boolean }[];
@@ -46,6 +47,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (requestedIds.some((storeId) => storeId && !allowedStores.has(storeId))) {
         return res.status(403).json({ error: 'You can only manage stores in your organization' });
       }
+    }
+    if (body.isGlobalAdmin !== undefined) {
+      if (!(await isKingAdmin(uid))) {
+        return res.status(403).json({ error: 'Only the platform owner can change super user access' });
+      }
+      if (isKingAdminEmail(target.email) && body.isGlobalAdmin !== true) {
+        return res.status(403).json({ error: 'The platform owner stays a super user' });
+      }
+      await prisma.user.update({
+        where: { id: targetUid },
+        data: { is_global_admin: body.isGlobalAdmin === true },
+      });
     }
     if (body.isOrgAdmin !== undefined && body.orgId) {
       const existing = await prisma.organizationMember.findUnique({
@@ -95,7 +108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       email: user.email,
       displayName: user.display_name ?? undefined,
       createdAt: user.created_at,
-      isGlobalAdmin: isKingAdminEmail(user.email),
+      isGlobalAdmin: user.is_global_admin || isKingAdminEmail(user.email),
       storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
     });
   }

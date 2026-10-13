@@ -149,7 +149,7 @@ async function respondWithUser(res: VercelRequest extends never ? never : any, u
       email: user.email,
       displayName: user.display_name ?? undefined,
       createdAt: user.created_at,
-      isGlobalAdmin: isKingAdminEmail(user.email),
+      isGlobalAdmin: user.is_global_admin || isKingAdminEmail(user.email),
     },
     storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
   });
