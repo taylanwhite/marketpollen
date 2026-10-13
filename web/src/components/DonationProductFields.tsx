@@ -79,7 +79,7 @@ export function DonationProductFields({ products, donationData, onChange }: Dona
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {product.mouthValue} mouth{product.mouthValue !== 1 ? 's' : ''} each
-                {count > 0 && ` · ${count * product.mouthValue} mouths`}
+                {count > 0 && ` · ${count * product.mouthValue} bites`}
               </Typography>
             </Box>
 

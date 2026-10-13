@@ -64,6 +64,9 @@ const GenerateEmailDialog = lazy(() =>
 );
 import { haptics } from '../utils/haptics';
 import { connectionValue } from '../utils/connectionLabel';
+import { PhoneLink } from './PhoneLink';
+import { ContactProfileFields } from './ContactProfileFields';
+import { contactProfilePayload, type ContactProfileExtras } from '../utils/organizationTypes';
 
 interface EditContactModalProps {
   contact: Contact;
@@ -106,6 +109,13 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     phone: contact.phone || '',
     personalDetails: contact.personalDetails || '',
     status: contact.status || 'new'
+  });
+  const [profile, setProfile] = useState<ContactProfileExtras>({
+    organizationType: contact.organizationType || '',
+    isCorporateAccount: contact.isCorporateAccount === true,
+    taxExemptNumber: contact.taxExemptNumber || '',
+    cardOnFileLast4: contact.cardOnFileLast4 || '',
+    corporateStatus: contact.corporateStatus || '',
   });
   
   // Note: newReachout, rawNotes, includeDonation, donationData removed - they were part of the "Add Reachout" tab that was removed
@@ -266,7 +276,8 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         email: formData.email || null,
         phone: formData.phone || null,
         personalDetails: formData.personalDetails || null,
-        status: formData.status
+        status: formData.status,
+        ...contactProfilePayload(profile),
       }, { label: 'Edit contact' });
 
       setSuccess('Contact updated!');
@@ -290,7 +301,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
 
   const handleDeleteContact = async () => {
     const contactName = getContactName();
-    const confirmMessage = `Are you sure you want to delete "${contactName}"?\n\nThis action cannot be undone and will delete:\n- All contact information\n- All reachout history\n- All donations\n- All calendar events`;
+    const confirmMessage = `Are you sure you want to delete "${contactName}"?\n\nThis action cannot be undone and will delete:\n- All contact information\n- All reachout history\n- All bite records\n- All calendar events`;
     
     if (!window.confirm(confirmMessage)) {
       return;
@@ -471,7 +482,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
             <MenuItem value={2}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <CakeIcon fontSize="small" />
-                <Typography>Donations ({contact.reachouts.filter(r => r.donation).length})</Typography>
+                <Typography>Bites ({contact.reachouts.filter(r => r.donation).length})</Typography>
               </Box>
             </MenuItem>
             <MenuItem value={3}>
@@ -501,7 +512,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           <Tab label="Contact Details" />
           <Tab label={`History (${contact.reachouts.length})`} />
             <Tab 
-              label={`Donations (${contact.reachouts.filter(r => r.donation).length})`}
+              label={`Bites (${contact.reachouts.filter(r => r.donation).length})`}
               icon={<CakeIcon sx={{ fontSize: 16 }} />}
               iconPosition="start"
             />
@@ -541,6 +552,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                 label="First Name"
                 value={formData.firstName}
                 onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                helperText="Renaming keeps this contact's visit history"
                 fullWidth
               />
             </Grid>
@@ -567,7 +579,11 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 fullWidth
+                helperText={formData.phone.trim() ? <PhoneLink phone={formData.phone} /> : 'Add a number to tap-to-call'}
               />
+            </Grid>
+            <Grid size={{ xs: 12 }}>
+              <ContactProfileFields value={profile} onChange={setProfile} disabled={loading} />
             </Grid>
             <Grid size={{ xs: 12 }}>
               <TextField
@@ -636,7 +652,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                       {reachout.donation && (
                         <Chip
                           icon={<CakeIcon sx={{ fontSize: 14 }} />}
-                          label={`${calculateMouths(reachout.donation, products)} mouths`}
+                          label={`${calculateMouths(reachout.donation, products)} bites`}
                           size="small"
                           color="primary"
                           sx={{ ml: 'auto' }}
@@ -682,7 +698,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                           label={
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                               <CakeIcon fontSize="small" />
-                              <Typography>Include Donation</Typography>
+                              <Typography>Handed out bites</Typography>
                             </Box>
                           }
                         />
@@ -693,9 +709,9 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1, p: 2, bgcolor: 'grey.50', borderRadius: 2 }}>
                               <Typography variant="subtitle2" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
                                 <CakeIcon fontSize="small" color="primary" />
-                                Product Donations
+                                Products
                                 <Chip 
-                                  label={`${editingReachoutDonation ? calculateMouths(editingReachoutDonation, products) : 0} mouths`} 
+                                  label={`${editingReachoutDonation ? calculateMouths(editingReachoutDonation, products) : 0} bites`} 
                                   size="small" 
                                   color="primary" 
                                   sx={{ ml: 'auto' }}
@@ -709,12 +725,12 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                               />
 
                               <TextField
-                                label="Donation Notes"
+                                label="Notes"
                                 size="small"
                                 fullWidth
                                 value={editingReachoutDonation?.cakesDonatedNotes || ''}
                                 onChange={(e) => setEditingReachoutDonation(prev => prev ? { ...prev, cakesDonatedNotes: e.target.value } : createEmptyDonation(products))}
-                                placeholder="Any notes about the donation..."
+                                placeholder="Any notes about this drop..."
                                 disabled={loading}
                               />
 
@@ -814,7 +830,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
           )}
         </TabPanel>
 
-        {/* Tab 2: Donations History */}
+        {/* Tab 2: Bite history */}
         <TabPanel value={tabValue} index={2}>
           {(() => {
             const donationReachouts = contact.reachouts.filter(r => r.donation);
@@ -827,9 +843,9 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
               return (
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                   <CakeIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
-                  <Typography color="text.secondary">No donations recorded yet</Typography>
+                  <Typography color="text.secondary">No bites recorded yet</Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    Add a donation when creating a reachout using the "Include Donation" toggle
+                    Log bites on a visit with the Handed out bites toggle
                   </Typography>
                 </Box>
               );
@@ -846,11 +862,11 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                           Total Contribution
                         </Typography>
                         <Typography variant="h4" sx={{ fontWeight: 700, color: 'white' }}>
-                          {totalMouths.toLocaleString()} mouths
+                          {totalMouths.toLocaleString()} bites
                         </Typography>
                       </Box>
                       <Chip
-                        label={`${donationReachouts.length} donation${donationReachouts.length !== 1 ? 's' : ''}`}
+                        label={`${donationReachouts.length} drop${donationReachouts.length !== 1 ? 's' : ''}`}
                         sx={{ bgcolor: 'rgba(255,255,255,0.2)', color: 'white' }}
                       />
                     </Box>
@@ -867,7 +883,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                             {reachout.date.toLocaleDateString()}
                           </Typography>
                           <Chip
-                            label={`${calculateMouths(reachout.donation!, products)} mouths`}
+                            label={`${calculateMouths(reachout.donation!, products)} bites`}
                             size="small"
                             color="primary"
                           />
@@ -1143,7 +1159,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                   <Box component="ul" sx={{ mt: 1, mb: 0, pl: 2 }}>
                     <li>All contact information</li>
                     <li>All reachout history</li>
-                    <li>All donation records</li>
+                    <li>All bite records</li>
                     <li>All attached files</li>
                     <li>All calendar events</li>
                   </Box>

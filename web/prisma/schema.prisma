@@ -213,7 +213,13 @@ model Contact {
   suggested_follow_up_priority String?
   last_reachout_date         DateTime?
   status                     String?
+  organization_type          String?
+  is_corporate_account       Boolean   @default(false)
+  tax_exempt_number          String?
+  card_on_file_last4         String?
+  corporate_status           String?
   created_at                 DateTime  @default(now())
+  updated_at                 DateTime  @default(now()) @updatedAt
   created_by                 String
 
   business  Business   @relation(fields: [business_id], references: [id], onDelete: Cascade)

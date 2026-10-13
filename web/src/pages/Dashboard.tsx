@@ -8,6 +8,8 @@ import { useOffline } from '../contexts/OfflineContext';
 import { ContactForm } from '../components/ContactForm';
 import { ImportCustomersDialog } from '../components/ImportCustomersDialog';
 import { connectionValue } from '../utils/connectionLabel';
+import { PhoneLink } from '../components/PhoneLink';
+import { knownOrganizationTypes } from '../utils/organizationTypes';
 
 // Heavy modals — pulled in on demand to keep the contacts list snappy on
 // first paint, especially on slow LTE.
@@ -151,7 +153,11 @@ export function Dashboard() {
   const [infoFilter, setInfoFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
   const [visitFilter, setVisitFilter] = useState('');
+  const [orgTypeFilter, setOrgTypeFilter] = useState('');
+  const [modifiedFrom, setModifiedFrom] = useState('');
+  const [modifiedTo, setModifiedTo] = useState('');
   const [filterAnchor, setFilterAnchor] = useState<HTMLElement | null>(null);
+  const [customFollowUpDate, setCustomFollowUpDate] = useState('');
   
   // Quick reachout dialog
   const [quickReachoutContact, setQuickReachoutContact] = useState<Contact | null>(null);
@@ -283,8 +289,24 @@ export function Dashboard() {
           (c.phone?.toLowerCase() || '').includes(term) ||
           businessText.includes(term) ||
           notes.includes(term) ||
-          (c.personalDetails?.toLowerCase() || '').includes(term)
+          (c.personalDetails?.toLowerCase() || '').includes(term) ||
+          (c.organizationType?.toLowerCase() || '').includes(term)
         );
+      });
+    }
+
+    if (orgTypeFilter) {
+      filtered = filtered.filter(c => (c.organizationType || '') === orgTypeFilter);
+    }
+
+    if (modifiedFrom || modifiedTo) {
+      filtered = filtered.filter(c => {
+        const modified = c.updatedAt || c.lastReachoutDate || c.createdAt;
+        const when = modified instanceof Date ? modified : new Date(modified);
+        if (Number.isNaN(when.getTime())) return false;
+        if (modifiedFrom && when < new Date(`${modifiedFrom}T00:00:00`)) return false;
+        if (modifiedTo && when > new Date(`${modifiedTo}T23:59:59`)) return false;
+        return true;
       });
     }
     
@@ -302,11 +324,14 @@ export function Dashboard() {
         return aName.localeCompare(bName);
       }
       if (contactSort === 'marketer') return (a.createdByName || '').localeCompare(b.createdByName || '');
+      if (contactSort === 'updated') {
+        return byTime(b.updatedAt || b.lastReachoutDate || b.createdAt) - byTime(a.updatedAt || a.lastReachoutDate || a.createdAt);
+      }
       return byTime(b.createdAt) - byTime(a.createdAt);
     });
 
     setFilteredContacts(filtered);
-  }, [businessFilter, contacts, searchTerm, businesses, businessRecords, showNoDonationsOnly, marketerFilter, contactSort, statusFilter, followUpFilter, infoFilter, cityFilter, visitFilter]);
+  }, [businessFilter, contacts, searchTerm, businesses, businessRecords, showNoDonationsOnly, marketerFilter, contactSort, statusFilter, followUpFilter, infoFilter, cityFilter, visitFilter, orgTypeFilter, modifiedFrom, modifiedTo]);
 
   useEffect(() => {
     if (!contactFilter || contacts.length === 0) return;
@@ -379,6 +404,7 @@ export function Dashboard() {
         if (c.createdAt && !(c.createdAt instanceof Date)) c.createdAt = new Date(c.createdAt);
         if (c.lastReachoutDate && !(c.lastReachoutDate instanceof Date)) c.lastReachoutDate = new Date(c.lastReachoutDate);
         if (c.suggestedFollowUpDate && !(c.suggestedFollowUpDate instanceof Date)) c.suggestedFollowUpDate = new Date(c.suggestedFollowUpDate);
+        if (c.updatedAt && !(c.updatedAt instanceof Date)) c.updatedAt = new Date(c.updatedAt);
       });
       contactsData.sort((a, b) => {
         const aDate = a.lastReachoutDate || a.createdAt;
@@ -433,6 +459,13 @@ export function Dashboard() {
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [contacts]);
 
+  const organizationTypes = useMemo(() => {
+    const extras = contacts
+      .map((contact) => contact.organizationType?.trim())
+      .filter((type): type is string => !!type);
+    return [...new Set([...knownOrganizationTypes(), ...extras])].sort((a, b) => a.localeCompare(b));
+  }, [contacts]);
+
   const cities = useMemo(() => {
     const names = new Set<string>();
     businessRecords.forEach((business) => {
@@ -448,6 +481,9 @@ export function Dashboard() {
     infoFilter,
     cityFilter,
     visitFilter,
+    orgTypeFilter,
+    modifiedFrom,
+    modifiedTo,
   ].filter(Boolean).length;
 
   const clearExtraFilters = () => {
@@ -457,6 +493,9 @@ export function Dashboard() {
     setInfoFilter('');
     setCityFilter('');
     setVisitFilter('');
+    setOrgTypeFilter('');
+    setModifiedFrom('');
+    setModifiedTo('');
   };
 
   const handleContactClick = (contact: Contact) => {
@@ -487,6 +526,16 @@ export function Dashboard() {
     }
     
     setFollowUpSuggestions(suggestions);
+    const existing = contact.suggestedFollowUpDate
+      ? new Date(contact.suggestedFollowUpDate)
+      : null;
+    if (existing && !Number.isNaN(existing.getTime())) {
+      const month = String(existing.getMonth() + 1).padStart(2, '0');
+      const day = String(existing.getDate()).padStart(2, '0');
+      setCustomFollowUpDate(`${existing.getFullYear()}-${month}-${day}`);
+    } else {
+      setCustomFollowUpDate('');
+    }
   };
 
   const handleCloseFollowUpDialog = () => {
@@ -495,6 +544,7 @@ export function Dashboard() {
     setFollowUpSuggestions([]);
     setFollowUpLoading(false);
     setAddedToCalendar(false);
+    setCustomFollowUpDate('');
   };
 
   const handleRegenerateFollowUp = async () => {
@@ -596,6 +646,42 @@ export function Dashboard() {
     }
   };
 
+  const scheduleChosenDate = async () => {
+    if (!followUpDialogContact || !permissions.currentStoreId || !customFollowUpDate) return;
+    setAddingToCalendar(true);
+    try {
+      const contactName = getContactName(followUpDialogContact);
+      const [year, month, day] = customFollowUpDate.split('-').map(Number);
+      const normalizedDate = new Date(year, (month || 1) - 1, day || 1, 12, 0, 0, 0);
+      const note = followUpDialogContact.suggestedFollowUpNote || `Follow up with ${contactName}`;
+      await api.queuePost(`/calendar-events?storeId=${permissions.currentStoreId}`, {
+        id: crypto.randomUUID(),
+        title: `Follow-up: ${contactName}`,
+        description: note,
+        date: normalizedDate,
+        type: 'followup',
+        contactId: followUpDialogContact.id,
+        businessId: followUpDialogContact.businessId,
+        priority: followUpDialogContact.suggestedFollowUpPriority || 'medium',
+        status: 'scheduled',
+      }, { label: `Schedule follow-up · ${contactName}` });
+      await api.queuePatch(`/contacts/${followUpDialogContact.id}`, {
+        suggestedFollowUpDate: normalizedDate.toISOString(),
+        suggestedFollowUpNote: note,
+      }, { label: 'Save follow-up date' });
+      setContacts((prev) => prev.map((contact) => (
+        contact.id === followUpDialogContact.id
+          ? { ...contact, suggestedFollowUpDate: normalizedDate, suggestedFollowUpNote: note }
+          : contact
+      )));
+      setAddedToCalendar(true);
+    } catch (err) {
+      console.error('Failed to schedule follow-up:', err);
+    } finally {
+      setAddingToCalendar(false);
+    }
+  };
+
   const handleCopySuggestion = async (suggestion: FollowUpSuggestion) => {
     try {
       await navigator.clipboard.writeText(suggestion.message);
@@ -609,7 +695,7 @@ export function Dashboard() {
     if (contact.firstName || contact.lastName) {
       return `${contact.firstName || ''} ${contact.lastName || ''}`.trim();
     }
-    return contact.email || contact.phone || contact.contactId;
+    return contact.email || contact.phone || 'Unnamed contact';
   };
 
   const getStatusColor = (status: string) => {
@@ -832,7 +918,7 @@ export function Dashboard() {
       <Paper sx={{ p: 2, mb: 3 }}>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
           <TextField
-            placeholder={pageTab === 'contacts' ? 'Search name, email, phone, business, or notes' : 'Search name, address, city, or contact'}
+            placeholder={pageTab === 'contacts' ? 'Search contact, company, organization type, phone, or notes' : 'Search name, address, city, or contact'}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             size="small"
@@ -872,6 +958,7 @@ export function Dashboard() {
                 <MenuItem value="oldest">Oldest</MenuItem>
                 <MenuItem value="last-visit">Last visit</MenuItem>
                 <MenuItem value="name">Name</MenuItem>
+                <MenuItem value="updated">Date modified</MenuItem>
                 <MenuItem value="marketer">Marketer</MenuItem>
               </TextField>
               <Autocomplete
@@ -884,6 +971,19 @@ export function Dashboard() {
                   <TextField {...params} label="Created by" placeholder="Marketer" />
                 )}
               />
+              <TextField
+                select
+                size="small"
+                label="Organization type"
+                value={orgTypeFilter}
+                onChange={(event) => setOrgTypeFilter(event.target.value)}
+                sx={{ minWidth: 180, flex: '1 1 180px', maxWidth: 260 }}
+              >
+                <MenuItem value="">Any type</MenuItem>
+                {organizationTypes.map((type) => (
+                  <MenuItem key={type} value={type}>{type}</MenuItem>
+                ))}
+              </TextField>
               <Badge color="primary" badgeContent={extraFilterCount} invisible={extraFilterCount === 0}>
                 <Button variant="outlined" onClick={(event) => setFilterAnchor(event.currentTarget)} sx={{ minHeight: 44, flexShrink: 0 }}>
                   More filters
@@ -945,7 +1045,7 @@ export function Dashboard() {
           <Stack spacing={1.5}>
             <FormControlLabel
               control={<Checkbox checked={showNoDonationsOnly} onChange={(event) => setShowNoDonationsOnly(event.target.checked)} size="small" />}
-              label="No donations"
+              label="No bites"
             />
             <TextField select size="small" label="Status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} fullWidth>
               <MenuItem value="">Any status</MenuItem>
@@ -974,6 +1074,24 @@ export function Dashboard() {
                 <MenuItem key={city} value={city}>{city}</MenuItem>
               ))}
             </TextField>
+            <TextField
+              type="date"
+              size="small"
+              label="Modified from"
+              value={modifiedFrom}
+              onChange={(event) => setModifiedFrom(event.target.value)}
+              fullWidth
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField
+              type="date"
+              size="small"
+              label="Modified to"
+              value={modifiedTo}
+              onChange={(event) => setModifiedTo(event.target.value)}
+              fullWidth
+              InputLabelProps={{ shrink: true }}
+            />
             <TextField select size="small" label="Last visit" value={visitFilter} onChange={(event) => setVisitFilter(event.target.value)} fullWidth>
               <MenuItem value="">Any time</MenuItem>
               <MenuItem value="week">Visited this week</MenuItem>
@@ -1169,7 +1287,7 @@ export function Dashboard() {
               label={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <CakeIcon fontSize="small" />
-                  <Typography>Include Donation</Typography>
+                  <Typography>Handed out bites</Typography>
                 </Box>
               }
             />
@@ -1179,10 +1297,10 @@ export function Dashboard() {
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1, p: 2, bgcolor: 'grey.50', borderRadius: 2 }}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
                   <CakeIcon fontSize="small" color="primary" />
-                  Product Donations
+                  Products
                   {includeDonation && (
                     <Chip 
-                      label={`${calculateMouths(donationData, products)} mouths`} 
+                      label={`${calculateMouths(donationData, products)} bites`} 
                       size="small" 
                       color="primary" 
                       sx={{ ml: 'auto' }}
@@ -1197,12 +1315,12 @@ export function Dashboard() {
                 />
 
                 <TextField
-                  label="Donation Notes"
+                  label="Notes"
                   size="small"
                   fullWidth
                   value={donationData.cakesDonatedNotes || ''}
                   onChange={(e) => setDonationData(prev => ({ ...prev, cakesDonatedNotes: e.target.value }))}
-                  placeholder="Any notes about the donation..."
+                  placeholder="Any notes about this drop..."
                   disabled={quickReachoutLoading}
                 />
 
@@ -1378,12 +1496,18 @@ export function Dashboard() {
                         {contact.phone && (
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                             <PhoneIcon fontSize="small" color="action" />
-                            <Typography variant="body2" color="text.secondary">{contact.phone}</Typography>
+                            <PhoneLink phone={contact.phone} stopPropagation />
                           </Box>
                         )}
                       </Box>
 
                       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                        {contact.organizationType && (
+                          <Chip label={contact.organizationType} size="small" variant="outlined" />
+                        )}
+                        {contact.isCorporateAccount && (
+                          <Chip label="Corporate" size="small" color="primary" variant="outlined" />
+                        )}
                         <Chip 
                           label={`${contact.reachouts.length} reachouts`} 
                           size="small" 
@@ -1470,6 +1594,41 @@ export function Dashboard() {
               </Box>
             )}
 
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 2 }}>
+              <TextField
+                type="date"
+                label="Follow up on"
+                value={customFollowUpDate}
+                onChange={(event) => {
+                  setCustomFollowUpDate(event.target.value);
+                  setAddedToCalendar(false);
+                }}
+                InputLabelProps={{ shrink: true }}
+                inputProps={{
+                  min: (() => {
+                    const today = new Date();
+                    const month = String(today.getMonth() + 1).padStart(2, '0');
+                    const day = String(today.getDate()).padStart(2, '0');
+                    return `${today.getFullYear()}-${month}-${day}`;
+                  })(),
+                }}
+                fullWidth
+                helperText="Pick any day. This adds them to the planning calendar."
+              />
+              {addedToCalendar ? (
+                <Alert severity="success" sx={{ py: 0.5 }}>Added to the calendar.</Alert>
+              ) : (
+                <Button
+                  variant="contained"
+                  onClick={scheduleChosenDate}
+                  disabled={!customFollowUpDate || addingToCalendar}
+                  sx={{ bgcolor: '#f5c842', color: '#2d2d2d', fontWeight: 700, '&:hover': { bgcolor: '#e8b923' } }}
+                >
+                  {addingToCalendar ? 'Scheduling…' : 'Schedule this date'}
+                </Button>
+              )}
+            </Box>
+
             {followUpLoading ? (
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 4 }}>
                 <CircularProgress sx={{ mb: 2 }} />
@@ -1477,11 +1636,7 @@ export function Dashboard() {
                   Generating follow-up suggestions...
                 </Typography>
               </Box>
-            ) : followUpSuggestions.length === 0 ? (
-              <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-                No follow-up suggestions at this time.
-              </Typography>
-            ) : (
+            ) : followUpSuggestions.length === 0 ? null : (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {followUpSuggestions.map((suggestion, index) => {
                   const sugDate = suggestion.suggestedDate instanceof Date

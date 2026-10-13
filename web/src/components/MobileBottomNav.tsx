@@ -25,7 +25,7 @@ const LEFT_ITEMS: NavItem[] = [
 ];
 
 const RIGHT_ITEMS: NavItem[] = [
-  { label: 'Donations', path: '/donations', icon: <CakeIcon /> },
+  { label: 'Bites', path: '/donations', icon: <CakeIcon /> },
   { label: 'Discover', path: '/opportunities', icon: <DiscoverIcon /> },
 ];
 

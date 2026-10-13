@@ -139,7 +139,7 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
             {quarterLabel} Bundtini Goal
           </Typography>
           <Typography variant="body2" sx={{ color: '#333' }}>
-            {progress.totalMouths.toLocaleString()} / {progress.goal.toLocaleString()} mouths
+            {progress.totalMouths.toLocaleString()} / {progress.goal.toLocaleString()} bites
           </Typography>
           <Typography variant="caption" sx={{ color: '#666' }}>
             {progress.percentage.toFixed(1)}% complete
@@ -151,7 +151,7 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
           )}
           {lastDonationMouths > 0 && isCelebrating && (
             <Typography variant="body2" sx={{ color: '#252525', fontWeight: 600, mt: 1 }}>
-              +{lastDonationMouths} mouths added!
+              +{lastDonationMouths} bites added!
             </Typography>
           )}
         </Box>

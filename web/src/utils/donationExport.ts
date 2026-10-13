@@ -35,15 +35,16 @@ const COLUMN_HEADERS = [
   'Email',
   '# of Employees',
   'FREE Bundtlet Card',
-  'Dozen Bundtinis \n(12 mouths)',
-  '8" Cake \n(10 mouths)',
-  '10" Cake \n(20 mouths)',
-  'Sample Tray \n(40 mouths)',
-  'Bundtlet or Tower\n(1 mouth per bundtlet)',
-  'Cakes Donated Notes',
+  'Dozen Bundtinis \n(12 bites)',
+  '8" Cake \n(10 bites)',
+  '10" Cake \n(20 bites)',
+  'Sample Tray \n(40 bites)',
+  'Bundtlet or Tower\n(1 bite per bundtlet)',
+  'Drop notes',
   'Notes',
   'Ordered from us?',
   'Followed up?',
+  'Bites',
 ];
 
 const COLUMN_WIDTHS = [
@@ -65,6 +66,7 @@ const COLUMN_WIDTHS = [
   48, // Notes
   14, // Ordered from us?
   14, // Followed up?
+  12, // Bites
 ];
 
 /** Active built-in products in display order — maps to columns I–N in the tracker. */
@@ -142,6 +144,7 @@ function buildDataRow(
     reachout.note || '',
     donation.orderedFromUs ? 'yes!' : '',
     donation.noFollowUp ? 'No follow-up' : donation.followedUp ? 'Yes' : '',
+    row.mouths,
   ];
 }
 
@@ -201,7 +204,7 @@ export function buildDonationExportSheet(
     [TRACKER_TITLE],
     [],
     [],
-    ['', 'Mouths Sampled', totalMouths, '', GOAL_TEXT],
+    ['', 'Bites handed out', totalMouths, '', GOAL_TEXT],
     ['', 'Free Bundtlet Cards ', totalFreeCards],
     COLUMN_HEADERS,
     ...sorted.map((row) => buildDataRow(row, exportProducts)),
@@ -213,7 +216,7 @@ export function buildDonationExportSheet(
 }
 
 export function getDonationExportSheetName(quarterLabel: string): string {
-  return quarterLabel.split(' ')[0] || 'Donations';
+  return quarterLabel.split(' ')[0] || 'Bites';
 }
 
 function formatFilenameDate(date: Date): string {
@@ -234,7 +237,7 @@ function formatFilenameScope(scope: string): string {
 
 export function getDonationExportFilename(rows: DonationExportRow[], scope: string): string {
   const safeScope = formatFilenameScope(scope);
-  if (rows.length === 0) return `donations_${safeScope}.xlsx`;
+  if (rows.length === 0) return `bites_${safeScope}.xlsx`;
 
   const dates = rows.map((row) =>
     row.reachout.date instanceof Date ? row.reachout.date : new Date(row.reachout.date),
@@ -242,7 +245,7 @@ export function getDonationExportFilename(rows: DonationExportRow[], scope: stri
   const startDate = new Date(Math.min(...dates.map((date) => date.getTime())));
   const endDate = new Date(Math.max(...dates.map((date) => date.getTime())));
 
-  return `donations_${safeScope}_${formatFilenameDate(startDate)}_${formatFilenameDate(endDate)}.xlsx`;
+  return `bites_${safeScope}_${formatFilenameDate(startDate)}_${formatFilenameDate(endDate)}.xlsx`;
 }
 
 export function getOrgDonationExportFilename(rows: DonationExportRow[]): string {

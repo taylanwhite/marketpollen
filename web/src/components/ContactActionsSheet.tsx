@@ -144,7 +144,7 @@ export function ContactActionsSheet({
     {
       key: 'edit',
       label: 'View / edit contact',
-      secondary: 'See history, personal details, donations',
+      secondary: 'See history, personal details, bites',
       icon: <EditIcon />,
       color: '#7f8c8d',
       onClick: () => {

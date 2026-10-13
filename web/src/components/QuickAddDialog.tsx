@@ -49,7 +49,7 @@ export function QuickAddDialog({ open, onClose }: QuickAddDialogProps) {
       </DialogTitle>
       <DialogContent sx={{ p: { xs: 2, sm: 3 } }}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Type or dictate what happened. We'll pull out the contact, business, donations, and follow-up automatically.
+          Type or dictate what happened. We'll pull out the contact, business, bites, and follow-up automatically.
         </Typography>
         <ContactForm onSuccess={onClose} />
       </DialogContent>

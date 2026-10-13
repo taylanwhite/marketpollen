@@ -316,7 +316,7 @@ export function OrgSettings() {
           <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>Quarterly Goal</Typography>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
             <TextField
-              label="Total Mouths per Quarter"
+              label="Total bites per quarter"
               type="number"
               value={goalValue}
               onChange={e => setGoalValue(parseInt(e.target.value) || 0)}
@@ -335,7 +335,7 @@ export function OrgSettings() {
           </Box>
           {storeCount > 1 && (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
-              {(goalValue * storeCount).toLocaleString()} mouths total across {storeCount} stores
+              {(goalValue * storeCount).toLocaleString()} bites total across {storeCount} stores
             </Typography>
           )}
         </CardContent>
@@ -356,7 +356,7 @@ export function OrgSettings() {
                 <Typography fontWeight={600}>{p.name}</Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <Typography variant="body2" color="text.secondary" component="span">
-                    {p.mouthValue} mouth{p.mouthValue !== 1 ? 's' : ''} each
+                    {p.mouthValue} bite{p.mouthValue !== 1 ? 's' : ''} each
                   </Typography>
                   {p.reachoutColumn && <Chip label="Default" size="small" />}
                 </Box>
@@ -536,14 +536,14 @@ export function OrgSettings() {
               />
             )}
             <TextField
-              label="Mouth Value"
+              label="Bite value"
               type="number"
               value={productForm.mouthValue}
               onChange={e => setProductForm({ ...productForm, mouthValue: parseInt(e.target.value) || 0 })}
               fullWidth
               required
               slotProps={{ htmlInput: { min: 0 } }}
-              helperText="How many mouths this product counts as"
+              helperText="How many bites this product counts as"
             />
           </Box>
         </DialogContent>

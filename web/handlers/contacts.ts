@@ -5,6 +5,7 @@ import { getAuthUid } from './lib/auth.js';
 import { canAccessStore, readableStoreScope, rejectIfStoreLocked, storeIdWhere } from './lib/store-access.js';
 import { contactInclude, contactToJson } from './lib/contact-json.js';
 import { syncContactBusinesses } from './lib/contact-businesses.js';
+import { contactProfileData } from './lib/contact-profile.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -52,6 +53,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       personalDetails?: string;
       status?: string;
       businessIds?: string[];
+      organizationType?: string | null;
+      isCorporateAccount?: boolean;
+      taxExemptNumber?: string | null;
+      cardOnFileLast4?: string | null;
+      corporateStatus?: string | null;
     };
     if (!body?.businessId) return res.status(400).json({ error: 'businessId is required' });
 
@@ -86,6 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           employee_count: body.employeeCount ?? null,
           personal_details: body.personalDetails ?? null,
           status: body.status ?? 'new',
+          ...contactProfileData(body, false),
           created_by: uid,
         },
         include: contactInclude,

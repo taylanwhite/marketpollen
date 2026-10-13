@@ -27,6 +27,7 @@ import {
 import { toDate } from '../utils/reportAggregations';
 import { useCampaign } from '../contexts/CampaignContext';
 import { DonationProductFields } from '../components/DonationProductFields';
+import { PhoneLink } from '../components/PhoneLink';
 import {
   Box,
   Typography,
@@ -108,6 +109,26 @@ function donationHasProduct(row: DonationRow, productKey: string, products: Camp
     ? ((donation[field] as number) || 0)
     : donation.customItems?.[product.id] || 0;
   return qty > 0;
+}
+
+function localYmd(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function historyPreset(rangeAll: boolean, from: string | null, to: string | null): string {
+  if (rangeAll) return 'all';
+  if (!from && !to) return 'quarter';
+  const end = new Date();
+  const last7 = new Date();
+  last7.setDate(end.getDate() - 6);
+  if (from === localYmd(last7) && to === localYmd(end)) return 'last7';
+  const weekStart = new Date();
+  weekStart.setDate(end.getDate() - end.getDay());
+  if (from === localYmd(weekStart) && to === localYmd(end)) return 'week';
+  return 'custom';
 }
 
 export function Donations() {
@@ -341,11 +362,33 @@ export function Donations() {
     const XLSX = await import('xlsx');
     const quarterLabel = getCurrentQuarterLabel();
     const exportProducts = getExportProducts();
-    const ws = buildDonationExportSheet(XLSX, donations, exportProducts);
+    const ws = buildDonationExportSheet(XLSX, filteredDonations, exportProducts);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, getDonationExportSheetName(quarterLabel));
 
-    XLSX.writeFile(wb, getDonationExportFilename(donations, getCurrentStoreName()));
+    XLSX.writeFile(wb, getDonationExportFilename(filteredDonations, getCurrentStoreName()));
+  };
+
+  const applyHistoryRange = (preset: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('from');
+    next.delete('to');
+    next.delete('range');
+    const end = new Date();
+    if (preset === 'all') {
+      next.set('range', 'all');
+    } else if (preset === 'last7') {
+      const start = new Date();
+      start.setDate(end.getDate() - 6);
+      next.set('from', localYmd(start));
+      next.set('to', localYmd(end));
+    } else if (preset === 'week') {
+      const start = new Date();
+      start.setDate(end.getDate() - end.getDay());
+      next.set('from', localYmd(start));
+      next.set('to', localYmd(end));
+    }
+    setSearchParams(next, { replace: true });
   };
 
   const [orgExporting, setOrgExporting] = useState(false);
@@ -380,9 +423,18 @@ export function Donations() {
           createdAt: c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt),
         }));
 
-        const donationsWithData = getReachoutsWithDonations(contacts, {
-          quarterDate: new Date(),
-        }, products);
+        const donationsWithData = getReachoutsWithDonations(
+          contacts,
+          rangeAll || fromParam || toParam ? undefined : { quarterDate: new Date() },
+          products,
+        ).filter((row) => {
+          if (!fromParam && !toParam) return true;
+          const date = toDate(row.reachout.date);
+          if (!date) return false;
+          if (fromParam && date < new Date(`${fromParam}T00:00:00`)) return false;
+          if (toParam && date > new Date(`${toParam}T23:59:59`)) return false;
+          return true;
+        });
 
         const rows: DonationRow[] = donationsWithData.map(d => {
           const business = businessMap.get(d.contact.businessId);
@@ -426,7 +478,7 @@ export function Donations() {
 
       await api.queuePatch(`/contacts/${editingDonation.contact.id}`, {
         reachouts: updatedReachouts,
-      }, { label: 'Edit donation' });
+      }, { label: 'Edit bites' });
 
       // Calculate the difference in mouths and trigger refresh
       const oldMouths = editingDonation.reachout.donation ? calculateMouths(editingDonation.reachout.donation, products) : 0;
@@ -446,7 +498,7 @@ export function Donations() {
       closeEditModal();
       loadDonations();
     } catch (err: any) {
-      setEditError(err.message || 'Failed to update donation');
+      setEditError(err.message || 'Failed to update bites');
       haptics.error();
     } finally {
       setEditLoading(false);
@@ -504,8 +556,11 @@ export function Donations() {
         refreshing={pullState.refreshing}
         willTrigger={pullState.willTrigger}
       />
-      <Typography variant="h4" sx={{ mb: (dateFilterLabel || productFilterLabel || businessFilterLabel || storesFilterLabel) ? 1.5 : 3, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <CakeIcon /> Donations
+      <Typography variant="h4" sx={{ mb: 0.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <CakeIcon /> Bites
+      </Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: (dateFilterLabel || productFilterLabel || businessFilterLabel || storesFilterLabel) ? 1.5 : 2 }}>
+        Each row is one drop. Export history downloads bites, place, person, and notes for the range you picked.
       </Typography>
       {(dateFilterLabel || productFilterLabel || businessFilterLabel || storesFilterLabel) && (
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
@@ -543,6 +598,23 @@ export function Donations() {
       {/* Filters */}
       <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 3 }}>
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: { xs: 1.25, sm: 2 }, flexWrap: 'wrap', alignItems: { xs: 'stretch', sm: 'center' } }}>
+          <TextField
+            select
+            size="small"
+            label="When"
+            value={historyPreset(rangeAll, fromParam, toParam)}
+            onChange={(event) => applyHistoryRange(event.target.value)}
+            sx={{ minWidth: 160 }}
+          >
+            <MenuItem value="last7">Last 7 days</MenuItem>
+            <MenuItem value="week">This week</MenuItem>
+            <MenuItem value="quarter">This quarter</MenuItem>
+            <MenuItem value="all">All time</MenuItem>
+            {historyPreset(rangeAll, fromParam, toParam) === 'custom' && (
+              <MenuItem value="custom">Custom range</MenuItem>
+            )}
+          </TextField>
+
           <TextField
             placeholder="Search contacts or businesses..."
             value={searchTerm}
@@ -589,7 +661,7 @@ export function Donations() {
 
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
             <Chip
-              label={`${filteredDonations.length} donations`}
+              label={`${filteredDonations.length} bite drops`}
               color="primary"
               variant="outlined"
             />
@@ -600,9 +672,9 @@ export function Donations() {
               size="small"
               startIcon={<FileDownloadIcon />}
               onClick={handleExportToExcel}
-              disabled={donations.length === 0}
+              disabled={filteredDonations.length === 0}
             >
-              Export Store
+              Export history
             </Button>
 
             {currentOrg && currentOrg.stores.length > 1 && isOrgAdminFn() && (
@@ -631,7 +703,8 @@ export function Donations() {
               <TableCell>Contact</TableCell>
               <TableCell>Phone</TableCell>
               <TableCell>Email</TableCell>
-              <TableCell align="center">Mouths</TableCell>
+              <TableCell align="center">Bites</TableCell>
+              <TableCell>Notes</TableCell>
               <TableCell align="center">Follow-up</TableCell>
               <TableCell align="center">Ordered</TableCell>
               <TableCell align="center">Actions</TableCell>
@@ -640,9 +713,9 @@ export function Donations() {
           <TableBody>
             {filteredDonations.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={10} align="center" sx={{ py: 4 }}>
                   <Typography color="text.secondary">
-                    No donations found for this quarter
+                    No bites in this range
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -654,10 +727,17 @@ export function Donations() {
                   <TableCell>
                     {`${row.contact.firstName || ''} ${row.contact.lastName || ''}`.trim() || '-'}
                   </TableCell>
-                  <TableCell>{row.contact.phone || '-'}</TableCell>
+                  <TableCell>
+                    {row.contact.phone ? <PhoneLink phone={row.contact.phone} /> : '-'}
+                  </TableCell>
                   <TableCell>{row.contact.email || '-'}</TableCell>
                   <TableCell align="center">
                     <Chip label={row.mouths} size="small" color="primary" />
+                  </TableCell>
+                  <TableCell sx={{ maxWidth: 280 }}>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {[row.reachout.note, row.reachout.donation?.cakesDonatedNotes].filter(Boolean).join(' · ') || '—'}
+                    </Typography>
                   </TableCell>
                   <TableCell align="center">
                     <FollowUpSelect
@@ -676,7 +756,7 @@ export function Donations() {
                     </Tooltip>
                   </TableCell>
                   <TableCell align="center">
-                    <Tooltip title="Edit donation">
+                    <Tooltip title="Edit bites">
                       <IconButton size="small" onClick={() => openEditModal(row)}>
                         <EditIcon fontSize="small" />
                       </IconButton>
@@ -693,7 +773,7 @@ export function Donations() {
       <Box sx={{ display: { xs: 'flex', md: 'none' }, flexDirection: 'column', gap: 1.5 }}>
         {filteredDonations.length === 0 ? (
           <Paper sx={{ p: 4, textAlign: 'center' }}>
-            <Typography color="text.secondary">No donations found for this quarter</Typography>
+            <Typography color="text.secondary">No bites in this range</Typography>
           </Paper>
         ) : (
           filteredDonations.map((row, index) => {
@@ -722,7 +802,7 @@ export function Donations() {
                       </Typography>
                     </Box>
                     <Chip
-                      label={`${row.mouths} mouths`}
+                      label={`${row.mouths} bites`}
                       size="small"
                       sx={{ bgcolor: '#f5c842', color: '#2d2d2d', fontWeight: 700, flexShrink: 0 }}
                     />
@@ -787,7 +867,7 @@ export function Donations() {
                       </Button>
                     )}
                     <Box sx={{ flex: 1 }} />
-                    <IconButton size="small" onClick={() => openEditModal(row)} aria-label="Edit donation">
+                    <IconButton size="small" onClick={() => openEditModal(row)} aria-label="Edit bites">
                       <EditIcon fontSize="small" />
                     </IconButton>
                   </Box>
@@ -801,7 +881,7 @@ export function Donations() {
       {/* Edit Donation Modal */}
       <Dialog open={!!editingDonation} onClose={closeEditModal} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Typography variant="h6">Edit Donation</Typography>
+          <Typography variant="h6">Edit bites</Typography>
           <IconButton onClick={closeEditModal} size="small">
             <CloseIcon />
           </IconButton>
@@ -812,7 +892,7 @@ export function Donations() {
           {editDonationData && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
               <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                Total Mouths: {calculateMouths(editDonationData, products)}
+                Total bites: {calculateMouths(editDonationData, products)}
               </Typography>
 
               <DonationProductFields
@@ -822,7 +902,7 @@ export function Donations() {
               />
 
               <TextField
-                label="Donation Notes"
+                label="Notes"
                 size="small"
                 fullWidth
                 value={editDonationData.cakesDonatedNotes || ''}

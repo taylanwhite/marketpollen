@@ -10,6 +10,12 @@ import { useCampaign } from '../contexts/CampaignContext';
 import { useDonation } from '../contexts/DonationContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { DonationProductFields } from './DonationProductFields';
+import { ContactProfileFields } from './ContactProfileFields';
+import {
+  contactProfilePayload,
+  emptyContactProfileExtras,
+  type ContactProfileExtras,
+} from '../utils/organizationTypes';
 import { OnlineOnlyNotice } from './OnlineOnlyNotice';
 import { dataUrlToPendingContactFile, type PendingContactFile } from '../utils/contactFiles';
 import {
@@ -188,6 +194,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     followUpChoice: 'unset',
     followUpDate: '',
   });
+  const [profile, setProfile] = useState<ContactProfileExtras>(emptyContactProfileExtras());
 
   const [includeDonation, setIncludeDonation] = useState(false);
   const [donationData, setDonationData] = useState<DonationData>(createEmptyDonation(products));
@@ -513,6 +520,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       followUpChoice: 'unset',
       followUpDate: '',
     });
+    setProfile(emptyContactProfileExtras());
     setSuggestedDays(null);
     setIncludeDonation(false);
     setDonationData(createEmptyDonation(products));
@@ -716,6 +724,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         personalDetails: form.personalDetails || null,
         status: 'new',
         businessIds: businessIdsForSave,
+        ...contactProfilePayload(profile),
       }, { label: `New contact · ${contactName}` });
 
       if (pendingBusinessCardFile) {
@@ -794,7 +803,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         parts.push('Saved');
       }
       if (includeDonation && totalMouths > 0) {
-        parts.push(`${totalMouths} mouths logged`);
+        parts.push(`${totalMouths} bites logged`);
       }
       parts.push(
         skipFollowUp
@@ -890,7 +899,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           value={rawNotes}
           onChange={(e) => setRawNotes(e.target.value)}
           placeholder={hasBusinessCardDraft
-            ? 'Add notes about this contact, conversation, donation, or next step.'
+            ? 'Add notes about this contact, conversation, bites, or next step.'
             : 'e.g. "Visited Sarah at Lewis Bank, dropped off a sample tray. She loves hiking. Wants to chat about a corporate order next week."'}
           multiline
           minRows={4}
@@ -1035,6 +1044,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
             fullWidth
             disabled={loading}
+            helperText="Optional. Leave blank for a lobby drop when you don't have a person's name yet."
             slotProps={{
               input: {
                 startAdornment: (
@@ -1177,6 +1187,8 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
             />
           </Stack>
 
+          <ContactProfileFields value={profile} onChange={setProfile} disabled={loading} />
+
           {/* Reachout type chips */}
           <Box>
             <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
@@ -1257,11 +1269,11 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
               label={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <CakeIcon fontSize="small" />
-                  <Typography>Donated products</Typography>
+                  <Typography>Handed out bites</Typography>
                   {includeDonation && totalMouths > 0 && (
                     <Chip
                       size="small"
-                      label={`${totalMouths} mouths`}
+                      label={`${totalMouths} bites`}
                       sx={{ bgcolor: '#f5c842', color: '#2d2d2d', fontWeight: 700, ml: 1 }}
                     />
                   )}
@@ -1276,7 +1288,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                   onChange={setDonationData}
                 />
                 <TextField
-                  label="Donation notes (optional)"
+                  label="Notes (optional)"
                   size="small"
                   fullWidth
                   multiline
@@ -1336,8 +1348,28 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                   Follow-up date
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-                  Required. This is what puts them on the planning tab.
+                  Pick any day on the calendar. Shortcuts are below. This is what puts them on the planning tab.
                 </Typography>
+                <TextField
+                  type="date"
+                  label="Follow-up date"
+                  size="small"
+                  fullWidth
+                  value={form.followUpChoice === 'date' ? form.followUpDate : ''}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setForm((prev) => ({
+                      ...prev,
+                      followUpChoice: value ? 'date' : 'unset',
+                      followUpDate: value,
+                    }));
+                    if (value) setDonationData((prev) => ({ ...prev, noFollowUp: false }));
+                  }}
+                  InputLabelProps={{ shrink: true }}
+                  inputProps={{ min: formatInputDate(0) }}
+                  disabled={loading}
+                  sx={{ mb: 1.5 }}
+                />
                 <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', rowGap: 1, mb: 1.5 }}>
                   {FOLLOW_UP_PRESETS.map((preset) => {
                     const active = form.followUpChoice === 'date' && form.followUpDate === formatInputDate(preset.days);
@@ -1360,25 +1392,6 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                     );
                   })}
                 </Stack>
-                <TextField
-                  type="date"
-                  label="Or pick a date"
-                  size="small"
-                  fullWidth
-                  value={form.followUpChoice === 'date' ? form.followUpDate : ''}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setForm((prev) => ({
-                      ...prev,
-                      followUpChoice: value ? 'date' : 'unset',
-                      followUpDate: value,
-                    }));
-                    if (value) setDonationData((prev) => ({ ...prev, noFollowUp: false }));
-                  }}
-                  InputLabelProps={{ shrink: true }}
-                  inputProps={{ min: formatInputDate(0) }}
-                  disabled={loading}
-                />
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1, gap: 1 }}>
                   <Button
                     size="small"

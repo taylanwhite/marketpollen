@@ -4,6 +4,7 @@ import { getAuthUid } from '../lib/auth.js';
 import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
 import { contactInclude, contactToJson } from '../lib/contact-json.js';
 import { syncContactBusinesses } from '../lib/contact-businesses.js';
+import { contactProfileData } from '../lib/contact-profile.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
@@ -39,6 +40,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       suggestedFollowUpPriority?: string | null;
       lastReachoutDate?: string | Date | null;
       status?: string | null;
+      organizationType?: string | null;
+      isCorporateAccount?: boolean;
+      taxExemptNumber?: string | null;
+      cardOnFileLast4?: string | null;
+      corporateStatus?: string | null;
       businessId?: string;
       businessIds?: string[];
       reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; customItems?: Record<string, number>; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean; noFollowUp?: boolean } }>;
@@ -52,6 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.employeeCount !== undefined) updateData.employee_count = body.employeeCount;
     if (body.personalDetails !== undefined) updateData.personal_details = body.personalDetails;
     if (body.status !== undefined) updateData.status = body.status;
+    Object.assign(updateData, contactProfileData(body, true));
     if (body.businessId !== undefined) updateData.business_id = body.businessId;
     const linkedBusinesses = Array.isArray(body.businessIds)
       ? body.businessIds

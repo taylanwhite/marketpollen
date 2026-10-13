@@ -284,7 +284,7 @@ export function ReportDrilldownDrawer({
                     <>
                       {row.businessName} · {formatShortDate(row.reachout.date)} ·{' '}
                       {REACHOUT_TYPE_LABELS[row.reachout.type || 'other']}
-                      {row.mouths > 0 ? ` · ${row.mouths.toLocaleString()} mouths` : ''}
+                      {row.mouths > 0 ? ` · ${row.mouths.toLocaleString()} bites` : ''}
                       {row.reachout.note ? (
                         <Box component="span" sx={{ display: 'block', mt: 0.4 }} >
                           {row.reachout.note.length > 110

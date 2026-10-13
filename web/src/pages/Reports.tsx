@@ -453,7 +453,7 @@ export function Reports() {
                 <Typography variant="h4" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2.125rem' } }}>
                   {quarterProgress.totalMouths.toLocaleString()}
                   <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-                    / {quarterProgress.goal.toLocaleString()} mouths
+                    / {quarterProgress.goal.toLocaleString()} bites
                   </Typography>
                 </Typography>
               </Box>
@@ -497,9 +497,9 @@ export function Reports() {
         />
         <KpiCard
           icon={<CakeIcon />}
-          label="Mouths"
+          label="Bites"
           value={totalMouths}
-          hint={`${donationReachouts.length} donations · ${range.label}`}
+          hint={`${donationReachouts.length} bite drops · ${range.label}`}
           onClick={() => goToDonations()}
         />
         <KpiCard
@@ -564,8 +564,8 @@ export function Reports() {
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, lg: 8 }}>
           <ChartCard
-            title="Mouths over time"
-            subtitle={`${range.label} · click a point to open those donations`}
+            title="Bites over time"
+            subtitle={`${range.label} · click a point to open those bites`}
             height={chartHeight}
             viewAllLabel="Open list"
             onViewAll={() => goToDonations()}
@@ -602,8 +602,8 @@ export function Reports() {
                         active={active}
                         label={String(label ?? '')}
                         rows={[
-                          { name: 'Mouths', value: Number(payload?.[0]?.value || 0), color: '#d4a017' },
-                          { name: 'Donations', value: Number(payload?.[0]?.payload?.count || 0), color: '#f5c842' },
+                          { name: 'Bites', value: Number(payload?.[0]?.value || 0), color: '#d4a017' },
+                          { name: 'Drops', value: Number(payload?.[0]?.payload?.count || 0), color: '#f5c842' },
                         ]}
                       />
                     )}
@@ -614,13 +614,13 @@ export function Reports() {
                     stroke="#d4a017"
                     strokeWidth={2.5}
                     fill="url(#mouthsFill)"
-                    name="Mouths"
+                    name="Bites"
                     activeDot={{ r: 6, fill: '#d4a017', stroke: '#fff', strokeWidth: 2 }}
                   />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
-              <ChartEmpty message="No donations in this range yet." />
+              <ChartEmpty message="No bites in this range yet." />
             )}
           </ChartCard>
         </Grid>
@@ -628,7 +628,7 @@ export function Reports() {
         <Grid size={{ xs: 12, lg: 4 }}>
           <ChartCard
             title="Product mix"
-            subtitle="Tap a bar to open those donations"
+            subtitle="Tap a bar to open those bites"
             height={chartHeight}
             viewAllLabel="Open list"
             onViewAll={() => goToDonations()}
@@ -657,7 +657,7 @@ export function Reports() {
                         label={String(payload?.[0]?.payload?.name ?? '')}
                         rows={[
                           { name: 'Quantity', value: Number(payload?.[0]?.payload?.quantity || 0), color: '#f5c842' },
-                          { name: 'Mouths', value: Number(payload?.[0]?.payload?.mouths || 0), color: '#d4a017' },
+                          { name: 'Bites', value: Number(payload?.[0]?.payload?.mouths || 0), color: '#d4a017' },
                         ]}
                       />
                     )}
@@ -782,7 +782,7 @@ export function Reports() {
         <Grid size={{ xs: 12, lg: 4 }}>
           <ChartCard
             title="Biggest stops"
-            subtitle="By mouths donated · click a bar to open donations"
+            subtitle="By bites handed out · click a bar to open them"
             height={chartHeight}
             viewAllLabel="Open list"
             onViewAll={() => goToDonations()}
@@ -806,8 +806,8 @@ export function Reports() {
                         active={active}
                         label={String(payload?.[0]?.payload?.name ?? '')}
                         rows={[
-                          { name: 'Mouths', value: Number(payload?.[0]?.payload?.mouths || 0), color: '#d4a017' },
-                          { name: 'Donations', value: Number(payload?.[0]?.payload?.visits || 0), color: '#f5c842' },
+                          { name: 'Bites', value: Number(payload?.[0]?.payload?.mouths || 0), color: '#d4a017' },
+                          { name: 'Drops', value: Number(payload?.[0]?.payload?.visits || 0), color: '#f5c842' },
                         ]}
                       />
                     )}
@@ -826,7 +826,7 @@ export function Reports() {
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <ChartEmpty message="No business donations in this range." />
+              <ChartEmpty message="No bites in this range." />
             )}
           </ChartCard>
         </Grid>

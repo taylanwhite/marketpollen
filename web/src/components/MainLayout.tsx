@@ -32,9 +32,10 @@ import {
   Cake as CakeIcon,
   Explore as DiscoverIcon,
   Insights as ReportsIcon,
+  Apartment as CorporateIcon,
 } from '@mui/icons-material';
 
-const drawerWidth = 220;
+const drawerWidth = 248;
 const bottomNavHeight = 64;
 
 interface MainLayoutProps {
@@ -93,7 +94,8 @@ export function MainLayout({ children }: MainLayoutProps) {
     { text: 'Reports', icon: <ReportsIcon />, path: '/reports' },
     { text: 'Plan', icon: <PlanIcon />, path: '/calendar' },
     { text: 'Contacts', icon: <ContactsIcon />, path: '/dashboard' },
-    { text: 'Donations', icon: <CakeIcon />, path: '/donations' },
+    { text: 'Corporate Accounts', icon: <CorporateIcon />, path: '/corporate-accounts' },
+    { text: 'Bites', icon: <CakeIcon />, path: '/donations' },
     { text: 'Discover', icon: <DiscoverIcon />, path: '/opportunities' },
   ];
 

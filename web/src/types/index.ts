@@ -190,6 +190,12 @@ export interface Contact {
   createdByName?: string | null;
   lastReachoutDate?: Date | null;
   status?: 'new' | 'contacted' | 'active' | 'converted' | 'inactive';
+  organizationType?: string | null;
+  isCorporateAccount?: boolean;
+  taxExemptNumber?: string | null;
+  cardOnFileLast4?: string | null;
+  corporateStatus?: 'active' | 'inactive' | null;
+  updatedAt?: Date | null;
 }
 
 // Store-specific contact relationship (for future multi-store implementation)
