@@ -442,18 +442,29 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
     }
 
     const orgLabel = adminOrgNames.length > 0 ? `Admin of ${adminOrgNames.join(', ')}` : '';
-    
-    const accessCount = user.storePermissions.length;
-    const fullAccessCount = user.storePermissions.filter(p => p.canEdit).length;
-    
+    const adminOrgIds = new Set(
+      (user.orgMemberships || []).filter((item) => item.isAdmin).map((item) => item.orgId),
+    );
+    let editCount = 0;
+    let viewCount = 0;
+    for (const store of stores) {
+      const perm = user.storePermissions.find((item) => item.storeId === store.id);
+      const coversOrg = !!store.organizationId && adminOrgIds.has(store.organizationId);
+      if (perm?.canEdit) editCount += 1;
+      else if (perm || coversOrg) viewCount += 1;
+    }
+    const accessCount = editCount + viewCount;
+
     let storeSummary = 'No store access';
     if (accessCount === 0) storeSummary = 'No store access';
-    else if (accessCount === stores.length && fullAccessCount === stores.length && stores.length > 0) {
+    else if (accessCount === stores.length && editCount === stores.length && stores.length > 0) {
       storeSummary = 'Every store (edit)';
-    } else if (accessCount === stores.length && fullAccessCount === 0 && stores.length > 0) {
+    } else if (accessCount === stores.length && editCount === 0 && stores.length > 0) {
       storeSummary = 'Every store (view)';
+    } else if (editCount === 0) {
+      storeSummary = `${accessCount} store${accessCount === 1 ? '' : 's'} (view)`;
     } else {
-      storeSummary = `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} edit)`;
+      storeSummary = `${accessCount} store${accessCount === 1 ? '' : 's'} (${editCount} edit)`;
     }
     return orgLabel ? `${orgLabel}. ${storeSummary}` : storeSummary;
   };
