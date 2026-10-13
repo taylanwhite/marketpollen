@@ -1,6 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { requireAuth } from '../lib/auth.js';
+import { isKingAdminEmail } from '../lib/king-admin-email.js';
 
 /**
  * Sync current Clerk user to DB. Call after signup or login.
@@ -148,7 +149,7 @@ async function respondWithUser(res: VercelRequest extends never ? never : any, u
       email: user.email,
       displayName: user.display_name ?? undefined,
       createdAt: user.created_at,
-      isGlobalAdmin: user.is_global_admin,
+      isGlobalAdmin: isKingAdminEmail(user.email),
     },
     storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
   });

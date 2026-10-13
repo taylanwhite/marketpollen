@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useNavigate } from 'react-router-dom';
 import { Store, User, StorePermission } from '../types';
+import { isKingAdminEmail } from '../../handlers/lib/king-admin-email';
 import {
   Box,
   Typography,
@@ -63,6 +64,7 @@ interface PendingInvite {
 
 export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   const { userId, userEmail } = useAuth();
+  const canGrantAdmin = isKingAdminEmail(userEmail);
   const { isAdmin, isOrgAdminFn, currentOrg } = usePermissions();
   const navigate = useNavigate();
   
@@ -416,7 +418,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
       await api.patch(`/users/${editingUser.uid}`, {
         storePermissions: permissions,
         scopedStoreIds,
-        isOrgAdmin: editIsOrgAdmin,
+        ...(canGrantAdmin ? { isOrgAdmin: editIsOrgAdmin } : {}),
         orgId,
       });
 
@@ -754,6 +756,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                       checked={editIsOrgAdmin}
                       onChange={(e) => setEditIsOrgAdmin(e.target.checked)}
                       color="primary"
+                      disabled={!canGrantAdmin}
                     />
                   }
                   label={
@@ -762,7 +765,9 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                         Organization admin{orgChoices.find((org) => org.id === editOrgId) ? ` for ${orgChoices.find((org) => org.id === editOrgId)?.name}` : ''}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        They can rename this organization, change its products and goal, see every store in it, and open its subscription. This does not apply to any other organization.
+                        {canGrantAdmin
+                          ? 'They can rename this organization, change its products and goal, see every store in it, and open its subscription. This does not apply to any other organization.'
+                          : 'Only the platform owner can grant or remove organization admin.'}
                       </Typography>
                     </Box>
                   }

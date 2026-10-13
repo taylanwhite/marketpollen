@@ -3,6 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { createDefaultCampaignProducts } from './lib/default-products.js';
 import { trialEndFromNow } from './lib/org-billing-access.js';
+import { isKingAdmin } from './lib/king-admin.js';
 
 function toOrgJson(o: any) {
   return {
@@ -19,10 +20,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
   if (req.method === 'GET') {
-    const user = await prisma.user.findUnique({ where: { id: uid }, select: { is_global_admin: true } });
-
     let orgs;
-    if (user?.is_global_admin) {
+    if (await isKingAdmin(uid)) {
       orgs = await prisma.organization.findMany({ orderBy: { name: 'asc' } });
     } else {
       const memberships = await prisma.organizationMember.findMany({
@@ -37,8 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'POST') {
-    const user = await prisma.user.findUnique({ where: { id: uid }, select: { is_global_admin: true } });
-    if (!user?.is_global_admin) return res.status(403).json({ error: 'Only global admins can create organizations' });
+    if (!(await isKingAdmin(uid))) return res.status(403).json({ error: 'Only the platform owner can create organizations' });
 
     const body = req.body as { name: string; quarterlyGoal?: number; trial?: boolean };
     if (!body?.name?.trim()) return res.status(400).json({ error: 'name is required' });

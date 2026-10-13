@@ -1,5 +1,6 @@
 import { prisma } from './db.js';
 import { isOrgAdmin } from './org-access.js';
+import { isKingAdmin } from './king-admin.js';
 import { STORE_ARCHIVED_MESSAGE, STORE_PAUSED_MESSAGE } from './billing-copy.js';
 import { billingAccess } from './org-billing-access.js';
 
@@ -30,10 +31,7 @@ export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, ui
   if (store.organization) {
     const access = billingAccess(store.organization);
     if (access.mode === 'trial_ended' || access.mode === 'payment_locked') {
-      const actor = uid
-        ? await prisma.user.findUnique({ where: { id: uid }, select: { is_global_admin: true } })
-        : null;
-      if (!actor?.is_global_admin) {
+      if (!(uid && await isKingAdmin(uid))) {
         res.status(403).json({
           error: access.mode === 'trial_ended'
             ? 'Trial is done, please pay.'
@@ -63,12 +61,7 @@ export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, ui
  * Org admin without a store invite can view, not write.
  */
 export async function canAccessStore(uid: string, storeId: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({
-    where: { id: uid },
-    select: { is_global_admin: true },
-  });
-  if (!user) return false;
-  if (user.is_global_admin) return true;
+  if (await isKingAdmin(uid)) return true;
   const perm = await prisma.storePermission.findUnique({
     where: { user_id_store_id: { user_id: uid, store_id: storeId } },
   });
@@ -91,12 +84,7 @@ export async function canViewStore(uid: string, storeId: string): Promise<boolea
 export type AccessibleStores = { all: true } | { ids: string[] };
 
 export async function getAccessibleStores(uid: string): Promise<AccessibleStores> {
-  const user = await prisma.user.findUnique({
-    where: { id: uid },
-    select: { is_global_admin: true },
-  });
-  if (!user) return { ids: [] };
-  if (user.is_global_admin) return { all: true };
+  if (await isKingAdmin(uid)) return { all: true };
 
   const [perms, adminOrgs] = await Promise.all([
     prisma.storePermission.findMany({

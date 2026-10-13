@@ -3,6 +3,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../../lib/db.js';
 import { getAuthUid } from '../../lib/auth.js';
 import { appUrl } from '../../lib/app-url.js';
+import { isKingAdmin } from '../../lib/king-admin.js';
 
 async function grantStoreAccess(userId: string, orgId: string) {
   const stores = await prisma.store.findMany({
@@ -42,6 +43,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
   const actor = await prisma.user.findUnique({ where: { id: uid }, select: { is_global_admin: true } });
   if (!actor?.is_global_admin) return res.status(403).json({ error: 'Admin required' });
+  if (!(await isKingAdmin(uid))) return res.status(403).json({ error: 'Only the platform owner can change admin access' });
 
   const orgId = (req.query?.id as string)?.trim();
   if (!orgId) return res.status(400).json({ error: 'Organization id required' });

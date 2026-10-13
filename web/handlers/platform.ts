@@ -3,6 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { createDefaultCampaignProducts } from './lib/default-products.js';
 import { billingAccess } from './lib/org-billing-access.js';
+import { isKingAdmin } from './lib/king-admin.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -10,11 +11,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
-  const user = await prisma.user.findUnique({
-    where: { id: uid },
-    select: { is_global_admin: true },
-  });
-  if (!user?.is_global_admin) return res.status(403).json({ error: 'Admin required' });
+  if (!(await isKingAdmin(uid))) return res.status(403).json({ error: 'Admin required' });
 
   const missingProducts = await prisma.organization.findMany({
     where: { products: { none: {} } },

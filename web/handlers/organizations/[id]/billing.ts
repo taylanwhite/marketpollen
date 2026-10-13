@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../../lib/db.js';
 import { getAuthUid } from '../../lib/auth.js';
 import { isOrgAdmin } from '../../lib/org-access.js';
+import { isKingAdmin } from '../../lib/king-admin.js';
 import { trialEndFromNow } from '../../lib/org-billing-access.js';
 import {
   billingView,
@@ -20,8 +21,7 @@ import {
 } from '../../lib/billing.js';
 
 async function isGlobalAdmin(uid: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({ where: { id: uid }, select: { is_global_admin: true } });
-  return user?.is_global_admin === true;
+  return isKingAdmin(uid);
 }
 
 function sendError(res: VercelResponse, err: unknown) {

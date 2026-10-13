@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
+import { useAuth } from '../contexts/AuthContext';
+import { isKingAdminEmail } from '../../handlers/lib/king-admin-email';
 import { AdminPanel } from './AdminPanel';
 import {
   Alert,
@@ -92,6 +94,8 @@ function billLabel(org: PlatformOrg) {
 
 export function Platform() {
   const { isAdmin } = usePermissions();
+  const { userEmail } = useAuth();
+  const canGrantAdmin = isKingAdminEmail(userEmail);
   const navigate = useNavigate();
   const [tab, setTab] = useState<'organizations' | 'people'>('organizations');
   const [orgs, setOrgs] = useState<PlatformOrg[]>([]);
@@ -388,18 +392,24 @@ export function Platform() {
                     Waiting to sign up: {detail.pendingOwners?.join(', ')}
                   </Typography>
                 )}
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                  <TextField
-                    size="small"
-                    label="Owner email"
-                    value={ownerEmail}
-                    onChange={(event) => setOwnerEmail(event.target.value)}
-                    sx={{ flex: 1 }}
-                  />
-                  <Button variant="contained" disabled={!ownerEmail.trim() || savingId === 'owner'} onClick={addOwner}>
-                    {savingId === 'owner' ? <CircularProgress size={16} color="inherit" /> : 'Add owner'}
-                  </Button>
-                </Box>
+                {canGrantAdmin ? (
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      label="Owner email"
+                      value={ownerEmail}
+                      onChange={(event) => setOwnerEmail(event.target.value)}
+                      sx={{ flex: 1 }}
+                    />
+                    <Button variant="contained" disabled={!ownerEmail.trim() || savingId === 'owner'} onClick={addOwner}>
+                      {savingId === 'owner' ? <CircularProgress size={16} color="inherit" /> : 'Add owner'}
+                    </Button>
+                  </Box>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Only the platform owner can add or remove an owner.
+                  </Typography>
+                )}
               </Box>
               <Box>
                 <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Stores</Typography>

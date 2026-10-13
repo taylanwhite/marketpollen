@@ -1,12 +1,9 @@
 import { prisma } from './db.js';
+import { isKingAdmin } from './king-admin.js';
 
-/** Every organization this person administers. `'all'` is a MarketPollen admin. */
+/** Every organization this person administers. `'all'` is only the platform owner. */
 export async function adminOrgIds(uid: string): Promise<string[] | 'all'> {
-  const user = await prisma.user.findUnique({
-    where: { id: uid },
-    select: { is_global_admin: true },
-  });
-  if (user?.is_global_admin) return 'all';
+  if (await isKingAdmin(uid)) return 'all';
   const memberships = await prisma.organizationMember.findMany({
     where: { user_id: uid, is_admin: true },
     select: { org_id: true },
@@ -15,11 +12,7 @@ export async function adminOrgIds(uid: string): Promise<string[] | 'all'> {
 }
 
 export async function isOrgAdmin(uid: string, orgId: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({
-    where: { id: uid },
-    select: { is_global_admin: true },
-  });
-  if (user?.is_global_admin) return true;
+  if (await isKingAdmin(uid)) return true;
 
   const member = await prisma.organizationMember.findUnique({
     where: { user_id_org_id: { user_id: uid, org_id: orgId } },
@@ -28,11 +21,7 @@ export async function isOrgAdmin(uid: string, orgId: string): Promise<boolean> {
 }
 
 export async function isOrgMember(uid: string, orgId: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({
-    where: { id: uid },
-    select: { is_global_admin: true },
-  });
-  if (user?.is_global_admin) return true;
+  if (await isKingAdmin(uid)) return true;
 
   const member = await prisma.organizationMember.findUnique({
     where: { user_id_org_id: { user_id: uid, org_id: orgId } },

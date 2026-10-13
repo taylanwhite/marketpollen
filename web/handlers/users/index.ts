@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { adminOrgIds } from '../lib/org-access.js';
+import { isKingAdminEmail } from '../lib/king-admin-email.js';
 
 function toUserJson(
   user: {
@@ -9,7 +10,6 @@ function toUserJson(
     email: string;
     display_name: string | null;
     created_at: Date;
-    is_global_admin: boolean;
     store_permissions: Array<{ store_id: string; can_edit: boolean }>;
     organization_memberships: Array<{ org_id: string; is_admin: boolean; org: { name: string } }>;
   },
@@ -30,7 +30,7 @@ function toUserJson(
     email: user.email,
     displayName: user.display_name ?? undefined,
     createdAt: user.created_at,
-    isGlobalAdmin: scope.orgIds ? false : user.is_global_admin,
+    isGlobalAdmin: isKingAdminEmail(user.email),
     storePermissions,
     orgMemberships,
   };

@@ -3,6 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { getAccessibleStores } from './lib/store-access.js';
 import { billingAccess } from './lib/org-billing-access.js';
+import { isKingAdminEmail } from './lib/king-admin-email.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -12,7 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const user = await prisma.user.findUnique({
     where: { id: uid },
-    select: { id: true, email: true, display_name: true, created_at: true, is_global_admin: true },
+    select: { id: true, email: true, display_name: true, created_at: true },
   });
 
   if (!user) {
@@ -66,8 +67,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     access: billingAccess(org),
   });
 
+  const platformOwner = isKingAdminEmail(user.email);
   let organizations: ReturnType<typeof mapOrg>[];
-  if (user.is_global_admin) {
+  if (platformOwner) {
     const allOrgs = await prisma.organization.findMany({
       include: {
         products: { orderBy: { display_order: 'asc' } },
@@ -80,8 +82,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     organizations = orgMemberships.map((m) =>
       mapOrg(
         m.org,
-        m.is_admin || user.is_global_admin,
-        m.is_admin || user.is_global_admin ? undefined : allowedStoreIds,
+        m.is_admin,
+        m.is_admin ? undefined : allowedStoreIds,
       )
     );
   } else {
@@ -108,7 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       email: user.email,
       displayName: user.display_name ?? undefined,
       createdAt: user.created_at,
-      isGlobalAdmin: user.is_global_admin,
+      isGlobalAdmin: platformOwner,
     },
     storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
     stores: stores.map((s) => ({

@@ -2,6 +2,8 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { adminOrgIds } from '../lib/org-access.js';
+import { isKingAdmin } from '../lib/king-admin.js';
+import { isKingAdminEmail } from '../lib/king-admin-email.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
@@ -37,10 +39,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
     if (body.isOrgAdmin !== undefined && body.orgId) {
+      const existing = await prisma.organizationMember.findUnique({
+        where: { user_id_org_id: { user_id: targetUid, org_id: body.orgId } },
+        select: { is_admin: true },
+      });
+      const nextAdmin = body.isOrgAdmin === true;
+      if ((existing?.is_admin === true) !== nextAdmin && !(await isKingAdmin(uid))) {
+        return res.status(403).json({ error: 'Only the platform owner can change admin access' });
+      }
       await prisma.organizationMember.upsert({
         where: { user_id_org_id: { user_id: targetUid, org_id: body.orgId } },
-        create: { user_id: targetUid, org_id: body.orgId, is_admin: body.isOrgAdmin },
-        update: { is_admin: body.isOrgAdmin },
+        create: { user_id: targetUid, org_id: body.orgId, is_admin: nextAdmin },
+        update: { is_admin: nextAdmin },
       });
     }
     if (Array.isArray(body.storePermissions)) {
@@ -74,7 +84,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       email: user.email,
       displayName: user.display_name ?? undefined,
       createdAt: user.created_at,
-      isGlobalAdmin: user.is_global_admin,
+      isGlobalAdmin: isKingAdminEmail(user.email),
       storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
     });
   }
