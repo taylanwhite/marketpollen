@@ -79,13 +79,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     organizations = allOrgs.map((org) => mapOrg(org, true));
   } else if (orgMemberships.length > 0) {
     const allowedStoreIds = new Set(stores.map((store) => store.id));
-    organizations = orgMemberships.map((m) =>
-      mapOrg(
-        m.org,
-        m.is_admin,
-        m.is_admin ? undefined : allowedStoreIds,
-      )
-    );
+    organizations = orgMemberships
+      .filter((membership) => {
+        if (membership.is_admin) return true;
+        return membership.org.stores.some((store) => !store.archived_at && allowedStoreIds.has(store.id));
+      })
+      .map((m) =>
+        mapOrg(
+          m.org,
+          m.is_admin,
+          m.is_admin ? undefined : allowedStoreIds,
+        )
+      );
   } else {
     // User has no explicit org membership — derive orgs from their store permissions
     const storeOrgIds = [...new Set(stores.map(s => s.organization_id).filter(Boolean))] as string[];

@@ -108,7 +108,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
       }));
       const openStores = accessibleStores.filter((store) => !isStoreArchived(store));
       const isGlobalAdmin = me.user?.isGlobalAdmin === true;
-      const orgs = (me.organizations || []) as Organization[];
+      const orgs = ((me.organizations || []) as Organization[]).filter(
+        (org) => isGlobalAdmin || org.isAdmin || org.stores.length > 0,
+      );
       const orgAdmin = isGlobalAdmin || orgs.some(o => o.isAdmin);
       const savedStoreId = localStorage.getItem('selectedStoreId') || previousStoreId;
       let currentStoreId = savedStoreId;

@@ -56,11 +56,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if ((existing?.is_admin === true) !== nextAdmin && !(await isKingAdmin(uid))) {
         return res.status(403).json({ error: 'Only the platform owner can change admin access' });
       }
-      await prisma.organizationMember.upsert({
-        where: { user_id_org_id: { user_id: targetUid, org_id: body.orgId } },
-        create: { user_id: targetUid, org_id: body.orgId, is_admin: nextAdmin },
-        update: { is_admin: nextAdmin },
-      });
+      if (existing || nextAdmin) {
+        await prisma.organizationMember.upsert({
+          where: { user_id_org_id: { user_id: targetUid, org_id: body.orgId } },
+          create: { user_id: targetUid, org_id: body.orgId, is_admin: nextAdmin },
+          update: { is_admin: nextAdmin },
+        });
+      }
     }
     if (Array.isArray(body.storePermissions)) {
       const scopedStoreIds = Array.isArray(body.scopedStoreIds) ? body.scopedStoreIds.filter(Boolean) : [];
