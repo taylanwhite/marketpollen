@@ -92,7 +92,7 @@ export const REACHOUT_TYPE_COLORS: Record<string, string> = {
 };
 
 export const EVENT_TYPE_LABELS: Record<string, string> = {
-  reachout: 'Visit',
+  reachout: 'Reachout',
   followup: 'Follow-up',
   meeting: 'Meeting',
   call: 'Call',

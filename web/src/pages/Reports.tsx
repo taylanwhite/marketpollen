@@ -357,11 +357,14 @@ export function Reports() {
             Reports
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Visits are logged stops, calls, and emails. Calendar items are follow-ups and appointments on Plan.
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
             {storeScope === 'all'
-              ? `All stores${currentOrg?.name ? ` in ${currentOrg.name}` : ''}.${isMobile ? ' Tap a card for the records behind it.' : ' Click any chart to see the records behind it.'}`
+              ? `All stores${currentOrg?.name ? ` in ${currentOrg.name}` : ''}. ${isMobile ? 'Tap a card for the records behind it.' : 'Click any chart to see the records behind it.'}`
               : isMobile
-                ? 'Tap a card to see the contacts, visits, or events behind it.'
-                : 'Click any chart to see the contacts, visits, or events behind it.'}
+                ? 'Tap a card for the records behind it.'
+                : 'Click any chart to see the records behind it.'}
           </Typography>
         </Box>
         {!isMobile && (
@@ -489,7 +492,7 @@ export function Reports() {
           onClick={() =>
             openDrilldown({
               title: 'Visits',
-              subtitle: range.label,
+              subtitle: `${range.label} · logged stops, calls, and emails`,
               kind: 'reachouts',
               reachouts: rangedReachouts,
             })
@@ -509,8 +512,8 @@ export function Reports() {
           hint={upcomingWeek.length === 1 ? '1 this week' : `${upcomingWeek.length} this week`}
           onClick={() =>
             openDrilldown({
-              title: 'Upcoming events',
-              subtitle: 'Scheduled from today forward',
+              title: 'Upcoming calendar',
+              subtitle: 'Follow-ups and appointments on Plan, from today forward',
               kind: 'events',
               events: upcoming,
             })
@@ -552,8 +555,8 @@ export function Reports() {
           wide
           onClick={() =>
             openDrilldown({
-              title: 'Overdue events',
-              subtitle: 'Scheduled events that are past due',
+              title: 'Overdue calendar',
+              subtitle: 'Still on Plan, and the date has passed',
               kind: 'events',
               events: overdue,
             })
@@ -704,7 +707,7 @@ export function Reports() {
         <Grid size={{ xs: 12, md: 6 }}>
           <NamedPieChart
             title="Visits by type"
-            subtitle={`${range.label} · click a slice`}
+            subtitle={`${range.label} · logged stops, calls, and emails`}
             height={chartHeight}
             data={visitTypeData}
             empty="No visits logged in this range."
@@ -729,14 +732,14 @@ export function Reports() {
 
         <Grid size={{ xs: 12, md: 6 }}>
           <NamedBarChart
-            title="Events by type"
-            subtitle={`${range.label} · click a type`}
+            title="Calendar by type"
+            subtitle={`${range.label} · follow-ups and appointments on Plan`}
             height={chartHeight}
             data={eventTypeData}
-            empty="No events in this range."
+            empty="Nothing on the calendar in this range."
             onViewAll={() =>
               openDrilldown({
-                title: 'All events',
+                title: 'All calendar items',
                 subtitle: range.label,
                 kind: 'events',
                 events: rangedEvents,
@@ -744,7 +747,7 @@ export function Reports() {
             }
             onSelect={(slice) =>
               openDrilldown({
-                title: `${slice.label} events`,
+                title: `${slice.label} on the calendar`,
                 subtitle: range.label,
                 kind: 'events',
                 events: rangedEvents.filter((event) => (event.type || 'other') === slice.key),
@@ -755,14 +758,14 @@ export function Reports() {
 
         <Grid size={{ xs: 12, md: 6 }}>
           <NamedPieChart
-            title="Event status"
-            subtitle={`${range.label} · click a slice`}
+            title="Calendar status"
+            subtitle={`${range.label} · scheduled, completed, or cancelled on Plan`}
             height={chartHeight}
             data={eventStatusData}
-            empty="No events in this range."
+            empty="Nothing on the calendar in this range."
             onViewAll={() =>
               openDrilldown({
-                title: 'All events',
+                title: 'All calendar items',
                 subtitle: range.label,
                 kind: 'events',
                 events: rangedEvents,
@@ -770,7 +773,7 @@ export function Reports() {
             }
             onSelect={(slice) =>
               openDrilldown({
-                title: `${slice.label} events`,
+                title: `${slice.label} calendar items`,
                 subtitle: range.label,
                 kind: 'events',
                 events: rangedEvents.filter((event) => (event.status || 'scheduled') === slice.key),
@@ -833,18 +836,18 @@ export function Reports() {
 
         <Grid size={{ xs: 12, md: 6, lg: 4 }}>
           <ChartCard
-            title="Upcoming events"
+            title="Upcoming calendar"
             subtitle={
               upcomingWeek.length === 1
-                ? '1 scheduled this week · click to open'
-                : `${upcomingWeek.length} scheduled this week · click to open`
+                ? '1 follow-up or appointment this week'
+                : `${upcomingWeek.length} follow-ups and appointments this week`
             }
             height={chartHeight}
             viewAllLabel="View all"
             onViewAll={() =>
               openDrilldown({
-                title: 'Upcoming events',
-                subtitle: 'Scheduled from today forward',
+                title: 'Upcoming calendar',
+                subtitle: 'Follow-ups and appointments on Plan, from today forward',
                 kind: 'events',
                 events: upcoming,
               })
@@ -933,14 +936,14 @@ export function Reports() {
 
         <Grid size={{ xs: 12, md: 6, lg: 4 }}>
           <ChartCard
-            title="Overdue events"
-            subtitle="Still scheduled, date already passed"
+            title="Overdue calendar"
+            subtitle="Still on Plan, and the date has passed"
             height={chartHeight}
             viewAllLabel="View all"
             onViewAll={() =>
               openDrilldown({
-                title: 'Overdue events',
-                subtitle: 'Scheduled events that are past due',
+                title: 'Overdue calendar',
+                subtitle: 'Still on Plan, and the date has passed',
                 kind: 'events',
                 events: overdue,
               })
@@ -957,7 +960,7 @@ export function Reports() {
                 }))}
               />
             ) : (
-              <ChartEmpty message="No overdue events." />
+              <ChartEmpty message="Nothing overdue on the calendar." />
             )}
           </ChartCard>
         </Grid>

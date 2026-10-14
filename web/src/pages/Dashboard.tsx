@@ -11,6 +11,7 @@ import { connectionValue } from '../utils/connectionLabel';
 import { PhoneLink } from '../components/PhoneLink';
 import { knownOrganizationTypes, corporateAccountFromBusiness, corporateAccountPayload, type CorporateAccountFields } from '../utils/organizationTypes';
 import { CorporateAccountEditor } from '../components/ContactProfileFields';
+import { AddressPicker } from '../components/AddressPicker';
 
 // Heavy modals — pulled in on demand to keep the contacts list snappy on
 // first paint, especially on slow LTE.
@@ -94,6 +95,8 @@ import {
   MoreVert as MoreVertIcon,
   CallMerge as MergeIcon,
   SwapVert as SwapIcon,
+  Edit as EditIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
 
 function contactBusinessIds(contact: Contact): string[] {
@@ -138,6 +141,13 @@ export function Dashboard() {
   const [corporateBusiness, setCorporateBusiness] = useState<Business | null>(null);
   const [corporateDraft, setCorporateDraft] = useState<CorporateAccountFields>(corporateAccountFromBusiness(null));
   const [corporateSaving, setCorporateSaving] = useState(false);
+  const [editingBusiness, setEditingBusiness] = useState<Business | null>(null);
+  const [businessForm, setBusinessForm] = useState({ name: '', address: '', city: '', state: '', zipCode: '' });
+  const [businessEditError, setBusinessEditError] = useState('');
+  const [businessSaving, setBusinessSaving] = useState(false);
+  const [deletingBusiness, setDeletingBusiness] = useState<Business | null>(null);
+  const [businessDeleting, setBusinessDeleting] = useState(false);
+  const [businessDeleteError, setBusinessDeleteError] = useState('');
   const [keepBusiness, setKeepBusiness] = useState<Business | null>(null);
   const [foldBusiness, setFoldBusiness] = useState<Business | null>(null);
   const [mergeBusy, setMergeBusy] = useState(false);
@@ -888,6 +898,71 @@ export function Dashboard() {
   const contactCountLabel = (businessId: string) => {
     const count = contacts.filter((contact) => contactBusinessIds(contact).includes(businessId)).length;
     return `${count} contact${count === 1 ? '' : 's'}`;
+  };
+
+  const openBusinessEditor = (business: Business) => {
+    setEditingBusiness(business);
+    setBusinessForm({
+      name: business.name || '',
+      address: business.address || '',
+      city: business.city || '',
+      state: business.state || '',
+      zipCode: business.zipCode || '',
+    });
+    setBusinessEditError('');
+  };
+
+  const saveBusinessEdits = async () => {
+    if (!editingBusiness) return;
+    const name = businessForm.name.trim();
+    if (!name) {
+      setBusinessEditError('Business name is required');
+      return;
+    }
+    setBusinessSaving(true);
+    setBusinessEditError('');
+    try {
+      await api.patch(`/businesses/${editingBusiness.id}`, {
+        name,
+        address: businessForm.address.trim(),
+        city: businessForm.city.trim(),
+        state: businessForm.state.trim().toUpperCase(),
+        zipCode: businessForm.zipCode.trim(),
+      });
+      setEditingBusiness(null);
+      haptics.success();
+      loadData();
+    } catch (error) {
+      setBusinessEditError(error instanceof Error ? error.message : 'Could not save this business');
+      haptics.error();
+    } finally {
+      setBusinessSaving(false);
+    }
+  };
+
+  const deleteBusiness = async () => {
+    if (!deletingBusiness) return;
+    setBusinessDeleting(true);
+    setBusinessDeleteError('');
+    try {
+      const removedId = deletingBusiness.id;
+      await api.delete(`/businesses/${removedId}`);
+      setDeletingBusiness(null);
+      setLastDonationMouths(0);
+      triggerRefresh();
+      bumpDataVersion();
+      haptics.success();
+      if (businessFilter === removedId) {
+        setPageTab('businesses');
+        navigate('/dashboard?tab=businesses');
+      }
+      loadData();
+    } catch (error) {
+      setBusinessDeleteError(error instanceof Error ? error.message : 'Could not delete this business');
+      haptics.error();
+    } finally {
+      setBusinessDeleting(false);
+    }
   };
 
   const submitMerge = async () => {
@@ -1834,6 +1909,126 @@ export function Dashboard() {
           </DialogActions>
         </Dialog>
 
+        <Dialog
+          open={!!editingBusiness}
+          onClose={() => { if (!businessSaving) setEditingBusiness(null); }}
+          fullWidth
+          maxWidth="sm"
+        >
+          <DialogTitle>Edit business</DialogTitle>
+          <DialogContent>
+            <Box sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <TextField
+                label="Business name"
+                value={businessForm.name}
+                onChange={(event) => setBusinessForm({ ...businessForm, name: event.target.value })}
+                required
+                fullWidth
+                autoFocus
+              />
+              <AddressPicker
+                value={{
+                  address: businessForm.address,
+                  city: businessForm.city,
+                  state: businessForm.state,
+                  zipCode: businessForm.zipCode,
+                }}
+                onChange={(address) => setBusinessForm({
+                  ...businessForm,
+                  address: address.address,
+                  city: address.city,
+                  state: address.state,
+                  zipCode: address.zipCode,
+                })}
+                label="Street address"
+                fullWidth
+              />
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '2fr 1fr 1fr' }, gap: 2 }}>
+                <TextField
+                  label="City"
+                  value={businessForm.city}
+                  onChange={(event) => setBusinessForm({ ...businessForm, city: event.target.value })}
+                  fullWidth
+                />
+                <TextField
+                  label="State"
+                  value={businessForm.state}
+                  onChange={(event) => setBusinessForm({ ...businessForm, state: event.target.value.toUpperCase() })}
+                  placeholder="CA"
+                  inputProps={{ maxLength: 2 }}
+                  fullWidth
+                />
+                <TextField
+                  label="Zip code"
+                  value={businessForm.zipCode}
+                  onChange={(event) => setBusinessForm({ ...businessForm, zipCode: event.target.value })}
+                  inputProps={{ maxLength: 10 }}
+                  fullWidth
+                />
+              </Box>
+              <Typography variant="body2" color="text.secondary">
+                Contacts, visits, and bites stay attached to this business.
+              </Typography>
+              {businessEditError && <Alert severity="error">{businessEditError}</Alert>}
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ px: 2, py: 2, gap: 1 }}>
+            <Button onClick={() => setEditingBusiness(null)} disabled={businessSaving} sx={{ minHeight: 44 }}>
+              Cancel
+            </Button>
+            <Button variant="contained" onClick={saveBusinessEdits} disabled={businessSaving || !businessForm.name.trim()} sx={{ minHeight: 44 }}>
+              {businessSaving ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog
+          open={!!deletingBusiness}
+          onClose={() => { if (!businessDeleting) setDeletingBusiness(null); }}
+          fullWidth
+          maxWidth="xs"
+        >
+          <DialogTitle>Delete business</DialogTitle>
+          <DialogContent>
+            {deletingBusiness && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                <Typography variant="body2">
+                  Delete {deletingBusiness.name}? This cannot be undone.
+                </Typography>
+                {(() => {
+                  const primary = contacts.filter((contact) => contact.businessId === deletingBusiness.id);
+                  const linked = contacts.filter((contact) => (
+                    contact.businessId !== deletingBusiness.id && contactBusinessIds(contact).includes(deletingBusiness.id)
+                  ));
+                  return (
+                    <>
+                      {primary.length > 0 && (
+                        <Alert severity="warning">
+                          {primary.length} contact{primary.length === 1 ? '' : 's'} whose main business is {deletingBusiness.name} will be deleted, including their visits and bites.
+                        </Alert>
+                      )}
+                      {linked.length > 0 && (
+                        <Typography variant="body2" color="text.secondary">
+                          {linked.length} other contact{linked.length === 1 ? '' : 's'} will stay. This business will be removed from them.
+                        </Typography>
+                      )}
+                    </>
+                  );
+                })()}
+                {businessDeleteError && <Alert severity="error">{businessDeleteError}</Alert>}
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 2, py: 2, gap: 1 }}>
+            <Button onClick={() => setDeletingBusiness(null)} disabled={businessDeleting} sx={{ minHeight: 44 }}>
+              Cancel
+            </Button>
+            <Button variant="contained" color="error" onClick={deleteBusiness} disabled={businessDeleting} sx={{ minHeight: 44 }}>
+              {businessDeleting ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
         <Menu
           anchorEl={businessMenu?.anchor}
           open={!!businessMenu}
@@ -1853,6 +2048,18 @@ export function Dashboard() {
           >
             <ListItemIcon><PersonIcon fontSize="small" /></ListItemIcon>
             View contacts
+          </MenuItem>
+          <MenuItem
+            sx={{ minHeight: 48 }}
+            onClick={() => {
+              const business = businessMenu?.business;
+              setBusinessMenu(null);
+              if (!business) return;
+              openBusinessEditor(business);
+            }}
+          >
+            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
+            Edit business
           </MenuItem>
           <MenuItem
             sx={{ minHeight: 48 }}
@@ -1880,6 +2087,19 @@ export function Dashboard() {
           >
             <ListItemIcon><MergeIcon fontSize="small" /></ListItemIcon>
             Merge a duplicate into this
+          </MenuItem>
+          <MenuItem
+            sx={{ minHeight: 48, color: 'error.main' }}
+            onClick={() => {
+              const business = businessMenu?.business;
+              setBusinessMenu(null);
+              if (!business) return;
+              setBusinessDeleteError('');
+              setDeletingBusiness(business);
+            }}
+          >
+            <ListItemIcon sx={{ color: 'error.main' }}><DeleteIcon fontSize="small" /></ListItemIcon>
+            Delete business
           </MenuItem>
         </Menu>
 

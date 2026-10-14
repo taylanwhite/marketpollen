@@ -297,7 +297,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
 
   const handleDeleteContact = async () => {
     const contactName = getContactName();
-    const confirmMessage = `Are you sure you want to delete "${contactName}"?\n\nThis action cannot be undone and will delete:\n- All contact information\n- All reachout history\n- All bite records\n- All calendar events`;
+    const confirmMessage = `Are you sure you want to delete "${contactName}"?\n\nThis action cannot be undone and will delete:\n- All contact information\n- All reachout history\n- All bite records\n- All calendar items`;
     
     if (!window.confirm(confirmMessage)) {
       return;
@@ -309,7 +309,10 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
 
     try {
       await api.delete(`/contacts/${contact.id}`);
-      
+      setLastDonationMouths(0);
+      triggerRefresh();
+      bumpDataVersion();
+
       setSuccess('Contact deleted successfully!');
       setTimeout(() => {
         onSuccess();
@@ -1157,7 +1160,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                     <li>All reachout history</li>
                     <li>All bite records</li>
                     <li>All attached files</li>
-                    <li>All calendar events</li>
+                    <li>All calendar items</li>
                   </Box>
                 </Alert>
                 <Button

@@ -30,10 +30,11 @@ export function useAnimatedCount(options: UseAnimatedCountOptions = {}) {
     const startValue = currentValueRef.current;
     const difference = targetValue - startValue;
 
-    // Only animate if there's an increase
+    // Count up only. A lower total (deleted bites) snaps to the new number.
     if (difference <= 0) {
       setDisplayValue(targetValue);
       currentValueRef.current = targetValue;
+      setIsAnimating(false);
       return;
     }
 

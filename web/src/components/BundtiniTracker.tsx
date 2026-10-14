@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
+import { useOffline } from '../contexts/OfflineContext';
 import { useCampaign } from '../contexts/CampaignContext';
 import { useAnimatedCount } from '../hooks/useAnimatedCount';
 import { Contact } from '../types';
@@ -50,7 +51,8 @@ const shimmer = keyframes`
 
 export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
   const { permissions } = usePermissions();
-  const { refreshTrigger, lastDonationMouths } = useDonation();
+  const { refreshTrigger, lastDonationMouths, dataVersion } = useDonation();
+  const { syncedCount } = useOffline();
   const { products, storeGoal } = useCampaign();
   const [progress, setProgress] = useState({ totalMouths: 0, goal: storeGoal, percentage: 0 });
   const [loading, setLoading] = useState(true);
@@ -63,56 +65,66 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
   });
 
   useEffect(() => {
-    if (permissions.currentStoreId) {
-      loadProgress();
-    }
-  }, [permissions.currentStoreId, refreshTrigger]);
+    if (!permissions.currentStoreId) return;
+    let cancelled = false;
 
-  const loadProgress = async () => {
-    try {
-      if (!permissions.currentStoreId) {
-        setValue(0);
-        return;
+    (async () => {
+      try {
+        const contactsList = await api.get<Contact[]>(`/contacts?storeId=${permissions.currentStoreId}`);
+        if (cancelled) return;
+        const contacts = contactsList.map((c) => ({
+          ...c,
+          reachouts: (c.reachouts || []).map((r: any) => ({
+            ...r,
+            date: r.date instanceof Date ? r.date : new Date(r.date),
+          })),
+          createdAt: c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt),
+        }));
+
+        const progressData = getQuarterProgress(
+          contacts,
+          new Date(),
+          products,
+          storeGoal
+        );
+        setProgress(progressData);
+
+        // Count up only when bites were added. Deletes and other refreshes
+        // snap to the same quarter total the reports page uses.
+        const shouldAnimate = !isInitialLoad.current &&
+                             refreshTrigger > previousRefreshTrigger.current &&
+                             lastDonationMouths > 0 &&
+                             progressData.totalMouths > 0;
+
+        if (shouldAnimate) {
+          animateTo(progressData.totalMouths);
+        } else {
+          setValue(progressData.totalMouths);
+        }
+
+        isInitialLoad.current = false;
+        previousRefreshTrigger.current = refreshTrigger;
+      } catch (error) {
+        console.error('Error loading bundtini progress:', error);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      const contactsList = await api.get<Contact[]>(`/contacts?storeId=${permissions.currentStoreId}`);
-      const contacts = contactsList.map((c) => ({
-        ...c,
-        reachouts: (c.reachouts || []).map((r: any) => ({
-          ...r,
-          date: r.date instanceof Date ? r.date : new Date(r.date),
-        })),
-        createdAt: c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt),
-      }));
+    })();
 
-      const progressData = getQuarterProgress(
-        contacts,
-        new Date(),
-        products,
-        storeGoal
-      );
-      setProgress(progressData);
-
-      // Determine if we should animate or just set the value
-      const shouldAnimate = !isInitialLoad.current && 
-                           refreshTrigger > previousRefreshTrigger.current && 
-                           lastDonationMouths > 0;
-
-      if (shouldAnimate) {
-        // Animate the count-up for new donations
-        animateTo(progressData.totalMouths);
-      } else {
-        // Set value directly without animation (initial load or page navigation)
-        setValue(progressData.totalMouths);
-      }
-
-      isInitialLoad.current = false;
-      previousRefreshTrigger.current = refreshTrigger;
-    } catch (error) {
-      console.error('Error loading bundtini progress:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    permissions.currentStoreId,
+    refreshTrigger,
+    dataVersion,
+    syncedCount,
+    products,
+    storeGoal,
+    lastDonationMouths,
+    animateTo,
+    setValue,
+  ]);
 
   if (!permissions.currentStoreId || loading) {
     return null;
@@ -121,7 +133,9 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
   const color = getProgressColor(Math.min(progress.percentage, 100));
   const quarterLabel = getCurrentQuarterLabel();
   
-  const isCelebrating = isAnimating;
+  const countingUp = isAnimating && lastDonationMouths > 0 && progress.totalMouths > 0;
+  const shownMouths = countingUp ? displayValue : progress.totalMouths;
+  const isCelebrating = countingUp;
   const goalReached = progress.percentage >= 100;
   const isGold = isCelebrating || goalReached;
 
@@ -243,7 +257,7 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
                 textOverflow: 'ellipsis',
               }}
             >
-              {displayValue.toLocaleString()}
+              {shownMouths.toLocaleString()}
               {compact && (
                 <Box component="span" sx={{ color: '#5a5a5a', fontWeight: 500 }}>
                   {' '}/ {(progress.goal / 1000).toFixed(0)}k
