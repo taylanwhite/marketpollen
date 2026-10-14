@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import { prisma } from './db.js';
 import { appUrl } from './app-url.js';
+import { brandEmail, brandShell } from './brand-email.js';
 import { GRACE_MS } from './org-billing-access.js';
 import { getStripe } from './stripe.js';
 
@@ -65,12 +66,19 @@ async function sendPaymentEmail(orgId: string, kind: 'start' | 'final'): Promise
     ? `The card for ${org.name} still hasn't gone through. Tomorrow the account pauses until it's paid.`
     : `A payment for ${org.name} didn't go through. You have ${daysLeft} day${daysLeft === 1 ? '' : 's'} to update the card. After that, the account pauses until it's paid.`;
 
+  const message = brandEmail({
+    headline: subject,
+    body,
+    buttonLabel: 'Update the card',
+    buttonUrl: payUrl,
+  });
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
     from: fromEmail(),
     to: emails,
     subject,
-    text: `${body}\n\nUpdate the card: ${payUrl}\n`,
+    html: message.html,
+    text: message.text,
   });
   if (error) {
     console.error('Payment reminder email failed', error);
@@ -154,90 +162,36 @@ export async function sendStoreInvoiceEmail(orgId: string, quote: {
     ``,
     `Charged to: ${cardLine}`,
   ].filter((line) => line !== undefined).join('\n');
-  const html = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      </head>
-      <body style="margin: 0; padding: 0; background-color: #f4f5f7;">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f5f7; padding: 40px 16px;">
-          <tr>
-            <td align="center">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 520px; background-color: #ffffff; border-radius: 12px; border: 1px solid #e6e8eb; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                <tr>
-                  <td style="padding: 28px 36px 0 36px;">
-                    <span style="font-size: 20px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.2px;">
-                      Market<span style="color: #d4a017;">Pollen</span>
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 18px 36px 0 36px;">
-                    <p style="margin: 0 0 4px 0; font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; color: #9096a0; font-weight: 700;">Invoice</p>
-                    <h1 style="margin: 0; font-size: 22px; line-height: 1.3; font-weight: 700; color: #1a1a1a;">${escapeHtml(orgName)}</h1>
-                    <p style="margin: 6px 0 0 0; font-size: 13px; color: #6b7280;">${issued}</p>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 20px 36px 0 36px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border: 1px solid #e6e8eb; border-radius: 8px;">
-                      <tr>
-                        <td style="padding: 14px 16px; background-color: #fafafa; border-bottom: 1px solid #e6e8eb; font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; color: #6b7280; font-weight: 700;">Description</td>
-                        <td style="padding: 14px 16px; background-color: #fafafa; border-bottom: 1px solid #e6e8eb; font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; color: #6b7280; font-weight: 700; text-align: right;">Amount</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 16px; font-size: 15px; color: #1a1a1a; font-weight: 600;">
-                          ${escapeHtml(storeName)}
-                          <div style="font-size: 13px; font-weight: 400; color: #6b7280; margin-top: 2px;">Store subscription</div>
-                        </td>
-                        <td style="padding: 16px; font-size: 15px; color: #1a1a1a; font-weight: 600; text-align: right; white-space: nowrap;">${unit} / month</td>
-                      </tr>
-                      ${subscriptionChanged ? `
-                      <tr>
-                        <td colspan="2" style="padding: 0 16px 12px 16px;">
-                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                            ${row('Current subscription', `${money(quote.currentMonthlyCents)} / month`)}
-                            ${row('Subscription after today', `${money(quote.newMonthlyCents)} / month`, true)}
-                          </table>
-                        </td>
-                      </tr>` : ''}
-                    </table>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 16px 36px 0 36px;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #fafafa; border: 1px solid #e6e8eb; border-radius: 8px;">
-                      <tr>
-                        <td style="padding: 16px 18px; font-size: 15px; font-weight: 700; color: #1a1a1a;">Due today</td>
-                        <td style="padding: 16px 18px; font-size: 22px; font-weight: 700; color: #1a1a1a; text-align: right;">${due}</td>
-                      </tr>
-                    </table>
-                    ${quote.dueTodayCents === 0 ? `<p style="margin: 10px 0 0 0; font-size: 13px; color: #6b7280;">Nothing was charged.</p>` : ''}
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 18px 36px 0 36px;">
-                    <p style="margin: 0 0 4px 0; font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; color: #9096a0; font-weight: 700;">Charged to</p>
-                    <p style="margin: 0; font-size: 15px; font-weight: 600; color: #1a1a1a;">${escapeHtml(cardLine)}</p>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 24px 36px 28px 36px;">
-                    <div style="border-top: 1px solid #eceef0; padding-top: 16px;">
-                      <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #9096a0;">
-                        This invoice was sent by MarketPollen for ${escapeHtml(orgName)}.
-                      </p>
-                    </div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-      </body>
-    </html>`;
+  const html = brandShell({
+    headline: orgName,
+    intro: `Invoice · ${issued}`,
+    contentHtml: `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #f0e6cf;border-radius:12px;">
+        <tr>
+          <td style="padding:14px 16px;background:#fbf6ea;border-bottom:1px solid #f0e6cf;font-size:11px;letter-spacing:0.8px;text-transform:uppercase;color:#8a8175;font-weight:700;">Description</td>
+          <td style="padding:14px 16px;background:#fbf6ea;border-bottom:1px solid #f0e6cf;font-size:11px;letter-spacing:0.8px;text-transform:uppercase;color:#8a8175;font-weight:700;text-align:right;">Amount</td>
+        </tr>
+        <tr>
+          <td style="padding:16px;font-size:15px;color:#2d2d2d;font-weight:600;">
+            ${escapeHtml(storeName)}
+            <div style="font-size:13px;font-weight:400;color:#8a8175;margin-top:2px;">Store subscription</div>
+          </td>
+          <td style="padding:16px;font-size:15px;color:#2d2d2d;font-weight:600;text-align:right;white-space:nowrap;">${unit} / month</td>
+        </tr>
+        ${subscriptionChanged ? `<tr><td colspan="2" style="padding:0 16px 12px 16px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${row('Current subscription', `${money(quote.currentMonthlyCents)} / month`)}${row('Subscription after today', `${money(quote.newMonthlyCents)} / month`, true)}</table></td></tr>` : ''}
+      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;background:#fbf6ea;border-radius:12px;">
+        <tr>
+          <td style="padding:16px 18px;font-size:15px;font-weight:700;color:#2d2d2d;">Due today</td>
+          <td style="padding:16px 18px;font-size:22px;font-weight:700;color:#2d2d2d;text-align:right;">${due}</td>
+        </tr>
+      </table>
+      ${quote.dueTodayCents === 0 ? `<p style="margin:10px 0 0 0;font-size:13px;color:#8a8175;">Nothing was charged.</p>` : ''}
+      <p style="margin:16px 0 0 0;font-size:13px;letter-spacing:0.6px;text-transform:uppercase;color:#a39888;font-weight:700;">Charged to</p>
+      <p style="margin:4px 0 0 0;font-size:15px;font-weight:600;color:#2d2d2d;">${escapeHtml(cardLine)}</p>
+    `,
+    footnote: `Invoice from MarketPollen for ${orgName}.`,
+  });
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
     from: fromEmail(),

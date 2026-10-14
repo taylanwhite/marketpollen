@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
 import { prisma } from './lib/db.js';
+import { brandShell } from './lib/brand-email.js';
 
 interface CalendarEventEmailData {
   title: string;
@@ -30,17 +31,6 @@ function formatTime(time: string): string {
   return `${hour}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
-function getTypeEmoji(type: string): string {
-  switch (type) {
-    case 'call': return '📞';
-    case 'email': return '📧';
-    case 'meeting': return '🤝';
-    case 'followup': return '🔄';
-    case 'delivery': return '🚚';
-    default: return '📅';
-  }
-}
-
 function getTypeLabel(type: string): string {
   switch (type) {
     case 'call': return 'Phone Call';
@@ -49,15 +39,6 @@ function getTypeLabel(type: string): string {
     case 'followup': return 'Follow-up';
     case 'delivery': return 'Delivery';
     default: return 'Event';
-  }
-}
-
-function getPriorityBadge(priority?: string): string {
-  switch (priority) {
-    case 'high': return '<span style="background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">HIGH</span>';
-    case 'medium': return '<span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">MEDIUM</span>';
-    case 'low': return '<span style="background: #d1fae5; color: #065f46; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">LOW</span>';
-    default: return '';
   }
 }
 
@@ -164,9 +145,7 @@ export async function sendCalendarEventEmail(
   const icsContent = generateICS(eventData);
   const icsBase64 = Buffer.from(icsContent).toString('base64');
 
-  const typeEmoji = getTypeEmoji(eventData.type);
   const typeLabel = getTypeLabel(eventData.type);
-  const priorityBadge = getPriorityBadge(eventData.priority);
   const dateStr = formatDate(eventData.date);
   const timeStr = eventData.startTime
     ? eventData.endTime
@@ -205,74 +184,17 @@ export async function sendCalendarEventEmail(
       </tr>`);
   }
 
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; background-color: #f9fafb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-  <div style="max-width: 560px; margin: 0 auto; padding: 24px 16px;">
-    <!-- Header -->
-    <div style="background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); padding: 28px 24px; border-radius: 12px 12px 0 0; text-align: center;">
-      <h1 style="color: #f4c430; margin: 0 0 4px; font-size: 24px; letter-spacing: 1px;">MARKET POLLEN</h1>
-      <p style="color: rgba(255,255,255,0.6); margin: 0; font-size: 13px;">New Event Added to Your Calendar</p>
-    </div>
-
-    <!-- Body -->
-    <div style="background: #ffffff; padding: 32px 24px; border-left: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb;">
-      <!-- Event title card -->
-      <div style="background: #fefce8; border: 1px solid rgba(244, 196, 48, 0.3); border-radius: 10px; padding: 20px; margin-bottom: 24px;">
-        <div style="display: flex; align-items: center; margin-bottom: 8px;">
-          <span style="font-size: 20px; margin-right: 8px;">${typeEmoji}</span>
-          <span style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #92400e; font-weight: 600;">${typeLabel}</span>
-          ${priorityBadge ? `<span style="margin-left: 8px;">${priorityBadge}</span>` : ''}
-        </div>
-        <h2 style="margin: 0 0 12px; color: #1a1a1a; font-size: 20px; line-height: 1.3;">${eventData.title}</h2>
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <span style="font-size: 16px;">📅</span>
-          <span style="font-size: 15px; color: #374151; font-weight: 500;">${dateStr}</span>
-        </div>
-        <div style="display: flex; align-items: center; gap: 6px; margin-top: 4px;">
-          <span style="font-size: 16px;">🕐</span>
-          <span style="font-size: 15px; color: #374151;">${timeStr}</span>
-        </div>
-      </div>
-
-      ${detailRows.length > 0 ? `
-      <!-- Details table -->
-      <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
-        <tbody>
-          ${detailRows.join('')}
-        </tbody>
-      </table>
-      ` : ''}
-
-      <!-- Add to Calendar buttons -->
-      <p style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: #9ca3af; margin: 0 0 12px; font-weight: 600;">Add to your calendar</p>
-      <div style="margin-bottom: 8px;">
-        <a href="${googleUrl}" target="_blank" rel="noopener noreferrer"
-           style="display: inline-block; background: #ffffff; border: 2px solid #4285f4; color: #4285f4; padding: 12px 20px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; margin-right: 8px; margin-bottom: 8px;">
-          📆 Google Calendar
-        </a>
-        <a href="data:text/calendar;base64,${icsBase64}" download="event.ics"
-           style="display: inline-block; background: #ffffff; border: 2px solid #333333; color: #333333; padding: 12px 20px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; margin-bottom: 8px;">
-          🍎 Apple Calendar
-        </a>
-      </div>
-      <p style="font-size: 12px; color: #9ca3af; margin: 4px 0 0;">Download the .ics file to add this event to Apple Calendar, Outlook, or any calendar app.</p>
-    </div>
-
-    <!-- Footer -->
-    <div style="background: #f3f4f6; padding: 20px 24px; border-radius: 0 0 12px 12px; border: 1px solid #e5e7eb; border-top: none; text-align: center;">
-      <p style="color: #9ca3af; font-size: 12px; margin: 0;">
-        This notification was sent by MarketPollen because a calendar event was created in your account.
-      </p>
-    </div>
-  </div>
-</body>
-</html>`;
+  const html = brandShell({
+    headline: eventData.title,
+    intro: `${typeLabel} · ${dateStr} · ${timeStr}`,
+    contentHtml: `
+      ${detailRows.length > 0 ? `<table style="width:100%;border-collapse:collapse;margin-bottom:20px;"><tbody>${detailRows.join('')}</tbody></table>` : ''}
+      <p style="font-size:13px;letter-spacing:0.6px;text-transform:uppercase;color:#a39888;margin:0 0 12px;font-weight:700;">Add to your calendar</p>
+      <a href="${googleUrl}" style="display:inline-block;background:#f5c842;color:#2d2d2d;padding:12px 18px;text-decoration:none;border-radius:999px;font-weight:700;font-size:14px;margin:0 8px 8px 0;">Google Calendar</a>
+      <p style="font-size:13px;line-height:1.5;color:#8a8175;margin:8px 0 0;">The .ics file is attached for Apple Calendar or Outlook.</p>
+    `,
+    footnote: 'Sent because a visit was added to your MarketPollen calendar.',
+  });
 
   const textContent = [
     `New Event: ${eventData.title}`,

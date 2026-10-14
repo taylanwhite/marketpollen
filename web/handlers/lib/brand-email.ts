@@ -8,21 +8,41 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-export function brandEmail(options: {
+export function brandShell(options: {
   headline: string;
-  body: string;
-  buttonLabel: string;
-  buttonUrl: string;
+  intro?: string;
+  contentHtml?: string;
+  buttonLabel?: string;
+  buttonUrl?: string;
   footnote?: string;
-}): { html: string; text: string } {
+}): string {
   const headline = escapeHtml(options.headline);
-  const body = escapeHtml(options.body);
-  const buttonLabel = escapeHtml(options.buttonLabel);
-  const buttonUrl = escapeHtml(options.buttonUrl);
+  const intro = options.intro ? escapeHtml(options.intro) : '';
   const footnote = escapeHtml(options.footnote || 'Sent by MarketPollen. If you were not expecting this, you can ignore it.');
   const logoUrl = `${appUrl()}/assets/sidemenu-logo-96@2x.png`;
+  const button = options.buttonLabel && options.buttonUrl
+    ? `<tr>
+              <td align="center" style="padding:8px 40px 8px 40px;">
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="border-radius:999px;background-color:#f5c842;">
+                      <a href="${options.buttonUrl}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:700;color:#2d2d2d;text-decoration:none;border-radius:999px;">${escapeHtml(options.buttonLabel)}</a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:12px 40px 0 40px;">
+                <p style="margin:0;font-size:13px;line-height:1.6;color:#8a8175;">
+                  Or open this link:<br>
+                  <a href="${options.buttonUrl}" style="color:#8a8175;word-break:break-all;">${escapeHtml(options.buttonUrl)}</a>
+                </p>
+              </td>
+            </tr>`
+    : '';
 
-  const html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8">
@@ -49,28 +69,11 @@ export function brandEmail(options: {
             <tr>
               <td style="padding:28px 40px 0 40px;">
                 <h1 style="margin:0 0 12px 0;font-size:26px;line-height:1.25;font-weight:700;color:#2d2d2d;">${headline}</h1>
-                <p style="margin:0 0 28px 0;font-size:16px;line-height:1.6;color:#5c564c;">${body}</p>
+                ${intro ? `<p style="margin:0 0 20px 0;font-size:16px;line-height:1.6;color:#5c564c;">${intro}</p>` : ''}
               </td>
             </tr>
-            <tr>
-              <td align="center" style="padding:0 40px 8px 40px;">
-                <table role="presentation" cellpadding="0" cellspacing="0">
-                  <tr>
-                    <td style="border-radius:999px;background-color:#f5c842;">
-                      <a href="${options.buttonUrl}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:700;color:#2d2d2d;text-decoration:none;border-radius:999px;">${buttonLabel}</a>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:20px 40px 0 40px;">
-                <p style="margin:0;font-size:13px;line-height:1.6;color:#8a8175;">
-                  Or open this link:<br>
-                  <a href="${options.buttonUrl}" style="color:#8a8175;word-break:break-all;">${buttonUrl}</a>
-                </p>
-              </td>
-            </tr>
+            ${options.contentHtml ? `<tr><td style="padding:0 40px 8px 40px;">${options.contentHtml}</td></tr>` : ''}
+            ${button}
             <tr>
               <td style="padding:28px 40px 32px 40px;">
                 <p style="margin:0;padding-top:20px;border-top:1px solid #f0e6cf;font-size:12px;line-height:1.5;color:#a39888;">${footnote}</p>
@@ -82,7 +85,22 @@ export function brandEmail(options: {
     </table>
   </body>
 </html>`;
+}
 
+export function brandEmail(options: {
+  headline: string;
+  body: string;
+  buttonLabel: string;
+  buttonUrl: string;
+  footnote?: string;
+}): { html: string; text: string } {
+  const html = brandShell({
+    headline: options.headline,
+    intro: options.body,
+    buttonLabel: options.buttonLabel,
+    buttonUrl: options.buttonUrl,
+    footnote: options.footnote,
+  });
   const text = `${options.headline}\n\n${options.body}\n\n${options.buttonLabel}: ${options.buttonUrl}\n\n${options.footnote || 'Sent by MarketPollen.'}`;
   return { html, text };
 }
