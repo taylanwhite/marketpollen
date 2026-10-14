@@ -1,5 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { Resend } from 'resend';
+import { brandEmail } from './lib/brand-email.js';
 
 export default async function handler(
   req: VercelRequest,
@@ -72,89 +73,22 @@ export default async function handler(
     // Resend provides onboarding@resend.dev as a default sender (no domain verification needed)
     const fromEmail = process.env.RESEND_FROM_EMAIL || 'MarketPollen <onboarding@resend.dev>';
     
+    const invitedBy = typeof invitedByEmail === 'string' && invitedByEmail.trim()
+      ? ` ${invitedByEmail.trim()} invited you.`
+      : '';
+    const role = isGlobalAdmin ? ' as a super user' : '';
+    const message = brandEmail({
+      headline: 'You have a place on MarketPollen',
+      body: `You've been invited to join MarketPollen${role}.${invitedBy} Create your account to pick up your stores and start logging visits.`,
+      buttonLabel: 'Accept invitation',
+      buttonUrl: signupUrl,
+    });
     const { data, error } = await resend.emails.send({
       from: fromEmail,
       to: email,
-      subject: 'You\'re Invited to MarketPollen',
-      html: `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          </head>
-          <body style="margin: 0; padding: 0; background-color: #f4f5f7;">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f5f7; padding: 40px 16px;">
-              <tr>
-                <td align="center">
-                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 480px; background-color: #ffffff; border-radius: 12px; border: 1px solid #e6e8eb; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                    <tr>
-                      <td style="padding: 32px 40px 8px 40px;">
-                        <span style="font-size: 20px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.2px;">
-                          Market<span style="color: #d4a017;">Pollen</span>
-                        </span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 8px 40px 0 40px;">
-                        <h1 style="margin: 0 0 12px 0; font-size: 24px; line-height: 1.3; font-weight: 700; color: #1a1a1a;">
-                          You're invited to MarketPollen
-                        </h1>
-                        <p style="margin: 0 0 8px 0; font-size: 15px; line-height: 1.6; color: #4a4f57;">
-                          You've been invited to join MarketPollen${isGlobalAdmin ? ' as a <strong>Global Administrator</strong>' : ''}.${invitedByEmail ? ` <span style="color: #6b7280;">Invited by ${invitedByEmail}.</span>` : ''}
-                        </p>
-                        <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #4a4f57;">
-                          Click the button below to create your account and get started.
-                        </p>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 0 40px 8px 40px;">
-                        <table role="presentation" cellpadding="0" cellspacing="0">
-                          <tr>
-                            <td style="border-radius: 8px; background-color: #f4c430;">
-                              <a href="${signupUrl}"
-                                 style="display: inline-block; padding: 13px 28px; font-size: 15px; font-weight: 600; color: #1a1a1a; text-decoration: none; border-radius: 8px;">
-                                Accept invitation
-                              </a>
-                            </td>
-                          </tr>
-                        </table>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 20px 40px 0 40px;">
-                        <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #9096a0;">
-                          Or paste this link into your browser:<br>
-                          <a href="${signupUrl}" style="color: #6b7280; word-break: break-all;">${signupUrl}</a>
-                        </p>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 24px 40px 32px 40px;">
-                        <div style="border-top: 1px solid #eceef0; padding-top: 20px;">
-                          <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #9096a0;">
-                            This invitation was sent by MarketPollen. If you didn't expect this email, you can safely ignore it.
-                          </p>
-                        </div>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-            </table>
-          </body>
-        </html>
-      `,
-      text: `
-You've been invited to join MarketPollen${isGlobalAdmin ? ' as a Global Administrator' : ''}.
-
-${invitedByEmail ? `Invited by: ${invitedByEmail}\n\n` : ''}Click the link below to create your account:
-
-${signupUrl}
-
-This invitation was sent by MarketPollen. If you didn't expect this email, you can safely ignore it.
-      `.trim(),
+      subject: "You're invited to MarketPollen",
+      html: message.html,
+      text: message.text,
     });
 
     if (error) {

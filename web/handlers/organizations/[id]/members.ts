@@ -4,6 +4,7 @@ import { prisma } from '../../lib/db.js';
 import { getAuthUid } from '../../lib/auth.js';
 import { appUrl } from '../../lib/app-url.js';
 import { isKingAdmin } from '../../lib/king-admin.js';
+import { brandEmail } from '../../lib/brand-email.js';
 
 async function grantStoreAccess(userId: string, orgId: string) {
   const stores = await prisma.store.findMany({
@@ -24,14 +25,25 @@ async function sendOwnerEmail(email: string, orgName: string, existingAccount: b
   if (!apiKey) return false;
   const resend = new Resend(apiKey);
   const url = existingAccount ? `${appUrl()}/login` : `${appUrl()}/signup?email=${encodeURIComponent(email)}`;
-  const line = existingAccount
-    ? `You can sign in and you'll be the owner of ${orgName}.`
-    : `Create an account with this email and you'll be the owner of ${orgName}.`;
+  const message = existingAccount
+    ? brandEmail({
+      headline: `${orgName} is yours`,
+      body: `You now run ${orgName} on MarketPollen. Sign in to set up stores, invite the team, and start logging visits.`,
+      buttonLabel: 'Sign in',
+      buttonUrl: url,
+    })
+    : brandEmail({
+      headline: `You're invited to own ${orgName}`,
+      body: `Create your MarketPollen account with this email. You'll own ${orgName}, with the stores and signup tools ready when you arrive.`,
+      buttonLabel: 'Create your account',
+      buttonUrl: url,
+    });
   const { error } = await resend.emails.send({
     from: process.env.RESEND_FROM_EMAIL || 'MarketPollen <onboarding@resend.dev>',
     to: email,
-    subject: `You're an owner of ${orgName}`,
-    text: `${line}\n\n${url}\n`,
+    subject: existingAccount ? `${orgName} is ready for you` : `You're invited to own ${orgName}`,
+    html: message.html,
+    text: message.text,
   });
   return !error;
 }
