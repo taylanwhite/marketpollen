@@ -52,6 +52,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     where: { id },
     data: { status: 'converted', business_id: business.id, converted_at: new Date() },
   });
+  // Planned stops for this lead now point at the business it became.
+  await prisma.planStop.updateMany({ where: { opportunity_id: id }, data: { business_id: business.id } });
 
   return res.status(200).json({
     business: {

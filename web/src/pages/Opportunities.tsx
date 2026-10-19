@@ -7,6 +7,7 @@ import { AddressPicker } from '../components/AddressPicker';
 import { DismissOpportunityModal } from '../components/DismissOpportunityModal';
 import { OnlineOnlyNotice } from '../components/OnlineOnlyNotice';
 import { FilterTypeDialog } from '../components/FilterTypeDialog';
+import { AddToPlanDialog } from '../components/AddToPlanDialog';
 import { useOffline } from '../contexts/OfflineContext';
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
 import {
@@ -41,6 +42,7 @@ import {
   Place as PlaceIcon,
   Restore as RestoreIcon,
   PauseCircleOutline as HoldIcon,
+  EventAvailable as PlanIcon,
   PlayCircleOutline as ReleaseIcon,
   Search as SearchIcon,
   Close as CloseIcon,
@@ -506,13 +508,15 @@ export function Opportunities() {
     }
   };
 
+  const [planTarget, setPlanTarget] = useState<Opportunity | null>(null);
+
   const handleHold = async (opp: Opportunity) => {
     if (!canEdit(opp.storeId)) return;
     setError('');
     setHoldingId(opp.id);
     try {
       await api.patch(`/opportunities/${opp.id}`, { status: 'hold' });
-      setSuccess('On hold. It stays on your list and is left off today’s route.');
+      setSuccess('On hold. It stays on your list but is left out when you pick stops for a plan.');
       await loadOpportunities();
       await loadHeldOpportunities();
     } catch (err: any) {
@@ -528,11 +532,11 @@ export function Opportunities() {
     setReleasingId(opp.id);
     try {
       await api.patch(`/opportunities/${opp.id}`, { status: 'new' });
-      setSuccess('Back on the route.');
+      setSuccess('Back on your opportunity list.');
       await loadOpportunities();
       await loadHeldOpportunities();
     } catch (err: any) {
-      setError(err.message || 'Failed to put this stop back on the route');
+      setError(err.message || 'Failed to take this off hold');
     } finally {
       setReleasingId(null);
     }
@@ -676,7 +680,7 @@ export function Opportunities() {
                     ? `${filteredOpportunities.length + filteredHeld.length + (effectiveShowDismissed ? filteredDismissed.length : 0)} match${
                         filteredOpportunities.length + filteredHeld.length + (effectiveShowDismissed ? filteredDismissed.length : 0) === 1 ? '' : 'es'
                       }`
-                    : `${opportunities.length} on the route${heldOpportunities.length ? ` · ${heldOpportunities.length} on hold` : ''}${dismissedOpportunities.length ? ` · ${dismissedOpportunities.length} dismissed` : ''}`}
+                    : `${opportunities.length} saved${heldOpportunities.length ? ` · ${heldOpportunities.length} on hold` : ''}${dismissedOpportunities.length ? ` · ${dismissedOpportunities.length} dismissed` : ''}`}
                 </Typography>
                 {!searchOpen ? (
                   <IconButton
@@ -747,6 +751,7 @@ export function Opportunities() {
                             converting={convertingId === opp.id}
                             dismissing={dismissingId === opp.id}
                             holding={holdingId === opp.id}
+                            onPlan={() => setPlanTarget(opp)}
                             onConvert={() => handleConvert(opp)}
                             onHold={() => handleHold(opp)}
                             onDismiss={() => openDismissModal(opp)}
@@ -776,7 +781,7 @@ export function Opportunities() {
                     </>
                   ) : !term && opportunities.length === 0 ? (
                     <Typography color="text.secondary" sx={{ py: 1 }}>
-                      Nothing is on the route right now.
+                      No saved opportunities right now.
                     </Typography>
                   ) : null}
 
@@ -786,7 +791,7 @@ export function Opportunities() {
                         On hold ({filteredHeld.length})
                       </Typography>
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                        These stops stay on your list. They are left off today’s route.
+                        These stay on your list but are left out when you pick stops for a plan.
                       </Typography>
                       <List disablePadding sx={{ bgcolor: 'action.hover', borderRadius: 1, py: 0.5 }}>
                         {visibleHeld.map((opp) => (
@@ -1306,6 +1311,14 @@ export function Opportunities() {
       {/* Full filter directory. Opens from the "More…" chip on the
           Generate tab. Picking a category fills `textQuery`; the server
           maps known labels to Place Types. */}
+      <AddToPlanDialog
+        open={!!planTarget}
+        storeId={planTarget?.storeId || storeId || ''}
+        target={planTarget ? { name: planTarget.name, opportunityId: planTarget.id } : null}
+        onClose={() => setPlanTarget(null)}
+        onAdded={(stop) => setSuccess(`${stop.name} is on your plan.`)}
+      />
+
       <FilterTypeDialog
         open={filterDialogOpen}
         currentValue={textQuery}
@@ -1331,6 +1344,7 @@ function OpportunityRow({
   converting,
   dismissing,
   holding,
+  onPlan,
   onConvert,
   onHold,
   onDismiss,
@@ -1340,6 +1354,7 @@ function OpportunityRow({
   converting: boolean;
   dismissing: boolean;
   holding: boolean;
+  onPlan: () => void;
   onConvert: () => void;
   onHold: () => void;
   onDismiss: () => void;
@@ -1374,6 +1389,11 @@ function OpportunityRow({
       </Box>
       {canEdit && (
         <Box sx={{ display: 'flex', gap: 0.25, flexShrink: 0, mt: 0.25 }}>
+          <Tooltip title="Add to a day's plan">
+            <IconButton size="small" onClick={onPlan} aria-label="Add to plan">
+              <PlanIcon color="primary" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Convert to business">
             <span>
               <IconButton
@@ -1386,7 +1406,7 @@ function OpportunityRow({
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title="Put on hold. Stays on your list, left off today’s route.">
+          <Tooltip title="Put on hold. Stays on your list, left out when planning.">
             <span>
               <IconButton
                 size="small"
@@ -1452,13 +1472,13 @@ function HeldOpportunityRow({
         )}
       </Box>
       {canEdit && (
-        <Tooltip title="Put back on the route">
+        <Tooltip title="Take off hold">
           <span>
             <IconButton
               size="small"
               onClick={onRelease}
               disabled={releasing}
-              aria-label="Put back on the route"
+              aria-label="Take off hold"
               sx={{ flexShrink: 0, mt: 0.25 }}
             >
               {releasing ? <CircularProgress size={20} /> : <ReleaseIcon color="primary" />}

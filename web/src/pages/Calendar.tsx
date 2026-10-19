@@ -52,6 +52,8 @@ import {
   Sync as SyncIcon,
 } from '@mui/icons-material';
 import { CalendarSyncDialog } from '../components/CalendarSyncDialog';
+import { DayRoute } from '../components/DayRoute';
+import type { PlanStop } from '../utils/planStops';
 const GenerateEmailDialog = lazy(() =>
   import('../components/GenerateEmailDialog').then((m) => ({ default: m.GenerateEmailDialog }))
 );
@@ -91,6 +93,7 @@ interface DayPlannerFollowUp {
   contactId: string;
   contactName: string;
   businessName?: string;
+  businessId?: string;
   method: 'email' | 'call' | 'meeting' | 'text' | 'other';
   message: string;
   draftEmail?: string;
@@ -120,7 +123,7 @@ interface DayPlannerData {
 export function Calendar() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { permissions } = usePermissions();
+  const { permissions, canEdit } = usePermissions();
   const { userId } = useAuth();
   const { dataVersion } = useDonation();
   const { syncedCount } = useOffline();
@@ -144,6 +147,10 @@ export function Calendar() {
   const [openDraft, setOpenDraft] = useState<string | null>(null);
   const [dayPlan, setDayPlan] = useState<DayPlannerData | null>(null);
   const [dayPlanLoading, setDayPlanLoading] = useState(false);
+  // Stops change on the Day tab without reloading the whole plan.
+  const [routeCount, setRouteCount] = useState<number | null>(null);
+  const [routeRefresh, setRouteRefresh] = useState(0);
+  const [planCounts, setPlanCounts] = useState<Record<string, number>>({});
   const [emailTarget, setEmailTarget] = useState<{ contactId: string; contactName: string } | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
 
@@ -188,6 +195,10 @@ export function Calendar() {
     // the offline queue lands a queued write — without it, a follow-up event
     // logged offline wouldn't appear on this page until pull-to-refresh.
   }, [permissions.currentStoreId, currentDate, dataVersion, syncedCount]);
+
+  useEffect(() => {
+    if (planTab === 'calendar') loadPlanCounts();
+  }, [permissions.currentStoreId, currentDate, planTab, routeCount]);
 
   useEffect(() => {
     if (permissions.currentStoreId && planDate) {
@@ -254,10 +265,42 @@ export function Calendar() {
     };
   }, [events, contacts]);
 
+  const stopCount = routeCount ?? dayPlan?.optimizedRoute.length ?? 0;
+
+  const addFollowUpToRoute = async (task: DayPlannerFollowUp) => {
+    if (!permissions.currentStoreId || !task.businessId) return;
+    setError('');
+    try {
+      const stop = await api.post<PlanStop>('/plan-stops', { storeId: permissions.currentStoreId, date: planDate, businessId: task.businessId });
+      setRouteRefresh((n) => n + 1);
+      setRouteCount((n) => (n ?? dayPlan?.optimizedRoute.length ?? 0) + 1);
+      setSuccess(stop.overlaps.length
+        ? `${stop.name} is on your route. ${stop.overlaps[0].userName} has it planned too.`
+        : `${stop.name} is on your route.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not add to the route');
+    }
+  };
+
+  const loadPlanCounts = async () => {
+    if (!permissions.currentStoreId) return;
+    const first = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const last = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+    try {
+      const data = await api.get<{ days: Record<string, number> }>(
+        `/plan-stops?storeId=${permissions.currentStoreId}&from=${localDateKey(first)}&to=${localDateKey(last)}`
+      );
+      setPlanCounts(data.days || {});
+    } catch {
+      setPlanCounts({});
+    }
+  };
+
   const loadDayPlan = async () => {
     if (!permissions.currentStoreId || !planDate) return;
     try {
       setDayPlan(null);
+      setRouteCount(null);
       setDayPlanLoading(true);
       const data = await api.get<DayPlannerData>(
         `/day-planner?storeId=${permissions.currentStoreId}&date=${planDate}`
@@ -757,7 +800,7 @@ export function Calendar() {
         variant="fullWidth"
         sx={{ mb: 2, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minHeight: 48, fontWeight: 600 } }}
       >
-        <Tab value="day" label={dayPlan ? `Day (${dayPlan.followUpTasks.length + dayPlan.optimizedRoute.length})` : 'Day'} />
+        <Tab value="day" label={dayPlan ? `Day (${dayPlan.followUpTasks.length + stopCount})` : 'Day'} />
         <Tab value="calendar" label="Calendar" />
       </Tabs>
 
@@ -776,7 +819,7 @@ export function Calendar() {
                 </Typography>
                 {dayPlan && (
                   <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
-                    {dayPlan.followUpTasks.length} to see · {dayPlan.optimizedRoute.length} on the route
+                    {dayPlan.followUpTasks.length} to see · {stopCount} {stopCount === 1 ? 'stop' : 'stops'} planned
                   </Typography>
                 )}
               </Box>
@@ -799,7 +842,7 @@ export function Calendar() {
             sx={{ '& .MuiToggleButton-root': { minHeight: 44, textTransform: 'none', fontWeight: 600 } }}
           >
             <ToggleButton value="people">Who to see{dayPlan ? ` (${dayPlan.followUpTasks.length})` : ''}</ToggleButton>
-            <ToggleButton value="route">Driving order{dayPlan ? ` (${dayPlan.optimizedRoute.length})` : ''}</ToggleButton>
+            <ToggleButton value="route">Driving order{dayPlan ? ` (${stopCount})` : ''}</ToggleButton>
           </ToggleButtonGroup>
 
           {dayPlanLoading && !dayPlan ? (
@@ -885,6 +928,16 @@ export function Calendar() {
                             Email
                           </Button>
                         )}
+                        {task.businessId && canEdit() && (
+                          <Button
+                            variant="outlined"
+                            startIcon={<RouteIcon />}
+                            onClick={() => addFollowUpToRoute(task)}
+                            sx={{ minHeight: 44, flex: { xs: '1 1 0', sm: '0 0 auto' } }}
+                          >
+                            Add to route
+                          </Button>
+                        )}
                         <Button
                           variant="contained"
                           color="success"
@@ -906,76 +959,15 @@ export function Calendar() {
               </Paper>
             )
           ) : dayPlan && dayView === 'route' ? (
-            dayPlan.optimizedRoute.length === 0 ? (
-              <Paper sx={{ p: 3, textAlign: 'center' }}>
-                <Typography color="text.secondary">No stops with an address for this day.</Typography>
-              </Paper>
-            ) : (
-              <Paper sx={{ overflow: 'hidden' }}>
-                <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <RouteIcon fontSize="small" color="action" />
-                  <Typography variant="body2" color="text.secondary" noWrap sx={{ minWidth: 0 }}>
-                    Start at {dayPlan.storeName}
-                  </Typography>
-                </Box>
-                {dayPlan.optimizedRoute.map((stop, index) => {
-                  const addr = [stop.address, stop.city, stop.state, stop.zipCode].filter(Boolean).join(', ');
-                  return (
-                    <Box
-                      key={`${stop.kind || 'stop'}-${stop.id}`}
-                      sx={{ px: { xs: 1.5, sm: 2 }, py: 1, borderTop: 1, borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 1.25 }}
-                    >
-                      <Box
-                        sx={{
-                          width: 28,
-                          height: 28,
-                          borderRadius: '50%',
-                          flexShrink: 0,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '0.8rem',
-                          fontWeight: 700,
-                          bgcolor: stop.kind === 'visit' ? 'primary.main' : 'action.selected',
-                          color: stop.kind === 'visit' ? 'primary.contrastText' : 'text.primary',
-                        }}
-                      >
-                        {index + 1}
-                      </Box>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography sx={{ fontWeight: 600 }} noWrap>{stop.name}</Typography>
-                        <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
-                          {stop.kind === 'visit' ? (stop.detail || 'Visit') : 'New stop'}{addr ? ` · ${addr}` : ''}
-                        </Typography>
-                      </Box>
-                      {addr && (
-                        <Button
-                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          sx={{ minHeight: 44, minWidth: 64, flexShrink: 0 }}
-                        >
-                          Maps
-                        </Button>
-                      )}
-                    </Box>
-                  );
-                })}
-                <Box sx={{ p: { xs: 1.5, sm: 2 }, borderTop: 1, borderColor: 'divider' }}>
-                  <Button
-                    variant="contained"
-                    fullWidth
-                    startIcon={<RouteIcon />}
-                    href={`https://www.google.com/maps/dir/${encodeURIComponent(dayPlan.storeAddress)}/${dayPlan.optimizedRoute.map((o) => [o.address, o.city, o.state, o.zipCode].filter(Boolean).join(', ')).filter(Boolean).map(encodeURIComponent).join('/')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    sx={{ minHeight: 48 }}
-                  >
-                    Open route in Google Maps
-                  </Button>
-                </Box>
-              </Paper>
-            )
+            <DayRoute
+              storeId={permissions.currentStoreId}
+              date={planDate}
+              storeName={dayPlan.storeName}
+              storeAddress={dayPlan.storeAddress}
+              canEdit={canEdit()}
+              refreshKey={routeRefresh}
+              onCountChange={setRouteCount}
+            />
           ) : null}
 
           {recentVisits.length > 0 && (
@@ -1182,6 +1174,9 @@ export function Calendar() {
                             >
                               {date.getDate()}
                             </Typography>
+                            {planCounts[localDateKey(date)] > 0 && (
+                              <RouteIcon aria-label="Stops planned" sx={{ fontSize: 12, color: 'primary.main', mt: -0.25 }} />
+                            )}
                             {dayEvents.length > 0 && (
                               <Box
                                 sx={{
@@ -1246,13 +1241,27 @@ export function Calendar() {
                               >
                                 {date.getDate()}
                               </Typography>
-                              {dayEvents.length > 0 && (
-                                <Chip
-                                  label={dayEvents.length}
-                                  size="small"
-                                  sx={{ height: 18, fontSize: '0.65rem' }}
-                                />
-                              )}
+                              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                {planCounts[localDateKey(date)] > 0 && (
+                                  <Tooltip title={`${planCounts[localDateKey(date)]} planned stops`}>
+                                    <Chip
+                                      icon={<RouteIcon sx={{ fontSize: '0.8rem !important' }} />}
+                                      label={planCounts[localDateKey(date)]}
+                                      size="small"
+                                      color="primary"
+                                      variant="outlined"
+                                      sx={{ height: 18, fontSize: '0.65rem' }}
+                                    />
+                                  </Tooltip>
+                                )}
+                                {dayEvents.length > 0 && (
+                                  <Chip
+                                    label={dayEvents.length}
+                                    size="small"
+                                    sx={{ height: 18, fontSize: '0.65rem' }}
+                                  />
+                                )}
+                              </Box>
                             </Box>
                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
                               {dayEvents.slice(0, 2).map((event) => {
@@ -1379,32 +1388,32 @@ export function Calendar() {
                 ))}
               </Box>
               <Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Driving order</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Your stops</Typography>
                 {dayPlan.optimizedRoute.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">No stops with an address for this day.</Typography>
-                ) : (
-                  <>
-                    {dayPlan.optimizedRoute.map((stop, index) => (
-                      <Box key={`${stop.kind || 'stop'}-${stop.id}`} sx={{ py: 1, borderTop: '1px solid', borderColor: 'divider' }}>
-                        <Typography sx={{ fontWeight: 650 }}>{index + 1}. {stop.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {stop.kind === 'visit' ? (stop.detail || 'Visit') : 'New stop'}
-                          {stop.address ? ` · ${[stop.address, stop.city].filter(Boolean).join(', ')}` : ''}
-                        </Typography>
-                      </Box>
-                    ))}
-                    <Button
-                      variant="outlined"
-                      fullWidth
-                      sx={{ mt: 1.5, minHeight: 44 }}
-                      href={`https://www.google.com/maps/dir/${encodeURIComponent(dayPlan.storeAddress)}/${dayPlan.optimizedRoute.map((stop) => [stop.address, stop.city, stop.state, stop.zipCode].filter(Boolean).join(', ')).filter(Boolean).map(encodeURIComponent).join('/')}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Open route in Maps
-                    </Button>
-                  </>
-                )}
+                  <Typography variant="body2" color="text.secondary">No stops planned for this day.</Typography>
+                ) : dayPlan.optimizedRoute.map((stop, index) => (
+                  <Box key={stop.id} sx={{ py: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <Typography sx={{ fontWeight: 650 }}>{index + 1}. {stop.name}</Typography>
+                    {stop.address && (
+                      <Typography variant="body2" color="text.secondary">
+                        {[stop.address, stop.city].filter(Boolean).join(', ')}
+                      </Typography>
+                    )}
+                  </Box>
+                ))}
+                <Button
+                  variant="outlined"
+                  fullWidth
+                  startIcon={<RouteIcon />}
+                  sx={{ mt: 1.5, minHeight: 44 }}
+                  onClick={() => {
+                    setSelectedDate(null);
+                    setDayView('route');
+                    changePlanTab('day');
+                  }}
+                >
+                  Plan this day
+                </Button>
               </Box>
             </Box>
           )}
