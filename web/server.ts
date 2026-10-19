@@ -22,6 +22,8 @@ import calendarEventsHandler from './dist-handlers/calendar-events.js';
 import calendarEventsIdHandler from './dist-handlers/calendar-events/[id].js';
 import getCalendarEventsHandler from './dist-handlers/get-calendar-events.js';
 import dayPlannerHandler from './dist-handlers/day-planner.js';
+import planStopsHandler from './dist-handlers/plan-stops.js';
+import planStopsIdHandler from './dist-handlers/plan-stops/[id].js';
 import chatCompletionHandler from './dist-handlers/chat-completion.js';
 import extractBusinessCardHandler from './dist-handlers/extract-business-card.js';
 import createContactFromCallHandler from './dist-handlers/create-contact-from-call.js';
@@ -130,6 +132,8 @@ app.post('/api/calendar-events', route(calendarEventsHandler));
 app.all('/api/calendar-events/:id', withId(calendarEventsIdHandler));
 app.get('/api/get-calendar-events', route(getCalendarEventsHandler));
 app.get('/api/day-planner', route(dayPlannerHandler));
+app.all('/api/plan-stops', route(planStopsHandler));
+app.all('/api/plan-stops/:id', withId(planStopsIdHandler));
 
 // AI / integrations
 app.post('/api/chat-completion', route(chatCompletionHandler));

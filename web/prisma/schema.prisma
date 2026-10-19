@@ -26,6 +26,7 @@ model User {
   calendar_events_created CalendarEvent[] @relation("CalendarEventCreatedBy")
   invites_sent   Invite[]               @relation("InviteSentBy")
   opportunities_created Opportunity[]   @relation("OpportunityCreatedBy")
+  plan_stops     PlanStop[]
   organizations_created Organization[]  @relation("OrgCreatedBy")
   organization_memberships OrganizationMember[]
   organization_invites_sent OrganizationInvite[] @relation("OrgInviteSentBy")
@@ -131,6 +132,7 @@ model Store {
   calendar_events CalendarEvent[]
   invites    Invite[]
   opportunities Opportunity[]
+  plan_stops PlanStop[]
 
   @@map("stores")
 }
@@ -169,6 +171,7 @@ model Business {
   contact_links ContactBusiness[]
   opportunities_converted Opportunity[]
   calendar_events CalendarEvent[]
+  plan_stops PlanStop[]
 
   @@map("businesses")
 }
@@ -193,6 +196,7 @@ model Opportunity {
   store    Store    @relation(fields: [store_id], references: [id], onDelete: Cascade)
   business Business? @relation(fields: [business_id], references: [id], onDelete: SetNull)
   creator  User     @relation("OpportunityCreatedBy", fields: [created_by], references: [id])
+  plan_stops PlanStop[]
 
   @@unique([store_id, place_id])
   @@index([store_id])
@@ -373,4 +377,33 @@ model DiscoveredPlace {
   @@index([status])
   @@index([primary_type])
   @@map("discovered_places")
+}
+
+/// One stop on one person's plan for one day. Name and address are copied in so
+/// the stop still reads right after its opportunity is converted or dismissed.
+model PlanStop {
+  id             String    @id @default(uuid()) @db.Uuid
+  store_id       String    @db.Uuid
+  user_id        String
+  plan_date      DateTime  @db.Date
+  position       Int       @default(0)
+  opportunity_id String?   @db.Uuid
+  business_id    String?   @db.Uuid
+  place_id       String?
+  name           String
+  address        String?
+  city           String?
+  state          String?
+  zip_code       String?
+  status         String    @default("planned") // planned | done | skipped
+  created_at     DateTime  @default(now())
+
+  store       Store        @relation(fields: [store_id], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  opportunity Opportunity? @relation(fields: [opportunity_id], references: [id], onDelete: SetNull)
+  business    Business?    @relation(fields: [business_id], references: [id], onDelete: SetNull)
+
+  @@index([store_id, plan_date])
+  @@index([user_id, plan_date])
+  @@map("plan_stops")
 }

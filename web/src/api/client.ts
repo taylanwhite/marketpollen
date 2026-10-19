@@ -90,6 +90,7 @@ export const api = {
   /** Standard write. Throws on network failure. Use when caller needs the server response. */
   post: <T = unknown>(path: string, body: object) => request<T>(path, { method: 'POST', body }),
   patch: <T = unknown>(path: string, body: object) => request<T>(path, { method: 'PATCH', body }),
+  put: <T = unknown>(path: string, body: object) => request<T>(path, { method: 'PUT', body }),
   delete: (path: string) => request(path, { method: 'DELETE' }),
 
   /**

@@ -1,9 +1,9 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import axios from 'axios';
 import OpenAI from 'openai';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canViewStore } from './lib/store-access.js';
+import { loadPlan, parseDateKey } from './lib/plan-stops.js';
 
 const MAX_EMAIL_DRAFTS = 5;
 function donationSkipsFollowUp(contact: {
@@ -36,66 +36,6 @@ function donationSkipsFollowUp(contact: {
   if (donations.length === 0) return false;
   donations.sort((a, b) => b.date.getTime() - a.date.getTime());
   return donations[0].no_follow_up === true;
-}
-
-/** Haversine distance in meters */
-function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
-async function geocode(address: string, apiKey: string): Promise<{ lat: number; lng: number } | null> {
-  if (!address.trim()) return null;
-  try {
-    const res = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
-      params: { address: address.trim(), key: apiKey },
-    });
-    if (res.data?.status !== 'OK' && res.data?.status !== 'ZERO_RESULTS') return null;
-    const loc = res.data?.results?.[0]?.geometry?.location;
-    return loc ? { lat: loc.lat, lng: loc.lng } : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Nearest-neighbor route: start at store, then repeatedly visit nearest unvisited opportunity. */
-function orderOpportunitiesByRoute<T extends { lat: number; lng: number }>(
-  storeLat: number,
-  storeLng: number,
-  opportunities: T[],
-): T[] {
-  if (opportunities.length === 0) return [];
-  const withCoords = opportunities.map((o) => ({ ...o, lat: o.lat, lng: o.lng }));
-  const ordered: typeof withCoords = [];
-  let currentLat = storeLat;
-  let currentLng = storeLng;
-  let remaining = [...withCoords];
-  while (remaining.length > 0) {
-    let nearestIdx = 0;
-    let nearestDist = distanceMeters(currentLat, currentLng, remaining[0].lat, remaining[0].lng);
-    for (let i = 1; i < remaining.length; i++) {
-      const d = distanceMeters(currentLat, currentLng, remaining[i].lat, remaining[i].lng);
-      if (d < nearestDist) {
-        nearestDist = d;
-        nearestIdx = i;
-      }
-    }
-    const next = remaining[nearestIdx];
-    ordered.push(next);
-    currentLat = next.lat;
-    currentLng = next.lng;
-    remaining = remaining.filter((_, i) => i !== nearestIdx);
-  }
-  return ordered;
 }
 
 /** Generate a short follow-up email draft using OpenAI */
@@ -156,12 +96,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   dayEnd.setDate(dayEnd.getDate() + 1);
 
   try {
-    const [store, opportunities, calendarEvents, contacts] = await Promise.all([
+    const [store, calendarEvents, contacts] = await Promise.all([
       prisma.store.findUnique({ where: { id: storeId } }),
-      prisma.opportunity.findMany({
-        where: { store_id: storeId, status: 'new' },
-        orderBy: { created_at: 'desc' },
-      }),
       prisma.calendarEvent.findMany({
         where: {
           store_id: storeId,
@@ -270,89 +206,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Driving order: people to see today first, then new stops that are still on the route.
-    type RouteStop = {
-      id: string;
-      name: string;
-      kind: 'visit' | 'stop';
-      detail?: string;
-      address?: string | null;
-      city?: string | null;
-      state?: string | null;
-      zipCode?: string | null;
-      lat: number;
-      lng: number;
-    };
-    const seenBusiness = new Set<string>();
-    const visitCandidates: Array<Omit<RouteStop, 'lat' | 'lng'>> = [];
-    for (const task of followUpTasks) {
-      const business = contactMap.get(task.contactId)?.business;
-      if (!business || seenBusiness.has(business.id)) continue;
-      const parts = [business.address, business.city, business.state, business.zip_code].filter(Boolean);
-      if (parts.length === 0) continue;
-      seenBusiness.add(business.id);
-      const methodLabel = task.method === 'meeting' ? 'Visit' : task.method === 'call' ? 'Call' : task.method === 'email' ? 'Email' : task.method === 'text' ? 'Text' : 'Follow up';
-      visitCandidates.push({
-        id: business.id,
-        name: business.name,
-        kind: 'visit',
-        detail: `${task.contactName} · ${methodLabel}`,
-        address: business.address,
-        city: business.city,
-        state: business.state,
-        zipCode: business.zip_code,
-      });
-    }
-    const visitsForRoute = visitCandidates.slice(0, 12);
-    const visitIds = new Set(visitsForRoute.map((stop) => stop.id));
-    const stopCandidates: Array<Omit<RouteStop, 'lat' | 'lng'>> = opportunities
-      .filter((opportunity) => !opportunity.business_id || !visitIds.has(opportunity.business_id))
-      .slice(0, Math.max(0, 12 - visitsForRoute.length))
-      .map((opportunity) => ({
-        id: opportunity.id,
-        name: opportunity.name,
-        kind: 'stop' as const,
-        address: opportunity.address,
-        city: opportunity.city,
-        state: opportunity.state,
-        zipCode: opportunity.zip_code,
-      }));
-    const routeCandidates = [...visitsForRoute, ...stopCandidates];
-    const googleKey = process.env.GOOGLE_PLACES_API_KEY;
-    let optimizedRoute: Array<Omit<RouteStop, 'lat' | 'lng'>> = routeCandidates;
-
-    if (googleKey && storeAddress && routeCandidates.length > 0) {
-      const storeCoords = await geocode(storeAddress, googleKey);
-      if (storeCoords) {
-        const located = await Promise.all(routeCandidates.map(async (stop) => {
-          const addr = [stop.address, stop.city, stop.state, stop.zipCode].filter(Boolean).join(', ');
-          const coords = addr ? await geocode(addr, googleKey) : null;
-          return coords ? { ...stop, lat: coords.lat, lng: coords.lng } : null;
-        }));
-        const withCoords = located.filter((stop): stop is RouteStop => stop !== null);
-        const locatedIds = new Set(withCoords.map((stop) => `${stop.kind}:${stop.id}`));
-        const missed = routeCandidates.filter((stop) => !locatedIds.has(`${stop.kind}:${stop.id}`));
-        const strip = ({ lat: _lat, lng: _lng, ...stop }: RouteStop) => stop;
-        const orderedVisits = orderOpportunitiesByRoute(
-          storeCoords.lat,
-          storeCoords.lng,
-          withCoords.filter((stop) => stop.kind === 'visit'),
-        );
-        const continueFrom = orderedVisits[orderedVisits.length - 1];
-        const orderedStops = orderOpportunitiesByRoute(
-          continueFrom?.lat ?? storeCoords.lat,
-          continueFrom?.lng ?? storeCoords.lng,
-          withCoords.filter((stop) => stop.kind === 'stop'),
-        );
-        const ordered = [...orderedVisits, ...orderedStops].map(strip);
-        optimizedRoute = [
-          ...ordered.filter((stop) => stop.kind === 'visit'),
-          ...missed.filter((stop) => stop.kind === 'visit'),
-          ...ordered.filter((stop) => stop.kind === 'stop'),
-          ...missed.filter((stop) => stop.kind === 'stop'),
-        ];
-      }
-    }
+    // Driving order is the stops this person saved for the day, in their order.
+    const planDate = parseDateKey(dateStr);
+    const optimizedRoute = planDate
+      ? (await loadPlan(storeId, uid, planDate)).map((stop) => ({
+        id: stop.id,
+        name: stop.name,
+        kind: stop.businessId ? 'visit' as const : 'stop' as const,
+        address: stop.address,
+        city: stop.city,
+        state: stop.state,
+        zipCode: stop.zipCode,
+      }))
+      : [];
 
     return res.status(200).json({
       storeName: store.name,
@@ -362,6 +228,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         contactId: t.contactId,
         contactName: t.contactName,
         businessName: t.businessName,
+        businessId: contactMap.get(t.contactId)?.business?.id,
         method: t.method,
         message: t.message,
         draftEmail: t.draftEmail,
