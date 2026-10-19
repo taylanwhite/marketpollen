@@ -1084,19 +1084,17 @@ export function Dashboard() {
                   <TextField {...params} label="Created by" placeholder="Marketer" />
                 )}
               />
-              <TextField
-                select
+              <Autocomplete
                 size="small"
-                label="Organization type"
-                value={orgTypeFilter}
-                onChange={(event) => setOrgTypeFilter(event.target.value)}
+                options={organizationTypes}
+                value={orgTypeFilter || null}
+                onChange={(_event, value) => setOrgTypeFilter(value || '')}
+                autoHighlight
                 sx={{ minWidth: 180, flex: '1 1 180px', maxWidth: 260 }}
-              >
-                <MenuItem value="">Any type</MenuItem>
-                {organizationTypes.map((type) => (
-                  <MenuItem key={type} value={type}>{type}</MenuItem>
-                ))}
-              </TextField>
+                renderInput={(params) => (
+                  <TextField {...params} label="Organization type" placeholder="Any type" />
+                )}
+              />
               <Badge color="primary" badgeContent={extraFilterCount} invisible={extraFilterCount === 0}>
                 <Button variant="outlined" onClick={(event) => setFilterAnchor(event.currentTarget)} sx={{ minHeight: 44, flexShrink: 0 }}>
                   More filters

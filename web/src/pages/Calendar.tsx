@@ -7,6 +7,7 @@ import { useDonation } from '../contexts/DonationContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { CalendarEvent as CalendarEventType, Contact } from '../types';
 import {
+  Autocomplete,
   Box,
   Typography,
   Paper,
@@ -743,6 +744,8 @@ export function Calendar() {
   const days = getDaysInMonth(currentDate);
   const selectedDateEvents = selectedDate ? getEventsForDate(selectedDate) : [];
   const contactList = Array.from(contacts.values());
+  const contactLabel = (contact: Contact) =>
+    `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact';
 
   const formatTimeAgo = (date: Date) => {
     const diffMs = Date.now() - date.getTime();
@@ -1628,20 +1631,18 @@ export function Calendar() {
               />
             </Box>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
-              <TextField
-                label="Contact (Optional)"
-                select
-                value={eventForm.contactId}
-                onChange={(e) => setEventForm({ ...eventForm, contactId: e.target.value })}
+              <Autocomplete
+                options={contactList}
+                getOptionLabel={contactLabel}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+                value={contacts.get(eventForm.contactId) || null}
+                onChange={(_event, value) => setEventForm({ ...eventForm, contactId: value?.id || '' })}
+                autoHighlight
                 fullWidth
-              >
-                <MenuItem value="">None</MenuItem>
-                {contactList.map(contact => (
-                  <MenuItem key={contact.id} value={contact.id}>
-                    {`${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email || 'Contact'}
-                  </MenuItem>
-                ))}
-              </TextField>
+                renderInput={(params) => (
+                  <TextField {...params} label="Contact (Optional)" placeholder="Type a name" />
+                )}
+              />
               <TextField
                 label="Priority"
                 select
