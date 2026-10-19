@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, lazy, Suspense, type ChangeEvent } from 'react';
 import { api } from '../api/client';
-import { Contact, Reachout, DonationData, type ContactFile } from '../types';
+import { Contact, Reachout, DonationData, SLUG_TO_FIELD, type ContactFile } from '../types';
 import { calculateMouths, createEmptyDonation } from '../utils/donationCalculations';
 import { usePermissions } from '../contexts/PermissionContext';
 import { useDonation } from '../contexts/DonationContext';
@@ -96,7 +96,7 @@ const reachoutTypeIcons: Record<string, React.ReactElement> = {
 };
 
 export function EditContactModal({ contact, onClose, onSuccess }: EditContactModalProps) {
-  const { permissions } = usePermissions();
+  const { permissions, currentOrg } = usePermissions();
   const { triggerRefresh, setLastDonationMouths, bumpDataVersion } = useDonation();
   const { products } = useCampaign();
   // Note: useVoiceInput removed - it was part of the "Add Reachout" tab that was removed
@@ -338,7 +338,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     setShowPlacePicker(true);
   };
 
-  const finishCreateBusiness = async (placeId?: string) => {
+  const finishCreateBusiness = async (place?: PlaceResult) => {
     setCreatingBusiness(true);
     setError('');
     setSuccess('');
@@ -346,11 +346,11 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
     try {
       const created = await api.post<{ id: string; name: string }>(`/businesses?storeId=${permissions.currentStoreId}`, {
         name: newBusinessName.trim(),
-        address: newBusinessAddress.address || undefined,
-        city: newBusinessAddress.city || undefined,
-        state: newBusinessAddress.state || undefined,
-        zipCode: newBusinessAddress.zipCode || undefined,
-        placeId: placeId || undefined,
+        address: place?.address || newBusinessAddress.address || undefined,
+        city: place?.city || newBusinessAddress.city || undefined,
+        state: place?.state || newBusinessAddress.state || undefined,
+        zipCode: place?.zipCode || newBusinessAddress.zipCode || undefined,
+        placeId: place?.placeId || undefined,
       });
       const list = await api.get<Array<{ id: string; name: string }>>(`/businesses?storeId=${permissions.currentStoreId}`);
       const businessMap = new Map<string, string>();
@@ -889,48 +889,21 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                         </Box>
 
                         <Grid container spacing={1} sx={{ mt: 1 }}>
-                          {reachout.donation!.freeBundletCard > 0 && (
-                            <Grid size={{ xs: 6, sm: 4 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                Bundtlet Cards: <strong>{reachout.donation!.freeBundletCard}</strong>
-                              </Typography>
-                            </Grid>
-                          )}
-                          {reachout.donation!.dozenBundtinis > 0 && (
-                            <Grid size={{ xs: 6, sm: 4 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                Dozen Bundtinis: <strong>{reachout.donation!.dozenBundtinis}</strong>
-                              </Typography>
-                            </Grid>
-                          )}
-                          {reachout.donation!.cake8inch > 0 && (
-                            <Grid size={{ xs: 6, sm: 4 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                8" Cakes: <strong>{reachout.donation!.cake8inch}</strong>
-                              </Typography>
-                            </Grid>
-                          )}
-                          {reachout.donation!.cake10inch > 0 && (
-                            <Grid size={{ xs: 6, sm: 4 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                10" Cakes: <strong>{reachout.donation!.cake10inch}</strong>
-                              </Typography>
-                            </Grid>
-                          )}
-                          {reachout.donation!.sampleTray > 0 && (
-                            <Grid size={{ xs: 6, sm: 4 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                Sample Trays: <strong>{reachout.donation!.sampleTray}</strong>
-                              </Typography>
-                            </Grid>
-                          )}
-                          {reachout.donation!.bundtletTower > 0 && (
-                            <Grid size={{ xs: 6, sm: 4 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                Bundtlet/Tower: <strong>{reachout.donation!.bundtletTower}</strong>
-                              </Typography>
-                            </Grid>
-                          )}
+                          {/* Include switched-off products so older visits still show what was given. */}
+                          {(currentOrg?.products.length ? currentOrg.products : products).map((product) => {
+                            const field = SLUG_TO_FIELD[product.slug];
+                            const count = field
+                              ? Number(reachout.donation![field]) || 0
+                              : reachout.donation!.customItems?.[product.id] || 0;
+                            if (count <= 0) return null;
+                            return (
+                              <Grid size={{ xs: 6, sm: 4 }} key={product.id}>
+                                <Typography variant="caption" color="text.secondary">
+                                  {product.name}: <strong>{count}</strong>
+                                </Typography>
+                              </Grid>
+                            );
+                          })}
                         </Grid>
 
                         {reachout.donation!.cakesDonatedNotes && (
@@ -1189,7 +1162,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         businessCity={newBusinessAddress.city}
         businessState={newBusinessAddress.state}
         businessZipCode={newBusinessAddress.zipCode}
-        onSelect={(place: PlaceResult) => finishCreateBusiness(place.placeId)}
+        onSelect={(place: PlaceResult) => finishCreateBusiness(place)}
         onSkip={() => finishCreateBusiness()}
         onClose={() => setShowPlacePicker(false)}
       />

@@ -32,13 +32,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const donationFields = ['free_bundlet_card', 'dozen_bundtinis', 'cake_8inch', 'cake_10inch', 'sample_tray', 'bundtlet_tower'] as const;
     const donationLabels: Record<string, string> = {
-      free_bundlet_card: 'Free Bundtlet Card',
+      free_bundlet_card: 'Coupon',
       dozen_bundtinis: 'Dozen Bundtinis',
       cake_8inch: '8" Cake',
       cake_10inch: '10" Cake',
       sample_tray: 'Sample Tray',
       bundtlet_tower: 'Bundtlet/Tower',
     };
+    // Use the organization's own product names. Custom items are keyed by product id.
+    const store = await prisma.store.findUnique({ where: { id: contact.store_id }, select: { organization_id: true } });
+    const orgProducts = store?.organization_id
+      ? await prisma.campaignProduct.findMany({ where: { org_id: store.organization_id } })
+      : [];
+    const customLabels: Record<string, string> = {};
+    for (const product of orgProducts) {
+      if (product.reachout_column) donationLabels[product.reachout_column] = product.name;
+      customLabels[product.id] = product.name;
+    }
 
     const reachoutHistory = contact.reachouts.map(r => {
       const donations = donationFields
@@ -47,7 +57,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const customDonations = r.custom_donations as Record<string, number> | null;
       if (customDonations) {
         for (const [name, qty] of Object.entries(customDonations)) {
-          if (qty > 0) donations.push(`${qty}x ${name}`);
+          if (qty > 0) donations.push(`${qty}x ${customLabels[name] || name}`);
         }
       }
       return [

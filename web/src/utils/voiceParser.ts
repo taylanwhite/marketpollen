@@ -89,3 +89,16 @@ export function parseVoiceTranscript(transcript: string): ParsedContactInfo {
 
   return info;
 }
+
+// Phone dictation does not know the word "bundtini" and hears something close
+// instead, most often "panini". Nobody hands out paninis on a bakery visit, so
+// swap these back before the notes are shown or sent to the AI.
+const BUNDTINI_MISHEARINGS = /\b(?:paninis?|bundinis?|bun[\s-]?tinis?|bun[\s-]?teen(?:y|ies)|bunt[\s-]?(?:ini|eeny|eenie)s?)\b/gi;
+
+export function fixBakeryTerms(text: string): string {
+  return text.replace(BUNDTINI_MISHEARINGS, (word) => {
+    const plural = /(?:s|ies)$/i.test(word);
+    const fixed = plural ? 'bundtinis' : 'bundtini';
+    return word[0] === word[0].toUpperCase() ? fixed[0].toUpperCase() + fixed.slice(1) : fixed;
+  });
+}

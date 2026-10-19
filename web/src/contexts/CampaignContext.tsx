@@ -11,7 +11,7 @@ interface CampaignContextType {
 }
 
 const DEFAULT_PRODUCTS: CampaignProduct[] = [
-  { id: 'default-1', slug: 'freeBundletCard', name: 'FREE Bundtlet Card', mouthValue: MOUTH_VALUES.freeBundletCard, displayOrder: 0, isActive: true, reachoutColumn: 'free_bundlet_card' },
+  { id: 'default-1', slug: 'freeBundletCard', name: 'Coupon', mouthValue: MOUTH_VALUES.freeBundletCard, displayOrder: 0, isActive: true, reachoutColumn: 'free_bundlet_card' },
   { id: 'default-2', slug: 'dozenBundtinis', name: 'Dozen Bundtinis', mouthValue: MOUTH_VALUES.dozenBundtinis, displayOrder: 1, isActive: true, reachoutColumn: 'dozen_bundtinis' },
   { id: 'default-3', slug: 'cake8inch', name: '8" Cake', mouthValue: MOUTH_VALUES.cake8inch, displayOrder: 2, isActive: true, reachoutColumn: 'cake_8inch' },
   { id: 'default-4', slug: 'cake10inch', name: '10" Cake', mouthValue: MOUTH_VALUES.cake10inch, displayOrder: 3, isActive: true, reachoutColumn: 'cake_10inch' },

@@ -65,7 +65,10 @@ interface PendingInvite {
 export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   const { userId, userEmail } = useAuth();
   const canGrantAdmin = isKingAdminEmail(userEmail);
-  const { isAdmin, isOrgAdminFn, currentOrg } = usePermissions();
+  const { isAdmin, isOrgAdminFn, currentOrg, permissions: myAccess } = usePermissions();
+  // Admins of an organization can make others admins of that organization only.
+  const canGrantOrgAdmin = (orgId: string) =>
+    canGrantAdmin || myAccess.organizations.some((org) => org.id === orgId && org.isAdmin);
   const navigate = useNavigate();
   
   const [stores, setStores] = useState<Store[]>([]);
@@ -271,7 +274,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
         setInviteLoading(false);
         return;
       }
-      if (permissions.length === 0 && !inviteAsOrgAdmin) {
+      if (permissions.length === 0 && !(inviteAsOrgAdmin && canGrantOrgAdmin(inviteOrgId))) {
         setError('Give them a store, or make them an organization admin so they can set the new store up.');
         setInviteLoading(false);
         return;
@@ -284,7 +287,8 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
           canEdit: p.canEdit,
         });
       }
-      if (inviteAsOrgAdmin && canGrantAdmin) {
+      const invitingAdmin = inviteAsOrgAdmin && canGrantOrgAdmin(inviteOrgId);
+      if (invitingAdmin) {
         await api.post(`/organizations/${inviteOrgId}/members`, { email });
       }
       
@@ -296,7 +300,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
         if (!userId) {
           throw new Error('User not authenticated');
         }
-        if (!(inviteAsOrgAdmin && canGrantAdmin)) {
+        if (!invitingAdmin) {
           await api.post('/send-invite-email', {
             email: newUserEmail.toLowerCase().trim(),
             invitedByEmail: userEmail || '',
@@ -387,6 +391,8 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
     applyOrgEditor(user, fallbackOrgId);
   };
 
+  const wasOrgAdmin = !!editingUser?.orgMemberships?.find((item) => item.orgId === editOrgId)?.isAdmin;
+
   const closeEditModal = () => {
     setEditingUser(null);
     setEditAccessLevels(new Map());
@@ -446,7 +452,8 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
       await api.patch(`/users/${editingUser.uid}`, {
         storePermissions: permissions,
         scopedStoreIds,
-        ...(canGrantAdmin ? { isOrgAdmin: editIsOrgAdmin, isGlobalAdmin: editIsGlobalAdmin } : {}),
+        ...(orgId && canGrantOrgAdmin(orgId) ? { isOrgAdmin: editIsOrgAdmin } : {}),
+        ...(canGrantAdmin ? { isGlobalAdmin: editIsGlobalAdmin } : {}),
         orgId,
       });
 
@@ -714,7 +721,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
               </Typography>
             ) : null}
 
-            {canGrantAdmin && (
+            {canGrantOrgAdmin(inviteOrgId) && (
               <FormControlLabel
                 control={
                   <Switch
@@ -726,7 +733,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                   <Box>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>Organization admin</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      They can finish signup, billing, and the stores in this organization.
+                      They can finish signup, billing, the stores and reports in this organization, and add other admins.
                     </Typography>
                   </Box>
                 }
@@ -856,7 +863,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                       checked={editIsOrgAdmin}
                       onChange={(e) => setEditIsOrgAdmin(e.target.checked)}
                       color="primary"
-                      disabled={!canGrantAdmin}
+                      disabled={!canGrantOrgAdmin(editOrgId) || (wasOrgAdmin && !canGrantAdmin)}
                     />
                   }
                   label={
@@ -865,9 +872,11 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                         Organization admin{orgChoices.find((org) => org.id === editOrgId) ? ` for ${orgChoices.find((org) => org.id === editOrgId)?.name}` : ''}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        {canGrantAdmin
-                          ? 'They can rename this organization, change its products and goal, see every store in it, and open its subscription. This does not apply to any other organization.'
-                          : 'Only the platform owner can grant or remove organization admin.'}
+                        {!canGrantOrgAdmin(editOrgId)
+                          ? 'Only an admin of this organization can grant organization admin.'
+                          : wasOrgAdmin && !canGrantAdmin
+                          ? 'Only the platform owner can remove organization admin.'
+                          : 'They can rename this organization, change its products and goal, see every store in it, add other admins, and open its subscription. This does not apply to any other organization.'}
                       </Typography>
                     </Box>
                   }

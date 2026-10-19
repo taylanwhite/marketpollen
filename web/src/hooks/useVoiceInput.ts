@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { fixBakeryTerms } from '../utils/voiceParser';
 
 interface UseVoiceInputReturn {
   transcript: string;
@@ -38,7 +39,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
       // Process all results
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i];
-        const text = result[0].transcript;
+        const text = fixBakeryTerms(result[0].transcript);
         
         if (result.isFinal) {
           final += text + ' ';

@@ -341,7 +341,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       }
 
       // Donation detection: trust the AI's extracted donation, fall back to keyword scan
-      const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'cake'];
+      const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'bundtini', 'cake', 'coupon', 'tower'];
       const notesLower = rawNotes.toLowerCase();
       const hasDonationKeywords = donationKeywords.some((k) => notesLower.includes(k));
 
@@ -552,7 +552,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     setShowPlacePicker(true);
   };
 
-  const createBusinessRecord = async (placeId?: string): Promise<string> => {
+  const createBusinessRecord = async (place?: { placeId: string; address?: string; city?: string; state?: string; zipCode?: string }): Promise<string> => {
     if (!newBusinessName.trim()) {
       throw new Error('Business name is required');
     }
@@ -567,11 +567,13 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       id: newId,
       storeId,
       name: newBusinessName.trim(),
-      address: newBusinessAddress.address || undefined,
-      city: newBusinessAddress.city || undefined,
-      state: newBusinessAddress.state || undefined,
-      zipCode: newBusinessAddress.zipCode || undefined,
-      placeId: placeId || newBusinessPlaceId || undefined,
+      // A picked Google Place is the better source for the address than
+      // whatever was typed or guessed from the notes.
+      address: place?.address || newBusinessAddress.address || undefined,
+      city: place?.city || newBusinessAddress.city || undefined,
+      state: place?.state || newBusinessAddress.state || undefined,
+      zipCode: place?.zipCode || newBusinessAddress.zipCode || undefined,
+      placeId: place?.placeId || newBusinessPlaceId || undefined,
       createdAt: new Date(),
       createdBy: userId || '',
     };
@@ -595,11 +597,11 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     return newId;
   };
 
-  const finishCreateBusiness = async (placeId?: string) => {
+  const finishCreateBusiness = async (place?: PlaceResult) => {
     setCreatingBusiness(true);
     setError('');
     try {
-      const newId = await createBusinessRecord(placeId);
+      const newId = await createBusinessRecord(place);
       setSelectedBusinessIds((current) => current.includes(newId) ? current : [...current, newId]);
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
@@ -638,7 +640,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       const storeId = permissions.currentStoreId;
       let businessIdsForSave = [...selectedBusinessIds];
       if (showNewBusiness && newBusinessName.trim()) {
-        const createdBusinessId = await createBusinessRecord(newBusinessPlaceId || undefined);
+        const createdBusinessId = await createBusinessRecord();
         businessIdsForSave = [...businessIdsForSave, createdBusinessId];
         setSelectedBusinessIds(businessIdsForSave);
         setNewBusinessName('');
@@ -840,9 +842,9 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     setNewBusinessPlaceId(place.placeId);
     setNewBusinessAddress((prev) => ({
       address: place.address || prev.address,
-      city: prev.city,
-      state: prev.state,
-      zipCode: prev.zipCode,
+      city: place.city || prev.city,
+      state: place.state || prev.state,
+      zipCode: place.zipCode || prev.zipCode,
     }));
   };
 
@@ -1469,7 +1471,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         businessCity={newBusinessAddress.city}
         businessState={newBusinessAddress.state}
         businessZipCode={newBusinessAddress.zipCode}
-        onSelect={(place: PlaceResult) => finishCreateBusiness(place.placeId)}
+        onSelect={(place: PlaceResult) => finishCreateBusiness(place)}
         onSkip={() => finishCreateBusiness()}
         onClose={() => setShowPlacePicker(false)}
       />

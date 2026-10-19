@@ -1,4 +1,5 @@
 import { api } from '../api/client';
+import { fixBakeryTerms } from './voiceParser';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -86,7 +87,7 @@ export async function extractContactInfo(transcript: string, products?: ExtractP
   };
 }> {
   const productList = products && products.length > 0 ? products : [
-    { slug: 'freeBundletCard', name: 'Bundtlet Card', mouthValue: 1 },
+    { slug: 'freeBundletCard', name: 'Coupon', mouthValue: 1 },
     { slug: 'dozenBundtinis', name: 'Dozen Bundtinis', mouthValue: 12 },
     { slug: 'cake8inch', name: '8" Cake', mouthValue: 10 },
     { slug: 'cake10inch', name: '10" Cake', mouthValue: 20 },
@@ -95,9 +96,14 @@ export async function extractContactInfo(transcript: string, products?: ExtractP
   ];
 
   const productListDescription = productList.map(p => `${p.name} (${p.mouthValue} mouths)`).join(', ');
-  const productExtractionLines = productList.map(p =>
-    `  * ${p.slug}: number of "${p.name}" given (${p.mouthValue} mouths each)`
-  ).join('\n');
+  // Words marketers actually say for a product when it differs from its name.
+  const PRODUCT_ALIASES: Record<string, string> = {
+    freeBundletCard: 'also called a "coupon", "free card", or "bundtlet card"',
+  };
+  const productExtractionLines = productList.map(p => {
+    const alias = PRODUCT_ALIASES[p.slug] && !/coupon/i.test(p.name) ? `, ${PRODUCT_ALIASES[p.slug]}` : '';
+    return `  * ${p.slug}: number of "${p.name}" given (${p.mouthValue} mouths each${alias})`;
+  }).join('\n');
 
   const systemPrompt = `You are an AI assistant that extracts contact information from voice transcripts for a bakery marketing program.
 
@@ -105,6 +111,8 @@ IMPORTANT CONTEXT:
 - This is a bakery (Nothing Bundt Cake) giving away free products to businesses/contacts
 - "Donations" means WE (the bakery) gave products TO the contact/business, not the other way around
 - Available products: ${productListDescription}
+- Notes are often dictated by phone. Dictation mishears "bundtini" as "panini", "bikini", "martini", "zucchini", or other words ending in "-ini". In these notes, treat any such word as "bundtini"/"bundtinis", and write "bundtini" in reachoutNote and cakesDonatedNotes.
+- A "coupon" is a product we hand out. Count each coupon given as one of the coupon/card product above.
 
 Extract the following information and return it as JSON:
 - firstName: person's first name
@@ -141,7 +149,7 @@ If information is not mentioned, omit that field. Return valid JSON only.`;
   const response = await chatCompletion(
     [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: `Extract contact info from this transcript: "${transcript}"` }
+      { role: 'user', content: `Extract contact info from this transcript: "${fixBakeryTerms(transcript)}"` }
     ],
     { jsonMode: true, temperature: 0.3 }
   );

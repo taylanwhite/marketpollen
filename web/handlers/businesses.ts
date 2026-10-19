@@ -4,6 +4,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore, readableStoreScope, rejectIfStoreLocked, storeIdWhere } from './lib/store-access.js';
 import { businessCorporateData } from './lib/contact-profile.js';
+import { getPlaceDetails } from './lib/places-client.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -94,6 +95,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // A business linked to a Google Place should not be saved without an
+    // address. Older clients sent only the place id, so look it up here.
+    let address = body.address ?? null;
+    if (body.placeId && !address && !body.city) {
+      try {
+        address = (await getPlaceDetails(body.placeId)).formattedAddress ?? null;
+      } catch (err) {
+        console.error('Could not look up place address for new business:', err);
+      }
+    }
+
     let row;
     try {
       row = await prisma.business.create({
@@ -101,7 +113,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ...(body.id ? { id: body.id } : {}),
           store_id: storeId,
           name: body.name,
-          address: body.address ?? null,
+          address,
           city: body.city ?? null,
           state: body.state ?? null,
           zip_code: body.zipCode ?? null,

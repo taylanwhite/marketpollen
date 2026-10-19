@@ -777,7 +777,7 @@ export function Dashboard() {
         type: extracted.reachoutType || prev.type,
       }));
 
-      const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'cake'];
+      const donationKeywords = ['gave', 'gave away', 'gave them', 'gave her', 'gave him', 'for free', 'free', 'donated', 'sample', 'treat', 'gift', 'complimentary', 'bundt cake', 'bundtlet', 'bundtini', 'cake', 'coupon', 'tower'];
       const notesLower = original.toLowerCase();
       const hasDonationKeywords = donationKeywords.some(keyword => notesLower.includes(keyword));
 
@@ -1006,12 +1006,26 @@ export function Dashboard() {
       />
       <Tabs
         value={pageTab}
-        onChange={(_event, value: 'contacts' | 'businesses') => setPageTab(value)}
+        onChange={(_event, value: 'contacts' | 'businesses') => {
+          setPageTab(value);
+          // A business picked from the Businesses tab narrows the list through
+          // the URL. Tapping a tab means "show me everything" again.
+          if (businessFilter) navigate('/dashboard', { replace: true });
+        }}
         sx={{ mb: 2 }}
       >
         <Tab value="contacts" label={`Contacts (${filteredContacts.length})`} />
         <Tab value="businesses" label={`Businesses (${filteredBusinesses.length})`} />
       </Tabs>
+      {pageTab === 'contacts' && businessFilter && (
+        <Chip
+          color="primary"
+          variant="outlined"
+          label={`Only ${businesses.get(businessFilter) || 'one business'}`}
+          onDelete={() => navigate('/dashboard', { replace: true })}
+          sx={{ mb: 2, maxWidth: '100%' }}
+        />
+      )}
 
       {/* Header */}
       <Paper sx={{ p: 2, mb: 3 }}>
@@ -1553,8 +1567,13 @@ export function Dashboard() {
           ) : filteredContacts.length === 0 ? (
             <Paper sx={{ p: 4, textAlign: 'center' }}>
               <Typography color="text.secondary">
-                {searchTerm ? 'No contacts match your search' : 'No contacts yet. Add your first contact!'}
+                {searchTerm || businessFilter ? 'No contacts match your search' : 'No contacts yet. Add your first contact!'}
               </Typography>
+              {businessFilter && (
+                <Button sx={{ mt: 1, minHeight: 44 }} onClick={() => navigate('/dashboard', { replace: true })}>
+                  Show all contacts
+                </Button>
+              )}
             </Paper>
           ) : (
             <Grid container spacing={2}>

@@ -4,6 +4,7 @@ import { prisma } from '../../lib/db.js';
 import { getAuthUid } from '../../lib/auth.js';
 import { appUrl } from '../../lib/app-url.js';
 import { isKingAdmin } from '../../lib/king-admin.js';
+import { isOrgAdmin } from '../../lib/org-access.js';
 import { brandEmail } from '../../lib/brand-email.js';
 
 async function grantStoreAccess(userId: string, orgId: string) {
@@ -20,12 +21,23 @@ async function grantStoreAccess(userId: string, orgId: string) {
   }
 }
 
-async function sendOwnerEmail(email: string, orgName: string, existingAccount: boolean) {
+async function sendOwnerEmail(email: string, orgName: string, existingAccount: boolean, asOwner: boolean) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return false;
   const resend = new Resend(apiKey);
   const url = existingAccount ? `${appUrl()}/login` : `${appUrl()}/signup?email=${encodeURIComponent(email)}`;
-  const message = existingAccount
+  // The platform owner hands a new organization over to its owner. An
+  // organization admin is only adding a fellow admin.
+  const message = !asOwner
+    ? brandEmail({
+      headline: `You're an admin of ${orgName}`,
+      body: existingAccount
+        ? `You can now see every store in ${orgName}, run its reports, and manage its team on MarketPollen.`
+        : `Create your MarketPollen account with this email. You'll be an admin of ${orgName}, with every store and its reports ready when you arrive.`,
+      buttonLabel: existingAccount ? 'Sign in' : 'Create your account',
+      buttonUrl: url,
+    })
+    : existingAccount
     ? brandEmail({
       headline: `${orgName} is yours`,
       body: `You now run ${orgName} on MarketPollen. Sign in to set up stores, invite the team, and start logging visits.`,
@@ -41,7 +53,9 @@ async function sendOwnerEmail(email: string, orgName: string, existingAccount: b
   const { error } = await resend.emails.send({
     from: process.env.RESEND_FROM_EMAIL || 'MarketPollen <onboarding@resend.dev>',
     to: email,
-    subject: existingAccount ? `${orgName} is ready for you` : `You're invited to own ${orgName}`,
+    subject: !asOwner
+      ? `You're an admin of ${orgName}`
+      : existingAccount ? `${orgName} is ready for you` : `You're invited to own ${orgName}`,
     html: message.html,
     text: message.text,
   });
@@ -53,12 +67,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const uid = await getAuthUid(req);
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
-  const actor = await prisma.user.findUnique({ where: { id: uid }, select: { is_global_admin: true } });
-  if (!actor?.is_global_admin) return res.status(403).json({ error: 'Admin required' });
-  if (!(await isKingAdmin(uid))) return res.status(403).json({ error: 'Only the platform owner can change admin access' });
-
   const orgId = (req.query?.id as string)?.trim();
   if (!orgId) return res.status(400).json({ error: 'Organization id required' });
+  // An organization admin can add admins to their own organization, never another one.
+  if (!(await isOrgAdmin(uid, orgId))) return res.status(403).json({ error: 'Only an admin of this organization can add admins' });
+  const fromPlatformOwner = await isKingAdmin(uid);
   const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { id: true, name: true } });
   if (!org) return res.status(404).json({ error: 'Organization not found' });
 
@@ -73,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       update: { is_admin: true },
     });
     await grantStoreAccess(user.id, orgId);
-    const emailed = await sendOwnerEmail(user.email, org.name, true);
+    const emailed = await sendOwnerEmail(user.email, org.name, true, fromPlatformOwner);
     return res.status(200).json({ added: true, pending: false, emailed, email: user.email });
   }
 
@@ -85,6 +98,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       data: { org_id: orgId, email, invited_by: uid },
     });
   }
-  const emailed = await sendOwnerEmail(email, org.name, false);
+  const emailed = await sendOwnerEmail(email, org.name, false, fromPlatformOwner);
   return res.status(200).json({ added: false, pending: true, emailed, email });
 }

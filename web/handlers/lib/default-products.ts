@@ -1,7 +1,7 @@
 import { prisma } from './db.js';
 
 export const DEFAULT_CAMPAIGN_PRODUCTS = [
-  { slug: 'freeBundletCard', name: 'FREE Bundtlet Card', mouth_value: 1, display_order: 0, reachout_column: 'free_bundlet_card' },
+  { slug: 'freeBundletCard', name: 'Coupon', mouth_value: 1, display_order: 0, reachout_column: 'free_bundlet_card' },
   { slug: 'dozenBundtinis', name: 'Dozen Bundtinis', mouth_value: 12, display_order: 1, reachout_column: 'dozen_bundtinis' },
   { slug: 'cake8inch', name: '8" Cake', mouth_value: 10, display_order: 2, reachout_column: 'cake_8inch' },
   { slug: 'cake10inch', name: '10" Cake', mouth_value: 20, display_order: 3, reachout_column: 'cake_10inch' },

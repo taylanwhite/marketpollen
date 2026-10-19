@@ -66,8 +66,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         select: { is_admin: true },
       });
       const nextAdmin = body.isOrgAdmin === true;
-      if ((existing?.is_admin === true) !== nextAdmin && !(await isKingAdmin(uid))) {
-        return res.status(403).json({ error: 'Only the platform owner can change admin access' });
+      // body.orgId is already checked to be one of the caller's organizations.
+      // Any admin there can add another admin; only the platform owner can take
+      // admin away, so one admin can't lock the others out.
+      if (existing?.is_admin === true && !nextAdmin && !(await isKingAdmin(uid))) {
+        return res.status(403).json({ error: 'Only the platform owner can remove organization admin' });
       }
       if (existing || nextAdmin) {
         await prisma.organizationMember.upsert({

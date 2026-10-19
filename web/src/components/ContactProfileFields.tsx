@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
+  Autocomplete,
   Box,
   Collapse,
   FormControlLabel,
-  ListSubheader,
   MenuItem,
   Switch,
   TextField,
@@ -17,6 +17,8 @@ import {
   type CorporateAccountFields,
 } from '../utils/organizationTypes';
 
+const OTHER_TYPE = 'Other';
+
 export function ContactProfileFields({
   value,
   onChange,
@@ -26,42 +28,52 @@ export function ContactProfileFields({
   onChange: (next: ContactProfileExtras) => void;
   disabled?: boolean;
 }) {
-  const sections = organizationTypeSections();
-  const known = new Set(knownOrganizationTypes().map((type) => type.toLowerCase()));
+  // The list is long, so it is typed into rather than scrolled. Each option
+  // remembers its section so the groups still show while filtering.
+  const options = useMemo(
+    () => [
+      ...organizationTypeSections().flatMap((section) => section.types.map((type) => ({ type, group: section.name }))),
+      { type: OTHER_TYPE, group: 'Not listed' },
+    ],
+    [],
+  );
+  const known = useMemo(() => new Set(knownOrganizationTypes().map((type) => type.toLowerCase())), []);
   const custom = value.organizationType.trim() !== '' && !known.has(value.organizationType.trim().toLowerCase());
   const [otherMode, setOtherMode] = useState(false);
   const showOther = otherMode || custom;
-  const selectValue = showOther ? '__other__' : value.organizationType;
+  const selected = showOther
+    ? options[options.length - 1]
+    : options.find((option) => option.type === value.organizationType) || null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <TextField
-        select
-        label="Organization type"
-        value={selectValue}
-        onChange={(event) => {
-          const next = event.target.value;
-          if (next === '__other__') {
+      <Autocomplete
+        options={options}
+        groupBy={(option) => option.group}
+        getOptionLabel={(option) => option.type}
+        isOptionEqualToValue={(option, current) => option.type === current.type}
+        value={selected}
+        onChange={(_event, next) => {
+          if (next?.type === OTHER_TYPE) {
             setOtherMode(true);
             if (!custom) onChange({ organizationType: '' });
             return;
           }
           setOtherMode(false);
-          onChange({ organizationType: next });
+          onChange({ organizationType: next?.type || '' });
         }}
-        fullWidth
         disabled={disabled}
-        helperText="Kind of company or organization"
-      >
-        <MenuItem value="">Select a type</MenuItem>
-        {sections.flatMap((section) => [
-          <ListSubheader key={section.name}>{section.name}</ListSubheader>,
-          ...section.types.map((type) => (
-            <MenuItem key={type} value={type}>{type}</MenuItem>
-          )),
-        ])}
-        <MenuItem value="__other__">Other</MenuItem>
-      </TextField>
+        fullWidth
+        autoHighlight
+        renderInput={(params) => (
+          <TextField
+            {...params}
+            label="Organization type"
+            placeholder="Type to search"
+            helperText="Kind of company or organization"
+          />
+        )}
+      />
       {showOther && (
         <TextField
           label="Other organization type"

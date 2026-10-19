@@ -165,7 +165,17 @@ export function Businesses() {
   const handleLinkPlace = async (place: PlaceResult) => {
     if (!placePickerBusiness) return;
     try {
-      await api.patch(`/businesses/${placePickerBusiness.id}`, { placeId: place.placeId });
+      // Fill in the address from the place, but keep any the user already entered.
+      const hasAddress = !!(placePickerBusiness.address || placePickerBusiness.city);
+      await api.patch(`/businesses/${placePickerBusiness.id}`, {
+        placeId: place.placeId,
+        ...(!hasAddress && {
+          address: place.address,
+          city: place.city,
+          state: place.state,
+          zipCode: place.zipCode,
+        }),
+      });
       setShowPlacePicker(false);
       setPlacePickerBusiness(null);
       setSuccess('Business linked to Google Place!');

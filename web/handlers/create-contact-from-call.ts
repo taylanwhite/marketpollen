@@ -227,7 +227,8 @@ async function extractContactInfoFromNotes(notes: string): Promise<{
 IMPORTANT CONTEXT:
 - This is a bakery (Nothing Bundt Cake) giving away free products to businesses/contacts
 - "Donations" means WE (the bakery) gave products TO the contact/business, not the other way around
-- Products given away include: Bundtlet Cards, Dozen Bundtinis (12), 8" Cake (10), 10" Cake (20), Sample Tray (40), Bundtlet Tower (1 per bundtlet)
+- Products given away include: Coupons (also called Bundtlet Cards), Dozen Bundtinis (12), 8" Cake (10), 10" Cake (20), Sample Tray (40), Bundtlet Tower (1 per bundtlet)
+- Transcription mishears "bundtini" as "panini", "bikini", "martini", or other words ending in "-ini". Treat any such word as "bundtini".
 
 Extract the following information and return it as JSON:
 - firstName: person's first name
@@ -246,7 +247,7 @@ Extract the following information and return it as JSON:
   DO NOT summarize or condense - include all relevant details. If the original notes are already clear and complete, use them as-is or only make minor improvements for clarity.
 - suggestedFollowUpDays: suggest number of days until next follow-up (typically 2-7 days, minimum 1)
 - donation: (optional object) CRITICAL: Extract donation information if ANY of these phrases appear: "gave", "gave away", "gave them", "gave her", "gave him", "for free", "free", "donated", "sample", "treat", "gift", "complimentary", or any mention of products being provided at no cost. Extract:
-  * freeBundletCard: number of free bundtlet cards given (look for "bundtlet card", "card")
+  * freeBundletCard: number of free bundtlet cards given (look for "coupon", "bundtlet card", "card")
   * dozenBundtinis: number of dozen bundtinis given (look for "dozen bundtinis", "12 bundtinis", "bundtinis" - each dozen = 12)
   * cake8inch: number of 8" cakes given (look for "8 inch", "8\"", "8 inch cake")
   * cake10inch: number of 10" cakes given (look for "10 inch", "10\"", "10 inch cake")
