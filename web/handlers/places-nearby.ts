@@ -81,7 +81,9 @@ const UI_TYPE_TO_PLACES_TYPES: Record<string, string[]> = {
   'hotel': ['lodging'],
   'banquet hall': ['banquet_hall'],
   'convention center': ['convention_center'],
-  // Education
+  // Education. "Middle school" stays unmapped: Google has no middle_school
+  // type, and secondary_school is the high-school bucket. Text Search for
+  // the phrase matches school names.
   'elementary school': ['primary_school'],
   'high school': ['secondary_school'],
   'preschool': ['preschool'],

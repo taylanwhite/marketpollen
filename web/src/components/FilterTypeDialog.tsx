@@ -81,6 +81,7 @@ export const FILTER_TYPE_CATEGORIES: Array<{ name: string; types: readonly strin
     name: 'Education',
     types: [
       'Elementary school',
+      'Middle school',
       'High school',
       'Daycare',
       'Preschool',
