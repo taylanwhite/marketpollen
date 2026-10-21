@@ -20,6 +20,7 @@ export interface BillingQuote {
   periodEnd?: string | null;
   storeName?: string;
   unitCents?: number;
+  feeCents?: number;
   orgName?: string;
   card?: { brand: string; last4: string; expMonth: number; expYear: number } | null;
 }
@@ -84,11 +85,13 @@ function InvoiceRow({ label, value, strong }: { label: string; value: string; st
 function AddStoreInvoice({ quote }: { quote: BillingQuote }) {
   const unit = quote.unitCents ?? 0;
   const due = quote.dueTodayCents;
+  const fee = Math.max(0, quote.feeCents ?? 0);
+  const subtotal = due - fee;
   const current = quote.currentMonthlyCents ?? 0;
   const next = quote.newMonthlyCents ?? unit;
   const renews = formatDate(quote.periodEnd);
   const hasSubscription = current > 0;
-  const prorated = hasSubscription && due > 0 && due !== unit;
+  const prorated = hasSubscription && subtotal > 0 && subtotal !== unit;
   const trial = !hasSubscription && due === 0 && !!renews && next > 0 && !quote.needsCharge;
   const included = hasSubscription && due === 0 && next === current;
 
@@ -153,6 +156,14 @@ function AddStoreInvoice({ quote }: { quote: BillingQuote }) {
           )}
         </Box>
         <Divider />
+        {fee > 0 && (
+          <>
+            <Box sx={{ px: 2, py: 0.5 }}>
+              <InvoiceRow label="Processing fee" value={money(fee)} />
+            </Box>
+            <Divider />
+          </>
+        )}
         <Box sx={{ px: 2, py: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', bgcolor: 'grey.50' }}>
           <Typography sx={{ fontWeight: 700 }}>Due today</Typography>
           <Typography variant="h5" sx={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>

@@ -1,5 +1,12 @@
 export const STORE_UNIT_CENTS = 6500;
 
+// Added as its own line on every Stripe invoice. Change the rate here.
+export const PROCESSING_FEE_RATE = 0.05;
+
+export function processingFeeCents(cents: number): number {
+  return Math.round(Math.max(0, cents) * PROCESSING_FEE_RATE);
+}
+
 export const STORE_PAUSED_MESSAGE =
   'This store is paused. You can look through what is already here, but nothing can be added or changed until the store is turned back on.';
 

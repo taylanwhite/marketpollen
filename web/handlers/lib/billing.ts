@@ -12,6 +12,7 @@ import {
   keepOpenMessage,
   money,
   pauseStoreMessage,
+  processingFeeCents,
   resumeStoreMessage,
 } from './billing-copy.js';
 
@@ -37,6 +38,7 @@ export type BillingQuote = {
   periodEnd: string | null;
   storeName?: string;
   unitCents?: number;
+  feeCents?: number;
   orgName?: string;
   card?: { brand: string; last4: string; expMonth: number; expYear: number } | null;
 };
@@ -76,6 +78,74 @@ function seatCounts(stores: Array<{ billing_status: string; archived_at?: Date |
     seatsInUse: active + scheduled,
     renewSeats: active,
   };
+}
+
+const FEE_KIND = 'processing_fee';
+
+function isFeeItem(item: Stripe.SubscriptionItem): boolean {
+  return item.price?.metadata?.kind === FEE_KIND;
+}
+
+function storeItemOf(sub: Stripe.Subscription): Stripe.SubscriptionItem | undefined {
+  return sub.items.data.find((item) => !isFeeItem(item)) ?? sub.items.data[0];
+}
+
+function feeItemOf(sub: Stripe.Subscription): Stripe.SubscriptionItem | undefined {
+  return sub.items.data.find(isFeeItem);
+}
+
+let cachedFeeProductId: string | null = null;
+
+async function feeProductId(): Promise<string> {
+  if (cachedFeeProductId) return cachedFeeProductId;
+  const stripe = getStripe();
+  const products = await stripe.products.list({ active: true, limit: 100 });
+  const found = products.data.find((product) => product.metadata?.kind === FEE_KIND);
+  const product = found ?? await stripe.products.create({
+    name: 'Processing fee',
+    metadata: { kind: FEE_KIND },
+  });
+  cachedFeeProductId = product.id;
+  return product.id;
+}
+
+async function feePriceFor(unitCents: number): Promise<string> {
+  const stripe = getStripe();
+  const cents = processingFeeCents(unitCents);
+  const product = await feeProductId();
+  const existing = await stripe.prices.list({ product, active: true, limit: 100 });
+  const match = existing.data.find((price) =>
+    price.unit_amount === cents && price.currency === 'usd' && price.recurring?.interval === 'month'
+  );
+  if (match) return match.id;
+  const created = await stripe.prices.create({
+    product,
+    unit_amount: cents,
+    currency: 'usd',
+    recurring: { interval: 'month' },
+    nickname: `Processing fee (${money(cents)} per store)`,
+    metadata: { kind: FEE_KIND },
+  });
+  return created.id;
+}
+
+async function subscriptionLineItems(unitCents: number, quantity: number) {
+  return [
+    { price: await priceForMonthlyAmount(unitCents), quantity },
+    { price: await feePriceFor(unitCents), quantity },
+  ];
+}
+
+// Item updates that move the store line and the fee line to the same quantity.
+// Older subscriptions without a fee line get one added.
+async function quantityItems(org: OrgRecord, quantity: number): Promise<Stripe.SubscriptionUpdateParams.Item[]> {
+  const sub = await getStripe().subscriptions.retrieve(org.stripe_subscription_id!);
+  const storeItem = storeItemOf(sub);
+  const feeItem = feeItemOf(sub);
+  return [
+    { id: storeItem?.id ?? org.stripe_subscription_item_id!, quantity },
+    feeItem ? { id: feeItem.id, quantity } : { price: await feePriceFor(unitOf(org)), quantity },
+  ];
 }
 
 function priceOf(item: Stripe.SubscriptionItem): string | null {
@@ -160,7 +230,7 @@ async function setRenewal(orgId: string, paid: number, next: number): Promise<vo
 }
 
 export async function persistSubscription(orgId: string, sub: Stripe.Subscription): Promise<void> {
-  const item = sub.items.data[0];
+  const item = storeItemOf(sub);
   const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer.id;
   const scheduleId = typeof sub.schedule === 'string' ? sub.schedule : sub.schedule?.id ?? null;
   const paid = item?.quantity ?? 0;
@@ -202,21 +272,30 @@ async function findOrgForSubscription(sub: Stripe.Subscription) {
   return prisma.organization.findUnique({ where: { id: orgId } });
 }
 
-function prorationDue(invoice: Stripe.Invoice): number {
+function prorationDue(invoice: Stripe.Invoice, feeProduct: string): { due: number; fee: number } {
   let sum = 0;
+  let fee = 0;
   let found = false;
   for (const line of invoice.lines.data) {
     if (line.parent?.subscription_item_details?.proration) {
       found = true;
       sum += line.amount;
+      if (line.pricing?.price_details?.product === feeProduct) fee += line.amount;
     }
   }
-  if (found) return Math.max(0, sum);
-  return Math.max(0, invoice.amount_due);
+  if (found) {
+    const due = Math.max(0, sum);
+    return { due, fee: Math.min(due, Math.max(0, fee)) };
+  }
+  const due = Math.max(0, invoice.amount_due);
+  const feeTotal = invoice.lines.data
+    .filter((line) => line.pricing?.price_details?.product === feeProduct)
+    .reduce((total, line) => total + line.amount, 0);
+  return { due, fee: Math.min(due, Math.max(0, feeTotal)) };
 }
 
-async function previewIncrease(org: OrgRecord, newQuantity: number): Promise<number> {
-  if (newQuantity <= org.paid_quantity) return 0;
+async function previewIncrease(org: OrgRecord, newQuantity: number): Promise<{ due: number; fee: number }> {
+  if (newQuantity <= org.paid_quantity) return { due: 0, fee: 0 };
   if (!org.stripe_customer_id || !org.stripe_subscription_id || !org.stripe_subscription_item_id) {
     throw new BillingHttpError(500, 'The subscription is missing a payment record. Start it again from organization settings.');
   }
@@ -225,11 +304,11 @@ async function previewIncrease(org: OrgRecord, newQuantity: number): Promise<num
     customer: org.stripe_customer_id,
     subscription: org.stripe_subscription_id,
     subscription_details: {
-      items: [{ id: org.stripe_subscription_item_id, quantity: newQuantity }],
+      items: await quantityItems(org, newQuantity),
       proration_behavior: 'always_invoice',
     },
   });
-  return prorationDue(invoice);
+  return prorationDue(invoice, await feeProductId());
 }
 
 async function alignRenewal(orgId: string): Promise<void> {
@@ -286,6 +365,8 @@ async function alignRenewal(orgId: string): Promise<void> {
     await prisma.organization.update({ where: { id: orgId }, data: { stripe_schedule_id: scheduleId } });
   }
 
+  const feePrice = await feePriceFor(unitOf(org));
+  const currentFee = feeItemOf(sub);
   const schedule = await stripe.subscriptionSchedules.retrieve(scheduleId);
   const now = Math.floor(Date.now() / 1000);
   const current = schedule.phases.find((phase) => phase.start_date <= now && phase.end_date > now) ?? schedule.phases[0];
@@ -296,13 +377,19 @@ async function alignRenewal(orgId: string): Promise<void> {
     proration_behavior: 'none',
     phases: [
       {
-        items: [{ price, quantity: paid }],
+        items: [
+          { price, quantity: paid },
+          ...(currentFee ? [{ price: currentFee.price.id, quantity: paid }] : []),
+        ],
         start_date: current.start_date,
         end_date: current.end_date,
         proration_behavior: 'none',
       },
       {
-        items: [{ price, quantity: renewSeats }],
+        items: [
+          { price, quantity: renewSeats },
+          { price: feePrice, quantity: renewSeats },
+        ],
         proration_behavior: 'none',
       },
     ],
@@ -329,7 +416,7 @@ async function raisePaidQuantity(org: OrgRecord, idempotencyKey?: string): Promi
     const updated = await stripe.subscriptions.update(
       org.stripe_subscription_id,
       {
-        items: [{ id: org.stripe_subscription_item_id, quantity: nextPaid }],
+        items: await quantityItems(org, nextPaid),
         proration_behavior: 'always_invoice',
       },
       idempotencyKey ? { idempotencyKey } : undefined,
@@ -411,7 +498,7 @@ async function startSubscription(org: OrgRecord, quantity: number, idempotencyKe
   const subscription = await stripe.subscriptions.create(
     {
       customer: org.stripe_customer_id,
-      items: [{ price: await priceForMonthlyAmount(unitOf(org)), quantity }],
+      items: await subscriptionLineItems(unitOf(org), quantity),
       default_payment_method: card.id,
       payment_behavior: 'error_if_incomplete',
       metadata: { organizationId: org.id },
@@ -453,16 +540,18 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
     const unit = unitOf(org);
     const quantity = Math.max(1, seatCounts(org.stores).seatsInUse + 1);
     const card = await defaultCard(org.stripe_customer_id);
-    const due = unit * quantity;
+    const subtotal = unit * quantity;
+    const fee = processingFeeCents(unit) * quantity;
     if (card) {
       return withInvoice(org, {
         intent: 'add_store',
         needsCharge: true,
         needsCheckout: false,
         message: `Add ${name}. Cost ${money(unit)} a month.`,
-        dueTodayCents: due,
+        dueTodayCents: subtotal + fee,
+        feeCents: fee,
         currentMonthlyCents: 0,
-        newMonthlyCents: due,
+        newMonthlyCents: subtotal,
         periodEnd: null,
       }, name);
     }
@@ -488,9 +577,10 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
       ...quoteBase(org, 0, current),
     }, name);
   }
-  const due = await previewIncrease(org, org.paid_quantity + 1);
+  const { due, fee } = await previewIncrease(org, org.paid_quantity + 1);
   const next = (org.paid_quantity + 1) * unitOf(org);
   return withInvoice(org, {
+    feeCents: fee,
     intent: 'add_store',
     needsCharge: true,
     needsCheckout: false,
@@ -683,9 +773,10 @@ export async function quoteResumeStore(storeId: string): Promise<BillingQuote> {
       ...quoteBase(org, 0, current),
     };
   }
-  const due = await previewIncrease(org, org.paid_quantity + 1);
+  const { due, fee } = await previewIncrease(org, org.paid_quantity + 1);
   const next = (org.paid_quantity + 1) * unitOf(org);
   return {
+    feeCents: fee,
     intent: 'resume_store',
     needsCharge: true,
     needsCheckout: false,
@@ -1030,7 +1121,7 @@ export async function createCheckout(orgId: string, quantity: number): Promise<s
     mode: 'subscription',
     customer: customerId,
     client_reference_id: org.id,
-    line_items: [{ price: await priceForMonthlyAmount(unitOf(org)), quantity }],
+    line_items: await subscriptionLineItems(unitOf(org), quantity),
     success_url: `${appUrl()}/org-settings?billing=success&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${appUrl()}/org-settings?billing=cancel`,
     metadata: { organizationId: org.id },
