@@ -118,6 +118,11 @@ model Store {
   zip_code        String?
   organization_id String?  @db.Uuid
   calendar_feed_token String? @unique
+  // Map pin. geocoded_address is the address (or place id) these coordinates
+  // came from, so an edited address gets looked up again.
+  lat              Float?
+  lng              Float?
+  geocoded_address String?
   billing_status  String   @default("active")
   pause_on        DateTime?
   archived_at     DateTime?
@@ -158,6 +163,11 @@ model Business {
   state      String?
   zip_code   String?
   place_id   String?
+  // Map pin. geocoded_address is the address (or place id) these coordinates
+  // came from, so an edited address gets looked up again.
+  lat              Float?
+  lng              Float?
+  geocoded_address String?
   is_corporate_account Boolean @default(false)
   tax_exempt_number    String?
   card_on_file_last4   String?
@@ -185,6 +195,11 @@ model Opportunity {
   city             String?
   state            String?
   zip_code         String?
+  // Map pin. geocoded_address is the address (or place id) these coordinates
+  // came from, so an edited address gets looked up again.
+  lat              Float?
+  lng              Float?
+  geocoded_address String?
   status           String    @default("new") // new | hold | converted | dismissed
   business_id      String?   @db.Uuid
   created_at       DateTime  @default(now())

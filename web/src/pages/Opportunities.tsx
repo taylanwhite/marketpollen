@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { Opportunity } from '../types';
@@ -10,6 +10,10 @@ import { FilterTypeDialog } from '../components/FilterTypeDialog';
 import { AddToPlanDialog } from '../components/AddToPlanDialog';
 import { useOffline } from '../contexts/OfflineContext';
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
+
+// Leaflet only loads when someone opens the Map tab.
+const MarketMap = lazy(() => import('./MarketMap').then((m) => ({ default: m.MarketMap })));
+const MAP_TAB = 2;
 import {
   Box,
   Typography,
@@ -57,6 +61,8 @@ interface NearbyPlace {
   state?: string;
   zipCode?: string;
   distanceM?: number;
+  lat?: number;
+  lng?: number;
 }
 
 interface NearbyPlacesResponse {
@@ -177,7 +183,19 @@ export function Opportunities() {
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [activeTab, setActiveTab] = useState(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTabState] = useState(() => (searchParams.get('tab') === 'map' ? MAP_TAB : 0));
+  // Keep the Map tab in the URL so a refresh or a shared link lands on it.
+  const setActiveTab = (tab: number) => {
+    setActiveTabState(tab);
+    const next = new URLSearchParams(searchParams);
+    if (tab === MAP_TAB) next.set('tab', 'map');
+    else {
+      next.delete('tab');
+      next.delete('stores');
+    }
+    setSearchParams(next, { replace: true });
+  };
   const [showDismissed, setShowDismissed] = useState(false);
   const [dismissedOpportunities, setDismissedOpportunities] = useState<Opportunity[]>([]);
   const [heldOpportunities, setHeldOpportunities] = useState<Opportunity[]>([]);
@@ -454,6 +472,8 @@ export function Opportunities() {
           city: p.city,
           state: p.state,
           zipCode: p.zipCode,
+          lat: p.lat,
+          lng: p.lng,
         })),
       });
       setSuccess(`Added ${toAdd.length} opportunity(ies).`);
@@ -665,6 +685,7 @@ export function Opportunities() {
         >
           <Tab label="Opportunities" />
           <Tab label={isMobile ? 'Generate' : 'Generate Opportunities'} />
+          <Tab label="Map" />
         </Tabs>
 
         <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
@@ -1294,6 +1315,18 @@ export function Opportunities() {
                 </Box>
               )}
             </>
+          )}
+
+          {activeTab === MAP_TAB && (
+            <Suspense
+              fallback={(
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+                  <CircularProgress />
+                </Box>
+              )}
+            >
+              <MarketMap embedded onOpenOpportunities={() => setActiveTab(0)} />
+            </Suspense>
           )}
         </Box>
       </Paper>

@@ -10,6 +10,8 @@ const EXPANDED_RADIUS_M = Math.round(25 * METERS_PER_MILE);
 const MAX_RADIUS_M = Math.round(50 * METERS_PER_MILE);
 const SEARCH_RADII_M = [NEARBY_RADIUS_M, EXPANDED_RADIUS_M, MAX_RADIUS_M] as const;
 const MAX_RESULTS = 20;
+// Smallest area the map's "Search this area" will search.
+const MIN_AREA_RADIUS_M = 400;
 const SAME_LOCATION_THRESHOLD_M = 50; // Filter out places within 50m of search center
 // Nearby Search (New) only accepts a circular radius up to 50km.
 const MAX_NEARBY_RADIUS_M = 50_000;
@@ -251,16 +253,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: 'Google Places API key is not configured' });
   }
 
-  const body = req.body as { storeId: string; address?: string; lat?: number; lng?: number; textQuery?: string; pageToken?: string; radiusM?: number };
+  // `exactRadius` is the Map tab's "Search this area": search only the circle
+  // on screen, at any size, and never widen it.
+  const body = req.body as { storeId: string; address?: string; lat?: number; lng?: number; textQuery?: string; pageToken?: string; radiusM?: number; exactRadius?: boolean };
+  const exactRadius = body?.exactRadius === true && typeof body.radiusM === 'number' && Number.isFinite(body.radiusM);
   const storeId = body?.storeId?.trim();
   const textQuery = body?.textQuery?.trim();
   // Google Places v1 Text Search returns up to 20 results per call and a
   // nextPageToken we can echo back (up to 60 total). Nearby Search does
   // not paginate. The token is opaque and short-lived (~2min).
   const pageToken = typeof body?.pageToken === 'string' ? body.pageToken.trim() : '';
-  const requestedRadiusM = typeof body.radiusM === 'number' && SEARCH_RADII_M.includes(body.radiusM as typeof SEARCH_RADII_M[number])
-    ? body.radiusM
-    : NEARBY_RADIUS_M;
+  const requestedRadiusM = exactRadius
+    ? Math.round(Math.min(Math.max(body.radiusM!, MIN_AREA_RADIUS_M), MAX_RADIUS_M))
+    : typeof body.radiusM === 'number' && SEARCH_RADII_M.includes(body.radiusM as typeof SEARCH_RADII_M[number])
+      ? body.radiusM
+      : NEARBY_RADIUS_M;
   console.log('places-nearby request:', { storeId, textQuery, address: body.address, lat: body.lat, lng: body.lng, hasPageToken: !!pageToken, requestedRadiusM });
   if (!storeId) return res.status(400).json({ error: 'storeId required' });
 
@@ -322,7 +329,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let places: any[] = [];
     let nextPageToken: string | undefined;
 
-    const out: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; distanceM?: number }> = [];
+    const out: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; distanceM?: number; lat?: number; lng?: number }> = [];
     const addFilteredPlaces = (sourcePlaces: any[], maxDistanceM: number) => {
       for (const p of sourcePlaces) {
         const placeId = placeIdFromName(p.name) || placeIdFromName(p.id) || (p.id && typeof p.id === 'string' ? p.id.replace(/^places\//, '') : null);
@@ -344,7 +351,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const name = p.displayName?.text || p.displayName || 'Unknown';
         const address = p.formattedAddress || undefined;
         const { city, state, zipCode } = parseAddressComponents(p.addressComponents);
-        out.push({ placeId, name, address, city, state, zipCode, distanceM });
+        out.push({ placeId, name, address, city, state, zipCode, distanceM, lat: placeLat, lng: placeLng });
       }
     };
 
@@ -363,7 +370,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const useNearbySearch = !pageToken && (mappedTypes != null || !textQuery);
     const includedTypes = mappedTypes || DEFAULT_BUSINESS_TYPES;
     const searchTerm = textQuery || 'business';
-    const radiiToTry = pageToken
+    const radiiToTry = pageToken || exactRadius
       ? [requestedRadiusM]
       : SEARCH_RADII_M.filter((radiusM) => radiusM >= requestedRadiusM);
     let searchRadiusM = requestedRadiusM;

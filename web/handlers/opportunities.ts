@@ -1,5 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
+import { locationKey } from './lib/map-geocode.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore, readableStoreScope, rejectIfStoreLocked, storeIdWhere } from './lib/store-access.js';
 
@@ -49,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (await rejectIfStoreLocked(res, storeId, uid)) return;
 
     const body = req.body as {
-      opportunities: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string }>;
+      opportunities: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; lat?: number; lng?: number }>;
     };
     if (!Array.isArray(body?.opportunities) || body.opportunities.length === 0) {
       return res.status(400).json({ error: 'opportunities array is required' });
@@ -57,6 +58,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const inserted: ReturnType<typeof toOpportunityJson>[] = [];
     for (const opp of body.opportunities) {
       if (!opp?.placeId || typeof opp.placeId !== 'string' || !opp?.name || typeof opp.name !== 'string') continue;
+      // Google already gave us the location, so the map doesn't need to look it up.
+      const hasCoords = Number.isFinite(opp.lat) && Number.isFinite(opp.lng);
       try {
         const row = await prisma.opportunity.create({
           data: {
@@ -67,6 +70,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             city: opp.city ?? null,
             state: opp.state ?? null,
             zip_code: opp.zipCode ?? null,
+            ...(hasCoords
+              ? { lat: opp.lat, lng: opp.lng, geocoded_address: locationKey({ place_id: opp.placeId }, true) }
+              : {}),
             status: 'new',
             created_by: uid,
           },

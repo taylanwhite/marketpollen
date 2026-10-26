@@ -87,6 +87,7 @@ function AppRoutes() {
                 </ProtectedRoute>
               }
             />
+            <Route path="/map" element={<Navigate to="/opportunities?tab=map" replace />} />
             <Route
               path="/calendar"
               element={
