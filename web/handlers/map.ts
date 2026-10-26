@@ -3,7 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { readableStoreScope, storeIdWhere } from './lib/store-access.js';
 import { personName } from './lib/contact-json.js';
-import { geocodeKey, locationKey, runLimited } from './lib/map-geocode.js';
+import { geocodeKey, locationKey, metersBetween, runLimited, type Coords } from './lib/map-geocode.js';
 
 /** Visit types in the order the map's `visits` tuples refer to them. */
 const VISIT_TYPES = ['meeting', 'call', 'email', 'text', 'other'] as const;
@@ -15,6 +15,11 @@ const VISIT_TYPES = ['meeting', 'call', 'email', 'text', 'other'] as const;
  */
 const MAX_LOOKUPS_PER_REQUEST = 150;
 const LOOKUP_CONCURRENCY = 10;
+/**
+ * A business or opportunity this far from its own store is a bad address match
+ * (e.g. "123 Main St" with no city landing in another state), so it isn't drawn.
+ */
+const FAR_FROM_STORE_M = 120_000; // about 75 miles
 
 type GeoRow = {
   id: string;
@@ -23,7 +28,7 @@ type GeoRow = {
   geocoded_address: string | null;
 };
 
-type Lookup = { table: 'store' | 'business' | 'opportunity'; row: GeoRow; key: string };
+type Lookup = { table: 'store' | 'business' | 'opportunity'; row: GeoRow; key: string; query?: string; near?: Coords };
 
 function needsLookup(row: GeoRow, key: string | null): key is string {
   return key != null && row.geocoded_address !== key;
@@ -117,50 +122,85 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Look up coordinates that are missing or out of date. Stores first, then
   // businesses that have been visited, then the rest, then opportunities.
   const storeKeys = new Map(stores.map((s) => [s.id, locationKey(s)]));
-  const businessKeys = new Map(businesses.map((b) => [b.id, locationKey(b)]));
+  // A Google place ID points at the exact place, so it wins over a typed address.
+  const businessKeys = new Map(businesses.map((b) => [b.id, locationKey(b, true)]));
   const opportunityKeys = new Map(opportunities.map((o) => [o.id, locationKey(o, true)]));
 
-  const lookups: Lookup[] = [];
-  for (const s of stores) {
-    const key = storeKeys.get(s.id) ?? null;
-    if (needsLookup(s, key)) lookups.push({ table: 'store', row: s, key });
-  }
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  let budget = apiKey ? MAX_LOOKUPS_PER_REQUEST : 0;
+  let pending = 0;
+
+  const runLookups = async (lookups: Lookup[]) => {
+    const batch = lookups.slice(0, budget);
+    budget -= batch.length;
+    pending += lookups.length - batch.length;
+    await runLimited(batch, LOOKUP_CONCURRENCY, async ({ table, row, key, query, near }) => {
+      const isFar = (c: Coords | null) => !!c && !!near && metersBetween(c, near) > FAR_FROM_STORE_M;
+      let coords = await geocodeKey(key, apiKey!, { query, near });
+      if (coords === 'retry') {
+        pending += 1;
+        return;
+      }
+      // Still far from the store: treat it as not found so it isn't drawn or retried.
+      if (isFar(coords)) coords = null;
+      const data = { lat: coords?.lat ?? null, lng: coords?.lng ?? null, geocoded_address: key };
+      try {
+        if (table === 'store') await prisma.store.update({ where: { id: row.id }, data });
+        else if (table === 'business') await prisma.business.update({ where: { id: row.id }, data });
+        else await prisma.opportunity.update({ where: { id: row.id }, data });
+        Object.assign(row, data);
+      } catch (err) {
+        // The row may have been deleted while we looked it up.
+        console.error('Map coordinate save failed:', table, row.id, (err as Error)?.message);
+      }
+    });
+  };
+
+  // Stores first: every other pin is checked against its store's location.
+  await runLookups(
+    stores.flatMap((s) => {
+      const key = storeKeys.get(s.id) ?? null;
+      return needsLookup(s, key) ? [{ table: 'store' as const, row: s, key }] : [];
+    }),
+  );
+  const storeById = new Map(stores.map((s) => [s.id, s]));
+  const storeSpot = (storeId: string): Coords | undefined => {
+    const s = storeById.get(storeId);
+    return s && placed(s, storeKeys.get(s.id) ?? null) ? { lat: s.lat!, lng: s.lng! } : undefined;
+  };
+  const farFromStore = (row: GeoRow & { store_id: string }): boolean => {
+    const near = storeSpot(row.store_id);
+    return !!near && row.lat != null && row.lng != null && metersBetween({ lat: row.lat, lng: row.lng }, near) > FAR_FROM_STORE_M;
+  };
+
+  /** Lookup for a business or opportunity: missing, out of date, or placed far from its store. */
+  const lookupFor = (
+    table: 'business' | 'opportunity',
+    row: GeoRow & { store_id: string; city: string | null; zip_code: string | null },
+    key: string | null,
+  ): Lookup[] => {
+    if (key == null) return [];
+    if (!needsLookup(row, key) && !(placed(row, key) && farFromStore(row))) return [];
+    const near = storeSpot(row.store_id);
+    const store = storeById.get(row.store_id);
+    // An address with no city or ZIP is looked up in the store's town.
+    const query = !key.startsWith('place:') && !row.city && !row.zip_code && store?.city
+      ? [key, store.city, store.state].filter(Boolean).join(', ')
+      : undefined;
+    return [{ table, row, key, query, near }];
+  };
+
+  // Businesses that have been visited first, then the rest, then opportunities.
   const visitedFirst = [...businesses].sort(
     (a, b) => Number(visitsByBusiness.has(b.id)) - Number(visitsByBusiness.has(a.id)),
   );
-  for (const b of visitedFirst) {
-    const key = businessKeys.get(b.id) ?? null;
-    if (needsLookup(b, key)) lookups.push({ table: 'business', row: b, key });
-  }
-  for (const o of opportunities) {
-    const key = opportunityKeys.get(o.id) ?? null;
-    if (needsLookup(o, key)) lookups.push({ table: 'opportunity', row: o, key });
-  }
+  await runLookups([
+    ...visitedFirst.flatMap((b) => lookupFor('business', b, businessKeys.get(b.id) ?? null)),
+    ...opportunities.flatMap((o) => lookupFor('opportunity', o, opportunityKeys.get(o.id) ?? null)),
+  ]);
 
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-  const batch = apiKey ? lookups.slice(0, MAX_LOOKUPS_PER_REQUEST) : [];
-  let retryLater = 0;
-  await runLimited(batch, LOOKUP_CONCURRENCY, async ({ table, row, key }) => {
-    const coords = await geocodeKey(key, apiKey!);
-    if (coords === 'retry') {
-      retryLater += 1;
-      return;
-    }
-    const data = { lat: coords?.lat ?? null, lng: coords?.lng ?? null, geocoded_address: key };
-    try {
-      if (table === 'store') await prisma.store.update({ where: { id: row.id }, data });
-      else if (table === 'business') await prisma.business.update({ where: { id: row.id }, data });
-      else await prisma.opportunity.update({ where: { id: row.id }, data });
-      Object.assign(row, data);
-    } catch (err) {
-      // The row may have been deleted while we looked it up.
-      console.error('Map coordinate save failed:', table, row.id, (err as Error)?.message);
-    }
-  });
-  const pending = lookups.length - batch.length + retryLater;
-
-  const placedBusinesses = businesses.filter((b) => placed(b, businessKeys.get(b.id) ?? null));
-  const placedOpportunities = opportunities.filter((o) => placed(o, opportunityKeys.get(o.id) ?? null));
+  const placedBusinesses = businesses.filter((b) => placed(b, businessKeys.get(b.id) ?? null) && !farFromStore(b));
+  const placedOpportunities = opportunities.filter((o) => placed(o, opportunityKeys.get(o.id) ?? null) && !farFromStore(o));
 
   const address = (row: { address: string | null; city: string | null; state: string | null; zip_code: string | null }) =>
     [row.address, row.city, row.state, row.zip_code].filter(Boolean).join(', ') || undefined;
