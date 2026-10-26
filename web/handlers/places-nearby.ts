@@ -19,6 +19,8 @@ const MAX_NEARBY_RADIUS_M = 50_000;
 const RING_FRACTIONS = [0.25, 0.55];
 const RING_BEARINGS_DEG = [0, 60, 120, 180, 240, 300];
 const MAX_RETURNED = 40;
+// Text Search pages hold 20 results and stop after 3 pages.
+const MAX_TEXT_EXTRA_PAGES = 2;
 
 type GooglePlace = {
   id?: string;
@@ -64,6 +66,11 @@ const DENTIST_TYPES = ['dentist', 'dental_clinic'];
 const UI_TYPE_TO_PLACES_TYPES: Record<string, string[]> = {
   // Quick chips
   'real estate office': ['real_estate_agency'],
+  'real estate': ['real_estate_agency'],
+  'real estate agent': ['real_estate_agency'],
+  'real estate agents': ['real_estate_agency'],
+  'realtor': ['real_estate_agency'],
+  'realtors': ['real_estate_agency'],
   'law firm': ['lawyer'],
   'event venue': ['event_venue'],
   'hospital': ['hospital'],
@@ -422,32 +429,70 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (out.length > 0) break;
       } else {
         console.log('Using TEXT SEARCH with query:', searchTerm, `${radiusM}m`, pageToken ? '(page 2+)' : '(fresh search)');
-        const reqBody: Record<string, unknown> = {
-          textQuery: searchTerm,
-          locationRestriction: {
-            rectangle: buildBoundingBox(lat!, lng!, radiusM),
-          },
-          maxResultCount: MAX_RESULTS,
-          rankPreference: 'DISTANCE',
-        };
-        // Google requires the original textQuery + location restriction on every
-        // page request, AND the pageToken. Sending the token alone returns an error.
-        if (pageToken) reqBody.pageToken = pageToken;
-        const textRes = await axios.post(
-          `${PLACES_API}:searchText`,
-          reqBody,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Goog-Api-Key': apiKey,
-              'X-Goog-FieldMask': `${PLACE_FIELDS},nextPageToken`,
+        const searchTextFrom = async (
+          centerLat: number,
+          centerLng: number,
+          token?: string,
+        ): Promise<{ places: GooglePlace[]; nextPageToken?: string }> => {
+          const reqBody: Record<string, unknown> = {
+            textQuery: searchTerm,
+            locationRestriction: {
+              rectangle: buildBoundingBox(centerLat, centerLng, radiusM),
             },
-          }
-        );
-        places = textRes.data?.places || [];
-        nextPageToken = textRes.data?.nextPageToken || undefined;
+            maxResultCount: MAX_RESULTS,
+            rankPreference: 'DISTANCE',
+          };
+          // Google requires the original textQuery + location restriction on every
+          // page request, AND the pageToken. Sending the token alone returns an error.
+          if (token) reqBody.pageToken = token;
+          const textRes = await axios.post(
+            `${PLACES_API}:searchText`,
+            reqBody,
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Goog-Api-Key': apiKey,
+                'X-Goog-FieldMask': `${PLACE_FIELDS},nextPageToken`,
+              },
+            }
+          );
+          return { places: textRes.data?.places || [], nextPageToken: textRes.data?.nextPageToken || undefined };
+        };
+
+        const first = await searchTextFrom(lat!, lng!, pageToken || undefined);
+        places = first.places;
+        nextPageToken = first.nextPageToken;
         addFilteredPlaces(places, radiusM);
-        if (out.length > 0 || pageToken) break;
+        if (pageToken) break;
+
+        // The closest matches are often already taken in the organization.
+        // Keep reading Google's next pages (up to 60 total) before giving up.
+        let extraPages = 0;
+        while (out.length < MAX_RESULTS && nextPageToken && extraPages < MAX_TEXT_EXTRA_PAGES) {
+          extraPages += 1;
+          const page = await searchTextFrom(lat!, lng!, nextPageToken);
+          nextPageToken = page.nextPageToken;
+          addFilteredPlaces(page.places, radiusM);
+        }
+
+        // Still short and Google ran out of pages: search again from points
+        // around the store to reach places past Google's 60-result limit.
+        if (out.length < MAX_RESULTS && !nextPageToken && places.length === MAX_RESULTS) {
+          for (const fraction of RING_FRACTIONS) {
+            const ringResults = await Promise.all(
+              RING_BEARINGS_DEG.map((bearing) => {
+                const point = offsetPoint(lat!, lng!, radiusM * fraction, bearing);
+                return searchTextFrom(point.lat, point.lng).catch((err) => {
+                  console.error('Ring text search failed:', err?.response?.data || err?.message);
+                  return { places: [] as GooglePlace[] };
+                });
+              })
+            );
+            for (const ring of ringResults) addFilteredPlaces(ring.places, radiusM);
+            if (out.length >= MAX_RESULTS) break;
+          }
+        }
+        if (out.length > 0) break;
       }
     }
 
