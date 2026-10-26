@@ -13,6 +13,21 @@ const MAX_RESULTS = 20;
 const SAME_LOCATION_THRESHOLD_M = 50; // Filter out places within 50m of search center
 // Nearby Search (New) only accepts a circular radius up to 50km.
 const MAX_NEARBY_RADIUS_M = 50_000;
+// Nearby Search only returns the 20 closest places. When those are already
+// businesses or opportunities somewhere in the organization, search again from
+// points spread around the store so places farther out still show up.
+const RING_FRACTIONS = [0.25, 0.55];
+const RING_BEARINGS_DEG = [0, 60, 120, 180, 240, 300];
+const MAX_RETURNED = 40;
+
+type GooglePlace = {
+  id?: string;
+  name?: string;
+  displayName?: { text?: string } | string;
+  formattedAddress?: string;
+  addressComponents?: Array<{ longText?: string; shortText?: string; types?: string[] }>;
+  location?: { latitude?: number; longitude?: number };
+};
 
 const PLACES_API = 'https://places.googleapis.com/v1/places';
 const PLACE_FIELDS = 'places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location';
@@ -149,6 +164,21 @@ function buildBoundingBox(lat: number, lng: number, radiusM: number) {
       longitude: lng + lngDelta,
     },
   };
+}
+
+/** The point `distanceM` meters from (lat, lng) in the given compass direction. */
+function offsetPoint(lat: number, lng: number, distanceM: number, bearingDeg: number) {
+  const R = 6371000;
+  const bearing = bearingDeg * Math.PI / 180;
+  const lat1 = lat * Math.PI / 180;
+  const lng1 = lng * Math.PI / 180;
+  const angular = distanceM / R;
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(angular) + Math.cos(lat1) * Math.sin(angular) * Math.cos(bearing));
+  const lng2 = lng1 + Math.atan2(
+    Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1),
+    Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2),
+  );
+  return { lat: lat2 * 180 / Math.PI, lng: lng2 * 180 / Math.PI };
 }
 
 /** Calculate distance between two lat/lng points in meters using Haversine formula */
@@ -341,37 +371,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           mappedTypes ? `(mapped "${textQuery}" -> ${includedTypes.join(',')})` : '(no text query, default types)',
           `${nearbyRadiusM}m`
         );
-        const nearbyRes = await axios.post(
-          `${PLACES_API}:searchNearby`,
-          {
-            locationRestriction: {
-              circle: {
-                center: { latitude: lat, longitude: lng },
-                radius: nearbyRadiusM,
+        const searchNearbyFrom = async (centerLat: number, centerLng: number): Promise<GooglePlace[]> => {
+          const nearbyRes = await axios.post(
+            `${PLACES_API}:searchNearby`,
+            {
+              locationRestriction: {
+                circle: {
+                  center: { latitude: centerLat, longitude: centerLng },
+                  radius: nearbyRadiusM,
+                },
               },
+              maxResultCount: MAX_RESULTS,
+              rankPreference: 'DISTANCE',
+              includedTypes,
             },
-            maxResultCount: MAX_RESULTS,
-            rankPreference: 'DISTANCE',
-            includedTypes,
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Goog-Api-Key': apiKey,
-              // nextPageToken is invalid on searchNearby and Google rejects
-              // the request if it appears in the field mask.
-              'X-Goog-FieldMask': PLACE_FIELDS,
-            },
-          }
-        );
-        places = nearbyRes.data?.places || [];
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Goog-Api-Key': apiKey,
+                // nextPageToken is invalid on searchNearby and Google rejects
+                // the request if it appears in the field mask.
+                'X-Goog-FieldMask': PLACE_FIELDS,
+              },
+            }
+          );
+          return nearbyRes.data?.places || [];
+        };
+
+        places = await searchNearbyFrom(lat!, lng!);
         nextPageToken = undefined;
         addFilteredPlaces(places, nearbyRadiusM);
+
+        // A full page means there are more places past the closest 20.
+        // Search from rings of points around the store until we have a full list.
+        if (out.length < MAX_RESULTS && places.length === MAX_RESULTS) {
+          for (const fraction of RING_FRACTIONS) {
+            const ringResults = await Promise.all(
+              RING_BEARINGS_DEG.map((bearing) => {
+                const point = offsetPoint(lat!, lng!, nearbyRadiusM * fraction, bearing);
+                return searchNearbyFrom(point.lat, point.lng).catch((err) => {
+                  console.error('Ring nearby search failed:', err?.response?.data || err?.message);
+                  return [] as GooglePlace[];
+                });
+              })
+            );
+            for (const ringPlaces of ringResults) addFilteredPlaces(ringPlaces, nearbyRadiusM);
+            if (out.length >= MAX_RESULTS) break;
+          }
+        }
         if (out.length > 0) break;
-        // DISTANCE rank always returns the closest N. If we already got a
-        // full page and every hit was an existing business/opportunity,
-        // a larger radius returns the same N.
-        if (places.length === MAX_RESULTS) break;
       } else {
         console.log('Using TEXT SEARCH with query:', searchTerm, `${radiusM}m`, pageToken ? '(page 2+)' : '(fresh search)');
         const reqBody: Record<string, unknown> = {
@@ -406,7 +454,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Sort by distance
     out.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity));
     return res.status(200).json({
-      places: out,
+      places: out.slice(0, MAX_RETURNED),
       nextPageToken,
       searchRadiusM,
       expanded: !pageToken && searchRadiusM > requestedRadiusM,
