@@ -49,7 +49,9 @@ async function loadOrg(orgId: string) {
   return prisma.organization.findUnique({
     where: { id: orgId },
     include: {
+      // Demo stores are free, so every seat count and charge leaves them out.
       stores: {
+        where: { is_demo: false },
         select: { id: true, name: true, billing_status: true, pause_on: true, archived_at: true },
         orderBy: { name: 'asc' },
       },
@@ -650,6 +652,7 @@ export async function afterStoreDeleted(orgId: string | null, previousStatus: st
 
 export async function quotePauseStore(storeId: string): Promise<BillingQuote> {
   const store = await prisma.store.findUnique({ where: { id: storeId } });
+  if (store?.is_demo) throw new BillingHttpError(400, `${store.name} is a demo store, so it isn't billed.`);
   if (!store?.organization_id) {
     throw new BillingHttpError(400, 'Pause is available once this organization has a subscription.');
   }
@@ -700,6 +703,7 @@ export async function pauseStore(storeId: string): Promise<BillingQuote> {
 
 export async function quoteKeepOpen(storeId: string): Promise<BillingQuote> {
   const store = await prisma.store.findUnique({ where: { id: storeId } });
+  if (store?.is_demo) throw new BillingHttpError(400, `${store.name} is a demo store, so it isn't billed.`);
   if (!store?.organization_id) throw new BillingHttpError(404, 'Store not found');
   await settleDuePauses(store.organization_id);
   const org = await loadOrg(store.organization_id);
@@ -745,6 +749,7 @@ export async function keepStoreOpen(storeId: string): Promise<BillingQuote> {
 
 export async function quoteResumeStore(storeId: string): Promise<BillingQuote> {
   const store = await prisma.store.findUnique({ where: { id: storeId } });
+  if (store?.is_demo) throw new BillingHttpError(400, `${store.name} is a demo store, so it isn't billed.`);
   if (!store?.organization_id) throw new BillingHttpError(404, 'Store not found');
   await settleDuePauses(store.organization_id);
   const org = await loadOrg(store.organization_id);
@@ -895,7 +900,7 @@ export async function archiveStore(storeId: string): Promise<BillingQuote> {
   const quote = await quoteArchiveStore(storeId);
   const store = await prisma.store.findUnique({ where: { id: storeId } });
   if (!store) throw new BillingHttpError(404, 'Store not found');
-  if (store.organization_id && store.billing_status === 'active') {
+  if (store.organization_id && store.billing_status === 'active' && !store.is_demo) {
     const org = await loadOrg(store.organization_id);
     if (org?.billing_enabled && org.subscription_status === 'active') {
       await setRenewal(org.id, org.paid_quantity, scheduledRenewal(org) - 1);

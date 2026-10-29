@@ -38,6 +38,7 @@ interface PlatformOrg {
   id: string;
   name: string;
   storeCount: number;
+  demoStoreCount?: number;
   monthlyPriceCents: number;
   billingEnabled: boolean;
   subscriptionStatus: string | null;
@@ -316,7 +317,12 @@ export function Platform() {
                             {org.name}
                           </Button>
                         </TableCell>
-                        <TableCell>{org.storeCount}</TableCell>
+                        <TableCell>
+                          {org.storeCount}
+                          {!!org.demoStoreCount && (
+                            <Typography component="span" variant="caption" color="text.secondary"> + {org.demoStoreCount} demo</Typography>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <TextField
                             size="small"

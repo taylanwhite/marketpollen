@@ -222,6 +222,43 @@ function placeIdFromName(name: string | undefined): string | null {
   return name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
 
+const MAX_ZIP_CODES = 10;
+const ZIPS_IN_PARALLEL = 3;
+// A zip's search circle covers its whole area, within these limits.
+const MIN_ZIP_RADIUS_M = 1500;
+const MAX_ZIP_RADIUS_M = Math.round(15 * METERS_PER_MILE);
+
+/** "84095, 84096 84020" or ["84095"] -> unique 5-digit zips, in order. */
+function parseZipCodes(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value.join(' ') : typeof value === 'string' ? value : '';
+  const zips = raw.match(/\b\d{5}\b/g) || [];
+  return [...new Set(zips)].slice(0, MAX_ZIP_CODES);
+}
+
+/** The center of a US zip code and a radius that reaches its corners. */
+async function zipArea(zip: string, apiKey: string): Promise<{ lat: number; lng: number; radiusM: number } | null> {
+  try {
+    const geoRes = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
+      params: { components: `postal_code:${zip}|country:US`, key: apiKey },
+    });
+    const result = geoRes.data?.results?.[0];
+    const loc = result?.geometry?.location;
+    if (!loc || !(result.types || []).includes('postal_code')) return null;
+    const box = result.geometry.bounds || result.geometry.viewport;
+    let radiusM = MIN_ZIP_RADIUS_M;
+    if (box?.northeast && box?.southwest) {
+      radiusM = Math.max(
+        distanceMeters(loc.lat, loc.lng, box.northeast.lat, box.northeast.lng),
+        distanceMeters(loc.lat, loc.lng, box.southwest.lat, box.southwest.lng),
+      );
+    }
+    return { lat: loc.lat, lng: loc.lng, radiusM: Math.round(Math.min(Math.max(radiusM, MIN_ZIP_RADIUS_M), MAX_ZIP_RADIUS_M)) };
+  } catch (err: any) {
+    console.error('Zip geocode error:', zip, err?.response?.data || err?.message);
+    return null;
+  }
+}
+
 /**
  * Stores in the same organization share a prospect pool: a dentist already
  * being worked (or already a customer) at West Jordan should not reappear
@@ -255,7 +292,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // `exactRadius` is the Map tab's "Search this area": search only the circle
   // on screen, at any size, and never widen it.
-  const body = req.body as { storeId: string; address?: string; lat?: number; lng?: number; textQuery?: string; pageToken?: string; radiusM?: number; exactRadius?: boolean };
+  const body = req.body as { storeId: string; address?: string; lat?: number; lng?: number; textQuery?: string; pageToken?: string; radiusM?: number; exactRadius?: boolean; zipCodes?: unknown };
+  const zipCodes = parseZipCodes(body?.zipCodes);
   const exactRadius = body?.exactRadius === true && typeof body.radiusM === 'number' && Number.isFinite(body.radiusM);
   const storeId = body?.storeId?.trim();
   const textQuery = body?.textQuery?.trim();
@@ -268,7 +306,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     : typeof body.radiusM === 'number' && SEARCH_RADII_M.includes(body.radiusM as typeof SEARCH_RADII_M[number])
       ? body.radiusM
       : NEARBY_RADIUS_M;
-  console.log('places-nearby request:', { storeId, textQuery, address: body.address, lat: body.lat, lng: body.lng, hasPageToken: !!pageToken, requestedRadiusM });
+  console.log('places-nearby request:', { storeId, textQuery, zipCodes, address: body.address, lat: body.lat, lng: body.lng, hasPageToken: !!pageToken, requestedRadiusM });
   if (!storeId) return res.status(400).json({ error: 'storeId required' });
 
   const can = await canViewStore(uid, storeId);
@@ -276,7 +314,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let lat = body.lat;
   let lng = body.lng;
-  if (lat == null || lng == null) {
+  if (zipCodes.length === 0 && (lat == null || lng == null)) {
     const address = body.address?.trim();
     if (!address) return res.status(400).json({ error: 'address or lat/lng required' });
     try {
@@ -325,23 +363,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ...oppRows.map((r) => r.place_id),
   ]);
 
-  try {
+  type OutPlace = { placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; distanceM?: number; lat?: number; lng?: number };
+
+  /**
+   * Search around one center point and return places not yet in the
+   * organization. `onlyZip` keeps just the places inside that zip code.
+   */
+  const searchFrom = async (
+    centerLat: number,
+    centerLng: number,
+    radiiToTry: number[],
+    opts: { pageToken?: string; onlyZip?: string; skipStoreSpot?: boolean } = {},
+  ): Promise<{ out: OutPlace[]; nextPageToken?: string; searchRadiusM: number }> => {
     let places: any[] = [];
     let nextPageToken: string | undefined;
 
-    const out: Array<{ placeId: string; name: string; address?: string; city?: string; state?: string; zipCode?: string; distanceM?: number; lat?: number; lng?: number }> = [];
+    const out: OutPlace[] = [];
     const addFilteredPlaces = (sourcePlaces: any[], maxDistanceM: number) => {
       for (const p of sourcePlaces) {
         const placeId = placeIdFromName(p.name) || placeIdFromName(p.id) || (p.id && typeof p.id === 'string' ? p.id.replace(/^places\//, '') : null);
         if (!placeId || existingSet.has(placeId)) continue;
 
+        const { city, state, zipCode } = parseAddressComponents(p.addressComponents);
+        if (opts.onlyZip && zipCode?.slice(0, 5) !== opts.onlyZip) continue;
+
         const placeLat = p.location?.latitude;
         const placeLng = p.location?.longitude;
         let distanceM: number | undefined;
-        if (placeLat != null && placeLng != null && lat != null && lng != null) {
-          distanceM = distanceMeters(lat, lng, placeLat, placeLng);
+        if (placeLat != null && placeLng != null) {
+          distanceM = distanceMeters(centerLat, centerLng, placeLat, placeLng);
           // Filter out places at or very near the search location (the store's own address).
-          if (distanceM < SAME_LOCATION_THRESHOLD_M) continue;
+          if (!opts.skipStoreSpot && distanceM < SAME_LOCATION_THRESHOLD_M) continue;
           // Keep a true circular radius. Text Search uses a bounding box whose
           // corners sit ~1.41× farther than the requested miles.
           if (distanceM > maxDistanceM) continue;
@@ -350,7 +402,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         existingSet.add(placeId);
         const name = p.displayName?.text || p.displayName || 'Unknown';
         const address = p.formattedAddress || undefined;
-        const { city, state, zipCode } = parseAddressComponents(p.addressComponents);
         out.push({ placeId, name, address, city, state, zipCode, distanceM, lat: placeLat, lng: placeLng });
       }
     };
@@ -366,32 +417,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // *new* results after excluding existing businesses/opportunities,
     // widen 10mi → 25mi → 50mi. Pagination must keep the radius that
     // produced the page token or Google rejects it.
+    const token = opts.pageToken || '';
     const mappedTypes = mapQueryToPlaceTypes(textQuery);
-    const useNearbySearch = !pageToken && (mappedTypes != null || !textQuery);
+    const useNearbySearch = !token && (mappedTypes != null || !textQuery);
     const includedTypes = mappedTypes || DEFAULT_BUSINESS_TYPES;
     const searchTerm = textQuery || 'business';
-    const radiiToTry = pageToken || exactRadius
-      ? [requestedRadiusM]
-      : SEARCH_RADII_M.filter((radiusM) => radiusM >= requestedRadiusM);
-    let searchRadiusM = requestedRadiusM;
+    let searchRadiusM = radiiToTry[0];
 
     for (const radiusM of radiiToTry) {
       searchRadiusM = radiusM;
 
       if (useNearbySearch) {
         const nearbyRadiusM = Math.min(radiusM, MAX_NEARBY_RADIUS_M);
-        console.log(
-          'Using NEARBY SEARCH',
-          mappedTypes ? `(mapped "${textQuery}" -> ${includedTypes.join(',')})` : '(no text query, default types)',
-          `${nearbyRadiusM}m`
-        );
-        const searchNearbyFrom = async (centerLat: number, centerLng: number): Promise<GooglePlace[]> => {
+        const searchNearbyFrom = async (fromLat: number, fromLng: number): Promise<GooglePlace[]> => {
           const nearbyRes = await axios.post(
             `${PLACES_API}:searchNearby`,
             {
               locationRestriction: {
                 circle: {
-                  center: { latitude: centerLat, longitude: centerLng },
+                  center: { latitude: fromLat, longitude: fromLng },
                   radius: nearbyRadiusM,
                 },
               },
@@ -412,17 +456,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return nearbyRes.data?.places || [];
         };
 
-        places = await searchNearbyFrom(lat!, lng!);
+        places = await searchNearbyFrom(centerLat, centerLng);
         nextPageToken = undefined;
         addFilteredPlaces(places, nearbyRadiusM);
 
         // A full page means there are more places past the closest 20.
-        // Search from rings of points around the store until we have a full list.
+        // Search from rings of points around the center until we have a full list.
         if (out.length < MAX_RESULTS && places.length === MAX_RESULTS) {
           for (const fraction of RING_FRACTIONS) {
             const ringResults = await Promise.all(
               RING_BEARINGS_DEG.map((bearing) => {
-                const point = offsetPoint(lat!, lng!, nearbyRadiusM * fraction, bearing);
+                const point = offsetPoint(centerLat, centerLng, nearbyRadiusM * fraction, bearing);
                 return searchNearbyFrom(point.lat, point.lng).catch((err) => {
                   console.error('Ring nearby search failed:', err?.response?.data || err?.message);
                   return [] as GooglePlace[];
@@ -435,23 +479,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         if (out.length > 0) break;
       } else {
-        console.log('Using TEXT SEARCH with query:', searchTerm, `${radiusM}m`, pageToken ? '(page 2+)' : '(fresh search)');
         const searchTextFrom = async (
-          centerLat: number,
-          centerLng: number,
-          token?: string,
+          fromLat: number,
+          fromLng: number,
+          pageTok?: string,
         ): Promise<{ places: GooglePlace[]; nextPageToken?: string }> => {
           const reqBody: Record<string, unknown> = {
             textQuery: searchTerm,
             locationRestriction: {
-              rectangle: buildBoundingBox(centerLat, centerLng, radiusM),
+              rectangle: buildBoundingBox(fromLat, fromLng, radiusM),
             },
             maxResultCount: MAX_RESULTS,
             rankPreference: 'DISTANCE',
           };
           // Google requires the original textQuery + location restriction on every
           // page request, AND the pageToken. Sending the token alone returns an error.
-          if (token) reqBody.pageToken = token;
+          if (pageTok) reqBody.pageToken = pageTok;
           const textRes = await axios.post(
             `${PLACES_API}:searchText`,
             reqBody,
@@ -466,29 +509,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return { places: textRes.data?.places || [], nextPageToken: textRes.data?.nextPageToken || undefined };
         };
 
-        const first = await searchTextFrom(lat!, lng!, pageToken || undefined);
+        const first = await searchTextFrom(centerLat, centerLng, token || undefined);
         places = first.places;
         nextPageToken = first.nextPageToken;
         addFilteredPlaces(places, radiusM);
-        if (pageToken) break;
+        if (token) break;
 
         // The closest matches are often already taken in the organization.
         // Keep reading Google's next pages (up to 60 total) before giving up.
         let extraPages = 0;
         while (out.length < MAX_RESULTS && nextPageToken && extraPages < MAX_TEXT_EXTRA_PAGES) {
           extraPages += 1;
-          const page = await searchTextFrom(lat!, lng!, nextPageToken);
+          const page = await searchTextFrom(centerLat, centerLng, nextPageToken);
           nextPageToken = page.nextPageToken;
           addFilteredPlaces(page.places, radiusM);
         }
 
         // Still short and Google ran out of pages: search again from points
-        // around the store to reach places past Google's 60-result limit.
+        // around the center to reach places past Google's 60-result limit.
         if (out.length < MAX_RESULTS && !nextPageToken && places.length === MAX_RESULTS) {
           for (const fraction of RING_FRACTIONS) {
             const ringResults = await Promise.all(
               RING_BEARINGS_DEG.map((bearing) => {
-                const point = offsetPoint(lat!, lng!, radiusM * fraction, bearing);
+                const point = offsetPoint(centerLat, centerLng, radiusM * fraction, bearing);
                 return searchTextFrom(point.lat, point.lng).catch((err) => {
                   console.error('Ring text search failed:', err?.response?.data || err?.message);
                   return { places: [] as GooglePlace[] };
@@ -502,6 +545,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (out.length > 0) break;
       }
     }
+
+    return { out, nextPageToken, searchRadiusM };
+  };
+
+  try {
+    if (zipCodes.length > 0) {
+      // One search per zip, each inside that zip's own area. Places that
+      // Google returns from a neighboring zip are dropped.
+      const areas = await Promise.all(zipCodes.map((zip) => zipArea(zip, apiKey)));
+      const missing = zipCodes.filter((_, i) => !areas[i]);
+      const zipResults: Array<{ zip: string; places: OutPlace[] }> = [];
+      // A few zips at a time keeps Google from rate-limiting the ring searches.
+      for (let i = 0; i < zipCodes.length; i += ZIPS_IN_PARALLEL) {
+        const batch = zipCodes.slice(i, i + ZIPS_IN_PARALLEL).map(async (zip, j) => {
+          const area = areas[i + j];
+          if (!area) return null;
+          const { out } = await searchFrom(area.lat, area.lng, [area.radiusM], { onlyZip: zip, skipStoreSpot: true });
+          out.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity));
+          return { zip, places: out };
+        });
+        for (const result of await Promise.all(batch)) if (result) zipResults.push(result);
+      }
+      // Take from each zip in turn so one busy zip can't crowd out the rest.
+      const merged: OutPlace[] = [];
+      const limit = Math.max(MAX_RETURNED, zipCodes.length * 10);
+      for (let round = 0; merged.length < limit; round += 1) {
+        let added = false;
+        for (const { places } of zipResults) {
+          if (places[round]) {
+            merged.push({ ...places[round], distanceM: undefined });
+            added = true;
+          }
+        }
+        if (!added) break;
+      }
+      return res.status(200).json({
+        places: merged.slice(0, limit),
+        zipCodes: zipResults.map((r) => ({ zip: r.zip, count: r.places.length })),
+        missingZipCodes: missing,
+      });
+    }
+
+    const radiiToTry = pageToken || exactRadius
+      ? [requestedRadiusM]
+      : SEARCH_RADII_M.filter((radiusM) => radiusM >= requestedRadiusM);
+    const { out, nextPageToken, searchRadiusM } = await searchFrom(lat!, lng!, radiiToTry, { pageToken });
 
     // Sort by distance
     out.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity));

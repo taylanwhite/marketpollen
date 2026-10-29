@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
@@ -81,19 +81,25 @@ export function OrgSettings() {
   const [productSaving, setProductSaving] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const [billingBusy, setBillingBusy] = useState(false);
-  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
   const [orgChoices, setOrgChoices] = useState<Array<{ id: string; name: string }>>([]);
   const [pageTab, setPageTab] = useState<'settings' | 'billing'>(searchParams.get('tab') === 'billing' ? 'billing' : 'settings');
   const [billingForm, setBillingForm] = useState({
     name: '', email: '', phone: '', line1: '', line2: '', city: '', state: '', postalCode: '', country: 'US',
   });
 
-  const activeOrgId = selectedOrgId || currentOrg?.id || null;
+  // The link's ?org= decides which organization shows, so the picker, the
+  // link, and the page always agree. Without it, the current organization.
+  const activeOrgId = searchParams.get('org') || currentOrg?.id || null;
+  // Only the latest load may fill the page. Switching orgs quickly can
+  // otherwise let a slower, older response overwrite the one you picked.
+  const latestOrgId = useRef(activeOrgId);
+  latestOrgId.current = activeOrgId;
 
-  useEffect(() => {
-    const requested = searchParams.get('org');
-    if (requested) setSelectedOrgId(requested);
-  }, [searchParams]);
+  const selectOrg = (orgId: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('org', orgId);
+    setSearchParams(next, { replace: true });
+  };
 
   useEffect(() => {
     if (!isAdmin()) {
@@ -138,9 +144,12 @@ export function OrgSettings() {
 
   const loadOrgData = async () => {
     if (!activeOrgId) return;
+    const requestedOrgId = activeOrgId;
     setLoading(true);
+    setError('');
     try {
-      const data = await api.get<OrgData>(`/organizations/${activeOrgId}`);
+      const data = await api.get<OrgData>(`/organizations/${requestedOrgId}`);
+      if (latestOrgId.current !== requestedOrgId) return;
       setOrgData(data);
       setNameValue(data.name);
       setGoalValue(data.quarterlyGoal);
@@ -159,9 +168,10 @@ export function OrgSettings() {
         });
       }
     } catch (err: any) {
+      if (latestOrgId.current !== requestedOrgId) return;
       setError(err.message || 'Failed to load organization');
     } finally {
-      setLoading(false);
+      if (latestOrgId.current === requestedOrgId) setLoading(false);
     }
   };
 
@@ -269,7 +279,7 @@ export function OrgSettings() {
           select
           label="Organization"
           value={activeOrgId || ''}
-          onChange={(event) => setSelectedOrgId(event.target.value)}
+          onChange={(event) => selectOrg(event.target.value)}
           size="small"
           sx={{ mb: 3, minWidth: 280 }}
         >

@@ -124,6 +124,9 @@ model Store {
   lng              Float?
   geocoded_address String?
   billing_status  String   @default("active")
+  // Demo stores are free (left out of billing) and left out of multi-store reports.
+  // Only super users can turn this on or off.
+  is_demo         Boolean  @default(false)
   pause_on        DateTime?
   archived_at     DateTime?
   created_at      DateTime @default(now())
@@ -234,6 +237,10 @@ model Contact {
   suggested_follow_up_method  String?
   suggested_follow_up_note    String?
   suggested_follow_up_priority String?
+  // Repeating follow-up: every N days after the last visit. Null means no schedule.
+  follow_up_every_days       Int?
+  // Who gets the reminders. Null falls back to whoever created the contact.
+  follow_up_assignee         String?
   last_reachout_date         DateTime?
   status                     String?
   organization_type          String?
@@ -411,6 +418,8 @@ model PlanStop {
   state          String?
   zip_code       String?
   status         String    @default("planned") // planned | done | skipped
+  // Set when an admin put this stop on someone else's plan.
+  assigned_by    String?
   created_at     DateTime  @default(now())
 
   store       Store        @relation(fields: [store_id], references: [id], onDelete: Cascade)

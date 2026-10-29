@@ -49,8 +49,8 @@ interface PlanResponse {
 /**
  * One person's saved stops for one day. The owner can add stops from the
  * opportunity list or businesses, reorder them, mark them done, move them to
- * another day, or sort them by distance. Organization admins can look at a
- * teammate's plan without changing it.
+ * another day, or sort them by distance. Organization admins can open a
+ * teammate's plan and assign or rearrange stops on it.
  */
 export function DayRoute({
   storeId,
@@ -122,12 +122,12 @@ export function DayRoute({
     if (to < 0 || to >= ids.length) return;
     [ids[from], ids[to]] = [ids[to], ids[from]];
     setPlan((prev) => prev && { ...prev, stops: ids.map((id) => prev.stops.find((s) => s.id === id)!) });
-    const data = await api.put<{ stops: PlanStop[] }>('/plan-stops', { storeId, date, orderedIds: ids });
+    const data = await api.put<{ stops: PlanStop[] }>('/plan-stops', { storeId, date, orderedIds: ids, userId: viewUserId || undefined });
     setPlan((prev) => prev && { ...prev, stops: data.stops });
   });
 
   const optimize = () => run(async () => {
-    const data = await api.put<{ stops: PlanStop[] }>('/plan-stops', { storeId, date, optimize: true });
+    const data = await api.put<{ stops: PlanStop[] }>('/plan-stops', { storeId, date, optimize: true, userId: viewUserId || undefined });
     setPlan((prev) => prev && { ...prev, stops: data.stops });
     setNotice('Sorted by driving distance from the store.');
   });
@@ -158,7 +158,7 @@ export function DayRoute({
         <TextField
           select
           size="small"
-          label="View plan for"
+          label="Plan for"
           value={viewUserId}
           onChange={(event) => setViewUserId(event.target.value)}
         >
@@ -219,6 +219,11 @@ export function DayRoute({
                   <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
                     {stop.businessId ? 'Business' : 'Opportunity'}{addr ? ` · ${addr}` : ' · No address'}
                   </Typography>
+                  {stop.assignedByName && (
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', fontStyle: 'italic' }}>
+                      Assigned by {stop.assignedByName}
+                    </Typography>
+                  )}
                   {stop.overlaps.length > 0 && (
                     <Chip
                       size="small"
@@ -257,7 +262,7 @@ export function DayRoute({
           <Box sx={{ p: { xs: 1.5, sm: 2 }, borderTop: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', gap: 1 }}>
             {editable && (
               <Button variant="outlined" fullWidth startIcon={<AddIcon />} onClick={() => setAdding(true)} sx={{ minHeight: 48 }}>
-                Add stops
+                {viewUserId && viewingName ? `Assign stops to ${viewingName}` : 'Add stops'}
               </Button>
             )}
             {legs.map((href, index) => (
@@ -329,6 +334,7 @@ export function DayRoute({
         storeId={storeId}
         date={date}
         planned={stops}
+        userId={viewUserId || undefined}
         onClose={() => setAdding(false)}
         onAdded={(stop) => setPlan((prev) => prev && { ...prev, stops: [...prev.stops, stop] })}
       />
@@ -342,6 +348,7 @@ function AddStopsDialog({
   storeId,
   date,
   planned,
+  userId,
   onClose,
   onAdded,
 }: {
@@ -349,6 +356,8 @@ function AddStopsDialog({
   storeId: string;
   date: string;
   planned: PlanStop[];
+  /** A teammate's plan, when an admin is assigning stops. */
+  userId?: string;
   onClose: () => void;
   onAdded: (stop: PlanStop) => void;
 }) {
@@ -394,7 +403,7 @@ function AddStopsDialog({
     setError('');
     setWarning('');
     try {
-      const stop = await api.post<PlanStop>('/plan-stops', { storeId, date, opportunityId: row.opportunityId, businessId: row.businessId });
+      const stop = await api.post<PlanStop>('/plan-stops', { storeId, date, opportunityId: row.opportunityId, businessId: row.businessId, userId });
       onAdded(stop);
       if (stop.overlaps.length > 0) setWarning(`${row.name}: ${overlapText(stop.overlaps)}.`);
     } catch (err) {

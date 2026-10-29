@@ -4,157 +4,82 @@ import OpenAI from 'openai';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore, rejectIfStoreLocked } from './lib/store-access.js';
+import {
+  BusinessIndex,
+  MAX_IMPORT_ROWS,
+  cleanRow,
+  isKnownContact,
+  parseGrid,
+  readKnownColumns,
+  rememberContact,
+  type IndexedBusiness,
+  type SheetRow,
+} from './lib/import-sheet.js';
 
-const MAX_ROWS = 200;
-const MAX_TEXT = 80_000;
+// Sheets without known column names are read by the AI this many rows at a time.
+const AI_BATCH_ROWS = 80;
+const AI_PARALLEL = 6;
 
-interface ImportContact {
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  notes: string;
-}
-
-interface ImportCustomer {
-  businessName: string;
-  address: string;
-  city: string;
-  state: string;
-  zipCode: string;
-  contacts: ImportContact[];
-}
-
-export interface ImportRow {
-  businessName: string;
-  address: string;
-  city: string;
-  state: string;
-  zipCode: string;
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  notes: string;
+export interface ImportRow extends SheetRow {
   businessAlreadyOnFile: boolean;
+  /** Name of the business on file this row was matched to, when it is spelled differently. */
+  matchedBusinessName: string;
   contactAlreadyOnFile: boolean;
 }
 
-function clip(value: unknown, max: number): string {
-  if (typeof value !== 'string') return '';
-  return value.replace(/\s+/g, ' ').trim().slice(0, max);
+async function loadIndex(storeId: string): Promise<BusinessIndex> {
+  const businesses = await prisma.business.findMany({
+    where: { store_id: storeId },
+    select: {
+      id: true,
+      name: true,
+      address: true,
+      city: true,
+      state: true,
+      zip_code: true,
+      contacts: { select: { first_name: true, last_name: true, email: true, phone: true } },
+    },
+  });
+  const index = new BusinessIndex();
+  for (const b of businesses) {
+    const entry: IndexedBusiness = {
+      id: b.id,
+      name: b.name,
+      address: b.address,
+      city: b.city,
+      state: b.state,
+      zipCode: b.zip_code,
+      emails: new Set(),
+      names: new Set(),
+      phones: new Set(),
+    };
+    for (const c of b.contacts) {
+      rememberContact(entry, { firstName: c.first_name, lastName: c.last_name, email: c.email, phone: c.phone });
+    }
+    index.add(entry);
+  }
+  return index;
 }
 
-function stateCode(value: unknown): string {
-  const clipped = clip(value, 40);
-  return clipped.length === 2 ? clipped.toUpperCase() : clipped;
-}
-
-function norm(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-function asCustomers(raw: unknown): ImportCustomer[] {
+function aiRowsFrom(raw: unknown): SheetRow[] {
   const list = raw && typeof raw === 'object' && Array.isArray((raw as { customers?: unknown }).customers)
     ? (raw as { customers: unknown[] }).customers
     : [];
-  const customers: ImportCustomer[] = [];
+  const rows: SheetRow[] = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
-    const row = item as Record<string, unknown>;
-    const businessName = clip(row.businessName, 200);
-    if (!businessName) continue;
-    const contactsIn = Array.isArray(row.contacts) ? row.contacts : [];
-    const contacts: ImportContact[] = [];
-    for (const contact of contactsIn) {
-      if (!contact || typeof contact !== 'object') continue;
-      const c = contact as Record<string, unknown>;
-      const parsed: ImportContact = {
-        firstName: clip(c.firstName, 100),
-        lastName: clip(c.lastName, 100),
-        email: clip(c.email, 200),
-        phone: clip(c.phone, 40),
-        notes: clip(c.notes, 2000),
-      };
-      if (parsed.firstName || parsed.lastName || parsed.email || parsed.phone) contacts.push(parsed);
-    }
-    customers.push({
-      businessName,
-      address: clip(row.address, 300),
-      city: clip(row.city, 100),
-      state: stateCode(row.state),
-      zipCode: clip(row.zipCode, 20),
-      contacts,
-    });
-    if (customers.length >= MAX_ROWS) break;
-  }
-  return customers;
-}
-
-function flatten(customers: ImportCustomer[], existing: Map<string, { emails: Set<string>; names: Set<string>; phones: Set<string> }>): ImportRow[] {
-  const rows: ImportRow[] = [];
-  for (const customer of customers) {
-    const key = norm(customer.businessName);
-    const onFile = existing.get(key);
-    const contacts = customer.contacts.length > 0 ? customer.contacts : [null];
-    for (const contact of contacts) {
-      const emailKey = contact?.email ? norm(contact.email) : '';
-      const nameKey = contact ? norm(`${contact.firstName} ${contact.lastName}`) : '';
-      const phoneKey = contact?.phone ? norm(contact.phone) : '';
-      const contactAlready = Boolean(
-        onFile && (
-          (emailKey && onFile.emails.has(emailKey))
-          || (phoneKey && onFile.phones.has(phoneKey))
-          || (nameKey && onFile.names.has(nameKey))
-        ),
-      );
-      rows.push({
-        businessName: customer.businessName,
-        address: customer.address,
-        city: customer.city,
-        state: customer.state,
-        zipCode: customer.zipCode,
-        firstName: contact?.firstName || '',
-        lastName: contact?.lastName || '',
-        email: contact?.email || '',
-        phone: contact?.phone || '',
-        notes: contact?.notes || '',
-        businessAlreadyOnFile: Boolean(onFile),
-        contactAlreadyOnFile: contactAlready,
-      });
+    const customer = item as Record<string, unknown>;
+    const contacts = Array.isArray(customer.contacts) ? customer.contacts : [];
+    const people = contacts.filter((c): c is Record<string, unknown> => Boolean(c && typeof c === 'object'));
+    for (const person of people.length ? people : [{}]) {
+      const row = cleanRow({ ...customer, ...person });
+      if (row) rows.push(row);
     }
   }
   return rows;
 }
 
-async function existingIndex(storeId: string) {
-  const businesses = await prisma.business.findMany({
-    where: { store_id: storeId },
-    select: {
-      name: true,
-      contacts: { select: { first_name: true, last_name: true, email: true, phone: true } },
-    },
-  });
-  const map = new Map<string, { emails: Set<string>; names: Set<string>; phones: Set<string> }>();
-  for (const business of businesses) {
-    const emails = new Set<string>();
-    const names = new Set<string>();
-    const phones = new Set<string>();
-    for (const contact of business.contacts) {
-      if (contact.email) emails.add(norm(contact.email));
-      if (contact.phone) phones.add(norm(contact.phone));
-      const name = norm(`${contact.first_name || ''} ${contact.last_name || ''}`);
-      if (name) names.add(name);
-    }
-    map.set(norm(business.name), { emails, names, phones });
-  }
-  return map;
-}
-
-async function readSpreadsheet(text: string): Promise<ImportCustomer[]> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('OpenAI API key is not configured');
-  const openai = new OpenAI({ apiKey });
+async function readBatchWithAi(openai: OpenAI, csv: string): Promise<SheetRow[]> {
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     temperature: 0.1,
@@ -168,49 +93,93 @@ async function readSpreadsheet(text: string): Promise<ImportCustomer[]> {
           'Return JSON with this shape: {"customers":[{"businessName":"","address":"","city":"","state":"","zipCode":"","contacts":[{"firstName":"","lastName":"","email":"","phone":"","notes":""}]}]}',
           'Rules:',
           '- businessName is required. Skip blank rows, totals, and header rows.',
+          '- The first line may be the header row; use it to understand the columns.',
           '- Group rows for the same business into one customer with multiple contacts.',
           '- Split a full name into firstName and lastName.',
           '- state should be a 2-letter US code when the sheet makes that obvious.',
           '- Copy only values that are in the sheet. Do not invent emails, phones, addresses, or people.',
           '- notes is only for extra facts already in the row, such as a title or a comment.',
-          `- Return at most ${MAX_ROWS} customers.`,
         ].join('\n'),
       },
-      { role: 'user', content: text.slice(0, MAX_TEXT) },
+      { role: 'user', content: csv },
     ],
   });
   const content = response.choices[0]?.message?.content || '';
   const start = content.indexOf('{');
   const end = content.lastIndexOf('}');
   if (start < 0 || end < start) throw new Error('Could not read that spreadsheet');
-  return asCustomers(JSON.parse(content.slice(start, end + 1)));
+  return aiRowsFrom(JSON.parse(content.slice(start, end + 1)));
 }
 
-function rowsFromBody(body: unknown): ImportRow[] {
+function toCsv(rows: string[][]): string {
+  return rows
+    .map((row) => row.map((cell) => (/[",\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell)).join(','))
+    .join('\n');
+}
+
+async function readWithAi(grid: string[][]): Promise<SheetRow[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OpenAI API key is not configured');
+  const openai = new OpenAI({ apiKey });
+
+  // Every batch gets the first line too, since it is usually the header row.
+  const [first, ...rest] = grid.slice(0, MAX_IMPORT_ROWS + 1);
+  const batches: string[] = [];
+  for (let i = 0; i < Math.max(rest.length, 1); i += AI_BATCH_ROWS) {
+    batches.push(toCsv([first, ...rest.slice(i, i + AI_BATCH_ROWS)]));
+  }
+
+  const results: SheetRow[][] = new Array(batches.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < batches.length) {
+      const i = next;
+      next += 1;
+      results[i] = await readBatchWithAi(openai, batches[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(AI_PARALLEL, batches.length) }, worker));
+  return results.flat().slice(0, MAX_IMPORT_ROWS);
+}
+
+/** Marks which rows are already on file, including rows that repeat earlier rows in the same sheet. */
+function markOnFile(rows: SheetRow[], index: BusinessIndex): ImportRow[] {
+  const sheetIndex = new BusinessIndex();
+  return rows.map((row) => {
+    const onFile = index.find(row);
+    const hasPerson = Boolean(row.firstName || row.lastName || row.email || row.phone);
+    let contactAlreadyOnFile = Boolean(onFile && hasPerson && isKnownContact(onFile, row));
+
+    // Same person twice in the sheet: only the first one is checked by default.
+    let seen = sheetIndex.find(row);
+    if (!seen) {
+      seen = { id: '', name: row.businessName, address: row.address, city: row.city, state: row.state, zipCode: row.zipCode, emails: new Set(), names: new Set(), phones: new Set() };
+      sheetIndex.add(seen);
+    }
+    if (hasPerson) {
+      if (isKnownContact(seen, row)) contactAlreadyOnFile = true;
+      rememberContact(seen, row);
+    }
+
+    return {
+      ...row,
+      businessAlreadyOnFile: Boolean(onFile),
+      matchedBusinessName: onFile && onFile.name !== row.businessName ? onFile.name : '',
+      contactAlreadyOnFile,
+    };
+  });
+}
+
+function rowsFromBody(body: unknown): SheetRow[] {
   const list = body && typeof body === 'object' && Array.isArray((body as { rows?: unknown }).rows)
     ? (body as { rows: unknown[] }).rows
     : [];
-  const rows: ImportRow[] = [];
+  const rows: SheetRow[] = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
-    const row = item as Record<string, unknown>;
-    const businessName = clip(row.businessName, 200);
-    if (!businessName) continue;
-    rows.push({
-      businessName,
-      address: clip(row.address, 300),
-      city: clip(row.city, 100),
-      state: stateCode(row.state),
-      zipCode: clip(row.zipCode, 20),
-      firstName: clip(row.firstName, 100),
-      lastName: clip(row.lastName, 100),
-      email: clip(row.email, 200),
-      phone: clip(row.phone, 40),
-      notes: clip(row.notes, 2000),
-      businessAlreadyOnFile: false,
-      contactAlreadyOnFile: false,
-    });
-    if (rows.length >= MAX_ROWS) break;
+    const row = cleanRow(item as Record<string, unknown>);
+    if (row) rows.push(row);
+    if (rows.length >= MAX_IMPORT_ROWS) break;
   }
   return rows;
 }
@@ -233,12 +202,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const text = typeof req.body?.spreadsheetText === 'string' ? req.body.spreadsheetText.trim() : '';
     if (!text) return res.status(400).json({ error: 'Paste or upload a spreadsheet first' });
     try {
-      const customers = await readSpreadsheet(text);
-      if (customers.length === 0) {
+      const grid = parseGrid(text);
+      const known = readKnownColumns(grid);
+      const sheetRows = known ? known.rows : await readWithAi(grid);
+      if (sheetRows.length === 0) {
         return res.status(200).json({ rows: [], message: 'Nothing in that file looked like a customer.' });
       }
-      const rows = flatten(customers, await existingIndex(storeId));
-      return res.status(200).json({ rows });
+      const rows = markOnFile(sheetRows, await loadIndex(storeId));
+      return res.status(200).json({ rows, readBy: known ? 'columns' : 'ai' });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not read that spreadsheet';
       return res.status(500).json({ error: message });
@@ -249,97 +220,96 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const incoming = rowsFromBody(req.body);
     if (incoming.length === 0) return res.status(400).json({ error: 'Nothing selected to create' });
 
-    let createdBusinesses = 0;
-    let createdContacts = 0;
     let skipped = 0;
-
     try {
-      await prisma.$transaction(async (tx) => {
-        const businesses = await tx.business.findMany({
-          where: { store_id: storeId },
-          select: {
-            id: true,
-            name: true,
-            contacts: { select: { first_name: true, last_name: true, email: true, phone: true } },
-          },
-        });
-        const byName = new Map<string, { id: string; emails: Set<string>; names: Set<string>; phones: Set<string> }>();
-        for (const business of businesses) {
-          const emails = new Set<string>();
-          const names = new Set<string>();
-          const phones = new Set<string>();
-          for (const contact of business.contacts) {
-            if (contact.email) emails.add(norm(contact.email));
-            if (contact.phone) phones.add(norm(contact.phone));
-            const name = norm(`${contact.first_name || ''} ${contact.last_name || ''}`);
-            if (name) names.add(name);
-          }
-          byName.set(norm(business.name), { id: business.id, emails, names, phones });
+      const index = await loadIndex(storeId);
+      const newBusinesses: IndexedBusiness[] = [];
+      const filledIn = new Map<string, IndexedBusiness>();
+      const newContacts: { business: IndexedBusiness; row: SheetRow }[] = [];
+
+      for (const row of incoming) {
+        let business = index.find(row);
+        const alreadyOnFile = Boolean(business);
+        if (!business) {
+          business = {
+            id: randomUUID(),
+            name: row.businessName,
+            address: row.address || null,
+            city: row.city || null,
+            state: row.state || null,
+            zipCode: row.zipCode || null,
+            emails: new Set(),
+            names: new Set(),
+            phones: new Set(),
+          };
+          newBusinesses.push(business);
+          index.add(business);
+        } else if (!business.address && row.address) {
+          // A business on file with no address picks it up from the sheet.
+          business.address = row.address;
+          business.city = business.city || row.city || null;
+          business.state = business.state || row.state || null;
+          business.zipCode = business.zipCode || row.zipCode || null;
+          if (!newBusinesses.includes(business)) filledIn.set(business.id, business);
+          index.add(business);
         }
 
-        for (const row of incoming) {
-          const key = norm(row.businessName);
-          let business = byName.get(key);
-          const alreadyOnFile = Boolean(business);
-          if (!business) {
-            const created = await tx.business.create({
-              data: {
-                store_id: storeId,
-                name: row.businessName,
-                address: row.address || null,
-                city: row.city || null,
-                state: row.state || null,
-                zip_code: row.zipCode || null,
-                created_by: uid,
-              },
-              select: { id: true },
-            });
-            business = { id: created.id, emails: new Set(), names: new Set(), phones: new Set() };
-            byName.set(key, business);
-            createdBusinesses += 1;
-          }
-
-          const hasPerson = Boolean(row.firstName || row.lastName || row.email || row.phone);
-          if (!hasPerson) {
-            if (alreadyOnFile) skipped += 1;
-            continue;
-          }
-
-          const emailKey = row.email ? norm(row.email) : '';
-          const phoneKey = row.phone ? norm(row.phone) : '';
-          const nameKey = norm(`${row.firstName} ${row.lastName}`);
-          const duplicate = (emailKey && business.emails.has(emailKey)) || (phoneKey && business.phones.has(phoneKey)) || (nameKey && business.names.has(nameKey));
-          if (duplicate) {
-            skipped += 1;
-            continue;
-          }
-
-          await tx.contact.create({
-            data: {
-              business_id: business.id,
-              store_id: storeId,
-              contact_id: `import-${randomUUID()}`,
-              first_name: row.firstName || null,
-              last_name: row.lastName || null,
-              email: row.email || null,
-              phone: row.phone || null,
-              personal_details: row.notes || null,
-              status: 'new',
-              created_by: uid,
-            },
-          });
-          if (emailKey) business.emails.add(emailKey);
-          if (phoneKey) business.phones.add(phoneKey);
-          if (nameKey) business.names.add(nameKey);
-          createdContacts += 1;
+        const hasPerson = Boolean(row.firstName || row.lastName || row.email || row.phone);
+        if (!hasPerson) {
+          if (alreadyOnFile) skipped += 1;
+          continue;
         }
-      }, { timeout: 60000 });
+        if (isKnownContact(business, row)) {
+          skipped += 1;
+          continue;
+        }
+        rememberContact(business, row);
+        newContacts.push({ business, row });
+      }
+
+      await prisma.$transaction([
+        prisma.business.createMany({
+          data: newBusinesses.map((b) => ({
+            id: b.id,
+            store_id: storeId,
+            name: b.name,
+            address: b.address,
+            city: b.city,
+            state: b.state,
+            zip_code: b.zipCode,
+            created_by: uid,
+          })),
+        }),
+        ...[...filledIn.values()].map((b) => prisma.business.updateMany({
+          where: { id: b.id, store_id: storeId, address: null },
+          data: { address: b.address, city: b.city, state: b.state, zip_code: b.zipCode },
+        })),
+        prisma.contact.createMany({
+          data: newContacts.map(({ business, row }) => ({
+            business_id: business.id,
+            store_id: storeId,
+            contact_id: `import-${randomUUID()}`,
+            first_name: row.firstName || null,
+            last_name: row.lastName || null,
+            email: row.email || null,
+            phone: row.phone || null,
+            personal_details: row.notes || null,
+            status: 'new',
+            created_by: uid,
+          })),
+        }),
+      ]);
+
+      return res.status(200).json({
+        createdBusinesses: newBusinesses.length,
+        createdContacts: newContacts.length,
+        updatedBusinesses: filledIn.size,
+        skipped,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not save these customers';
       return res.status(500).json({ error: message });
     }
-
-    return res.status(200).json({ createdBusinesses, createdContacts, skipped });
   }
 
   return res.status(400).json({ error: 'Unknown action' });

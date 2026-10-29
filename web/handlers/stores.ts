@@ -17,6 +17,7 @@ type StoreRow = {
   zip_code: string | null;
   organization_id: string | null;
   billing_status: string;
+  is_demo: boolean;
   pause_on: Date | null;
   archived_at: Date | null;
   created_at: Date;
@@ -41,6 +42,7 @@ function toStoreJson(r: StoreRow) {
     zipCode: r.zip_code ?? undefined,
     organizationId: r.organization_id ?? undefined,
     billingStatus: r.billing_status ?? 'active',
+    isDemo: r.is_demo,
     pauseOn: r.pause_on,
     archivedAt: r.archived_at,
     statusMessage: r.statusMessage ?? null,
@@ -53,14 +55,15 @@ function toStoreJson(r: StoreRow) {
 function withStatusMessages(rows: StoreRow[]): StoreRow[] {
   const byOrg = new Map<string, StoreRow[]>();
   for (const row of rows) {
-    if (!row.organization_id) continue;
+    if (!row.organization_id || row.is_demo) continue;
     const list = byOrg.get(row.organization_id) ?? [];
     list.push(row);
     byOrg.set(row.organization_id, list);
   }
   return rows.map((row) => {
     const org = row.organization;
-    if (!org?.billing_enabled || org.subscription_status !== 'active' || !row.organization_id) return row;
+    // Demo stores aren't billed, so they get no pause or billing message.
+    if (!org?.billing_enabled || org.subscription_status !== 'active' || !row.organization_id || row.is_demo) return row;
     const siblings = byOrg.get(row.organization_id) ?? [];
     const active = siblings.filter((store) => store.billing_status === 'active').length;
     const unit = org.monthly_price_cents > 0 ? org.monthly_price_cents : STORE_UNIT_CENTS;
@@ -113,6 +116,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       confirmCharge?: boolean;
       expectedDueCents?: number;
       idempotencyKey?: string;
+      isDemo?: boolean;
     };
     if (!body?.name || typeof body.name !== 'string') return res.status(400).json({ error: 'name is required' });
 
@@ -130,9 +134,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else if (!(await isPlatformAdmin(uid))) {
       return res.status(403).json({ error: 'Org admin required' });
     }
+    // Only super users can make demo stores, since demo stores are free.
+    const isDemo = body.isDemo === true;
+    if (isDemo && !(await isPlatformAdmin(uid))) {
+      return res.status(403).json({ error: 'Only super users can make demo stores' });
+    }
 
     try {
-      const charge = orgId
+      const charge = orgId && !isDemo
         ? await commitAddStoreCharge({
           orgId,
           storeName: body.name,
@@ -151,6 +160,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           zip_code: body.zipCode ?? null,
           created_by: uid,
           organization_id: orgId,
+          is_demo: isDemo,
         },
       });
       if (orgId) {
@@ -165,10 +175,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             update: { can_edit: true },
           });
         }
-        try {
-          await noteStoreAdded(orgId, charge.charged);
-        } catch (err) {
-          console.error('Store was created, but the subscription could not be updated', err);
+        if (!isDemo) {
+          try {
+            await noteStoreAdded(orgId, charge.charged);
+          } catch (err) {
+            console.error('Store was created, but the subscription could not be updated', err);
+          }
         }
         if (charge.quote) {
           try {

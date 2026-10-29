@@ -5,6 +5,7 @@ import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-
 import { contactInclude, contactToJson } from '../lib/contact-json.js';
 import { syncContactBusinesses } from '../lib/contact-businesses.js';
 import { contactProfileData } from '../lib/contact-profile.js';
+import { cleanEveryDays, scheduleNextFollowUp } from '../lib/follow-up.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
@@ -41,6 +42,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastReachoutDate?: string | Date | null;
       status?: string | null;
       organizationType?: string | null;
+      /** Repeat follow-ups every N days. Null stops the schedule. */
+      followUpEveryDays?: number | null;
+      /** Who gets the reminders. Null means whoever created the contact. */
+      followUpAssignee?: string | null;
       businessId?: string;
       businessIds?: string[];
       reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; customItems?: Record<string, number>; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean; noFollowUp?: boolean } }>;
@@ -65,6 +70,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.suggestedFollowUpMethod !== undefined) updateData.suggested_follow_up_method = body.suggestedFollowUpMethod;
     if (body.suggestedFollowUpNote !== undefined) updateData.suggested_follow_up_note = body.suggestedFollowUpNote;
     if (body.suggestedFollowUpPriority !== undefined) updateData.suggested_follow_up_priority = body.suggestedFollowUpPriority;
+    let cadenceChanged = false;
+    if (body.followUpEveryDays !== undefined) {
+      const days = cleanEveryDays(body.followUpEveryDays);
+      cadenceChanged = days !== contact.follow_up_every_days;
+      updateData.follow_up_every_days = days;
+    }
+    if (body.followUpAssignee !== undefined) {
+      const assignee = typeof body.followUpAssignee === 'string' ? body.followUpAssignee.trim() : '';
+      if (assignee) {
+        const member = await prisma.storePermission.findUnique({
+          where: { user_id_store_id: { user_id: assignee, store_id: contact.store_id } },
+          select: { user_id: true },
+        });
+        if (!member) return res.status(400).json({ error: 'That person does not have access to this store' });
+      }
+      updateData.follow_up_assignee = assignee || null;
+    }
     if (body.lastReachoutDate !== undefined) updateData.last_reachout_date = body.lastReachoutDate == null ? null : (body.lastReachoutDate instanceof Date ? body.lastReachoutDate : new Date(body.lastReachoutDate));
 
     if (Object.keys(updateData).length > 0) {
@@ -74,6 +96,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await syncContactBusinesses(id, contact.store_id, linkedBusinesses);
     }
 
+    let reschedule = cadenceChanged && updateData.follow_up_every_days != null;
     if (Array.isArray(body.reachouts)) {
       const existing = await prisma.reachout.findMany({
         where: { contact_id: id },
@@ -123,6 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             cancelled_at: new Date(),
           },
         });
+        // "No follow-up" also stops a repeating schedule.
         await prisma.contact.update({
           where: { id },
           data: {
@@ -130,8 +154,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             suggested_follow_up_method: null,
             suggested_follow_up_note: null,
             suggested_follow_up_priority: null,
+            follow_up_every_days: null,
           },
         });
+        reschedule = false;
+      } else if (isNewReachout && ('follow_up_every_days' in updateData ? updateData.follow_up_every_days : contact.follow_up_every_days)) {
+        // A new visit restarts the countdown to the next follow-up.
+        reschedule = true;
       }
 
       if (isNewReachout) {
@@ -146,6 +175,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           },
         });
       }
+    }
+
+    if (reschedule) {
+      await scheduleNextFollowUp(id, uid);
+    } else if (cadenceChanged && updateData.follow_up_every_days === null) {
+      // Stopping the schedule takes its upcoming reminder off the calendar.
+      await prisma.calendarEvent.updateMany({
+        where: { contact_id: id, type: 'followup', status: 'scheduled', description: { startsWith: 'Scheduled follow-up (' } },
+        data: { status: 'cancelled', cancelled_at: new Date() },
+      });
     }
 
     const updated = await prisma.contact.findUnique({

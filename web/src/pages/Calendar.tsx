@@ -124,7 +124,7 @@ interface DayPlannerData {
 export function Calendar() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { permissions, canEdit } = usePermissions();
+  const { permissions, canEdit, isOrgAdminFn } = usePermissions();
   const { userId } = useAuth();
   const { dataVersion } = useDonation();
   const { syncedCount } = useOffline();
@@ -967,7 +967,8 @@ export function Calendar() {
               date={planDate}
               storeName={dayPlan.storeName}
               storeAddress={dayPlan.storeAddress}
-              canEdit={canEdit()}
+              // Org admins can assign stops to teammates; the server decides what they may change.
+              canEdit={canEdit() || isOrgAdminFn()}
               refreshKey={routeRefresh}
               onCountChange={setRouteCount}
             />

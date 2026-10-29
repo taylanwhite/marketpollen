@@ -78,6 +78,8 @@ export function contactToJson(c: any) {
     suggestedFollowUpMethod: c.suggested_follow_up_method ?? null,
     suggestedFollowUpNote: c.suggested_follow_up_note ?? null,
     suggestedFollowUpPriority: c.suggested_follow_up_priority ?? null,
+    followUpEveryDays: c.follow_up_every_days ?? null,
+    followUpAssignee: c.follow_up_assignee ?? null,
     lastReachoutDate: c.last_reachout_date ?? null,
     status: c.status ?? null,
     organizationType: c.organization_type ?? null,

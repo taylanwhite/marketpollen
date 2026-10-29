@@ -26,7 +26,10 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  MenuItem,
+  TextField,
   Typography,
+  Alert,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import { useMediaQuery } from '@mui/material';
@@ -88,6 +91,7 @@ import {
   upcomingEvents,
 } from '../utils/reportAggregations';
 import { Business, CalendarEvent, Contact, Opportunity } from '../types';
+import { useStorePeople } from '../hooks/useStorePeople';
 
 const EditContactModal = lazy(() =>
   import('../components/EditContactModal').then((m) => ({ default: m.EditContactModal })),
@@ -150,10 +154,10 @@ export function Reports() {
 
   const [loading, setLoading] = useState(true);
   const [rangeKey, setRangeKey] = useState<DateRangeKey>('quarter');
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [rawContacts, setContacts] = useState<Contact[]>([]);
   const [businesses, setBusinesses] = useState<Map<string, string>>(new Map());
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [rawEvents, setEvents] = useState<CalendarEvent[]>([]);
+  const [rawOpportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [drilldown, setDrilldown] = useState<DrilldownState | null>(null);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
@@ -237,6 +241,45 @@ export function Reports() {
       setLoading(false);
     }
   };
+
+  // Marketer filter: one person's visits, calendar items, and opportunities.
+  const marketer = searchParams.get('marketer') || '';
+  const setMarketer = (id: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (id) next.set('marketer', id);
+    else next.delete('marketer');
+    setSearchParams(next, { replace: true });
+  };
+  const storePeople = useStorePeople(storeScope === 'all' ? { orgId: currentOrg?.id } : { storeId: storeScope });
+  const marketers = useMemo(() => {
+    const names = new Map(storePeople.map((person) => [person.id, person.name]));
+    // People who logged visits but no longer have access still count.
+    for (const contact of rawContacts) {
+      for (const reachout of contact.reachouts) {
+        if (!reachout.createdBy || names.has(reachout.createdBy)) continue;
+        names.set(reachout.createdBy, reachout.createdBy === 'ai-phone-system' ? 'AI phone calls' : reachout.createdByName || 'Former teammate');
+      }
+    }
+    return [...names].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [storePeople, rawContacts]);
+  const marketerName = marketers.find((person) => person.id === marketer)?.name;
+
+  const contacts = useMemo(() => {
+    if (!marketer) return rawContacts;
+    return rawContacts.flatMap((contact) => {
+      const reachouts = contact.reachouts.filter((reachout) => reachout.createdBy === marketer);
+      const theirs = reachouts.length > 0 || contact.createdBy === marketer || contact.followUpAssignee === marketer;
+      return theirs ? [{ ...contact, reachouts }] : [];
+    });
+  }, [rawContacts, marketer]);
+  const events = useMemo(
+    () => (marketer ? rawEvents.filter((event) => event.createdBy === marketer) : rawEvents),
+    [rawEvents, marketer],
+  );
+  const opportunities = useMemo(
+    () => (marketer ? rawOpportunities.filter((opp) => opp.createdBy === marketer) : rawOpportunities),
+    [rawOpportunities, marketer],
+  );
 
   const range = useMemo(() => getDateRange(rangeKey), [rangeKey]);
   const allReachouts = useMemo(
@@ -394,6 +437,9 @@ export function Reports() {
                 onClick={() => setRangeKey(option.key)}
               />
             ))}
+            {marketers.length > 1 && (
+              <MarketerSelect value={marketer} options={marketers} onChange={setMarketer} />
+            )}
             <Button
               size="small"
               variant="outlined"
@@ -435,7 +481,16 @@ export function Reports() {
               />
             ))}
           </ScrollRow>
+          {marketers.length > 1 && (
+            <MarketerSelect value={marketer} options={marketers} onChange={setMarketer} fullWidth />
+          )}
         </Box>
+      )}
+
+      {marketer && (
+        <Alert severity="info" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={() => setMarketer('')}>Show everyone</Button>}>
+          Showing {marketerName || 'one marketer'}'s visits, calendar items, and opportunities, and the contacts they work with.
+        </Alert>
       )}
 
       <Card
@@ -474,7 +529,7 @@ export function Reports() {
           icon={<PeopleIcon />}
           label="Contacts"
           value={contacts.length}
-          hint="Everyone in this store"
+          hint={marketer ? `${marketerName || 'Their'} contacts` : 'Everyone in this store'}
           onClick={() =>
             openDrilldown({
               title: 'All contacts',
@@ -1042,6 +1097,35 @@ function ScrollRow({ children }: { children: ReactNode }) {
     >
       {children}
     </Box>
+  );
+}
+
+function MarketerSelect({
+  value,
+  options,
+  onChange,
+  fullWidth = false,
+}: {
+  value: string;
+  options: Array<{ id: string; name: string }>;
+  onChange: (id: string) => void;
+  fullWidth?: boolean;
+}) {
+  return (
+    <TextField
+      select
+      size="small"
+      label="Marketer"
+      value={options.some((option) => option.id === value) ? value : ''}
+      onChange={(event) => onChange(event.target.value)}
+      fullWidth={fullWidth}
+      sx={{ minWidth: 180 }}
+    >
+      <MenuItem value="">Everyone</MenuItem>
+      {options.map((option) => (
+        <MenuItem key={option.id} value={option.id}>{option.name}</MenuItem>
+      ))}
+    </TextField>
   );
 }
 

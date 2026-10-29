@@ -17,3 +17,24 @@ export function connectionValue(name?: string | null, at?: Date | string | null)
   if (who && when) return `${who} · ${when}`;
   return who || when;
 }
+
+type VisitLike = { date: Date | string; createdByName?: string | null };
+
+/** The most recent visit on a contact, or null when nobody has visited yet. */
+export function lastVisit<T extends VisitLike>(reachouts: T[] | undefined | null): T | null {
+  let latest: T | null = null;
+  let latestTime = -Infinity;
+  for (const r of reachouts || []) {
+    const time = new Date(r.date).getTime();
+    if (!Number.isNaN(time) && time > latestTime) {
+      latest = r;
+      latestTime = time;
+    }
+  }
+  return latest;
+}
+
+/** Everyone who has logged a visit on a contact. */
+export function visitorNames(reachouts: VisitLike[] | undefined | null): string[] {
+  return [...new Set((reachouts || []).map((r) => r.createdByName?.trim()).filter((n): n is string => !!n))];
+}

@@ -28,6 +28,8 @@ import {
   Chip,
   Tabs,
   Tab,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -74,6 +76,9 @@ export function Stores() {
     state: '',
     zipCode: ''
   });
+  // Super users only: demo stores are free and left out of reports.
+  const [newIsDemo, setNewIsDemo] = useState(false);
+  const [editIsDemo, setEditIsDemo] = useState(false);
   const [organizationId, setOrganizationId] = useState(currentOrg?.id ?? '');
   const [quote, setQuote] = useState<BillingQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -149,12 +154,14 @@ export function Stores() {
       state: formData.state.trim().toUpperCase() || undefined,
       zipCode: formData.zipCode.trim() || undefined,
       organizationId: targetOrgId || undefined,
+      isDemo: newIsDemo || undefined,
       confirmCharge,
       expectedDueCents: dueTodayCents,
       idempotencyKey: crypto.randomUUID(),
     });
     setSuccess('Store created.');
     setFormData({ name: '', address: '', city: '', state: '', zipCode: '' });
+    setNewIsDemo(false);
     setShowForm(false);
     await loadStores();
   };
@@ -170,7 +177,8 @@ export function Stores() {
     }
 
     try {
-      if (!targetOrgId) {
+      // Demo stores are free, so there is no price to confirm.
+      if (!targetOrgId || newIsDemo) {
         await createStore(false);
         return;
       }
@@ -272,6 +280,7 @@ export function Stores() {
       state: store.state || '',
       zipCode: store.zipCode || ''
     });
+    setEditIsDemo(!!store.isDemo);
   };
 
   const closeEditModal = () => {
@@ -296,7 +305,8 @@ export function Stores() {
         address: editFormData.address.trim() || undefined,
         city: editFormData.city.trim() || undefined,
         state: editFormData.state.trim().toUpperCase() || undefined,
-        zipCode: editFormData.zipCode.trim() || undefined
+        zipCode: editFormData.zipCode.trim() || undefined,
+        ...(isAdmin() && { isDemo: editIsDemo }),
       });
 
       setSuccess('Store updated successfully!');
@@ -455,6 +465,17 @@ export function Stores() {
                   fullWidth
                 />
               </Grid>
+              {isAdmin() && (
+                <Grid size={{ xs: 12 }}>
+                  <FormControlLabel
+                    control={<Switch checked={newIsDemo} onChange={(e) => setNewIsDemo(e.target.checked)} />}
+                    label="Demo store"
+                  />
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    Free, and not counted in reports. Only super users see this.
+                  </Typography>
+                </Grid>
+              )}
               <Grid size={{ xs: 12 }}>
                 <Button type="submit" variant="contained" startIcon={<AddIcon />}>
                   Create Store
@@ -488,6 +509,9 @@ export function Stores() {
                   <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>
                     {store.name}
                   </Typography>
+                  {store.isDemo && (
+                    <Chip size="small" label="Demo" sx={{ mb: 1, mr: 1, bgcolor: '#efe9fb', color: '#4a2f8a', fontWeight: 600 }} />
+                  )}
                   {store.billingStatus === 'pause_scheduled' && (
                     <Chip size="small" label="Pauses at the end of this month" sx={{ mb: 1 }} />
                   )}
@@ -612,6 +636,17 @@ export function Stores() {
                 sx={{ width: 120 }}
               />
             </Box>
+            {isAdmin() && (
+              <Box>
+                <FormControlLabel
+                  control={<Switch checked={editIsDemo} onChange={(e) => setEditIsDemo(e.target.checked)} />}
+                  label="Demo store"
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  Free, and not counted in reports. Only super users see this.
+                </Typography>
+              </Box>
+            )}
           </Box>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>

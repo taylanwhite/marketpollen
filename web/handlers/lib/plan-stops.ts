@@ -1,5 +1,6 @@
 import { prisma } from './db.js';
 import { geocode, orderByNearest } from './route.js';
+import { isOrgAdmin } from './org-access.js';
 
 export const MAX_STOPS_PER_DAY = 25;
 
@@ -30,11 +31,12 @@ type PlanStopRow = {
   state: string | null;
   zip_code: string | null;
   status: string;
+  assigned_by?: string | null;
 };
 
 export type PlanOverlap = { userName: string; date: string };
 
-export function planStopJson(row: PlanStopRow, overlaps: PlanOverlap[] = []) {
+export function planStopJson(row: PlanStopRow, overlaps: PlanOverlap[] = [], assignedByName: string | null = null) {
   return {
     id: row.id,
     storeId: row.store_id,
@@ -51,6 +53,9 @@ export function planStopJson(row: PlanStopRow, overlaps: PlanOverlap[] = []) {
     zipCode: row.zip_code,
     status: row.status === 'done' || row.status === 'skipped' ? row.status : 'planned',
     overlaps,
+    // Only set when someone else put this stop on the plan.
+    assignedBy: row.assigned_by && row.assigned_by !== row.user_id ? row.assigned_by : null,
+    assignedByName: row.assigned_by && row.assigned_by !== row.user_id ? assignedByName : null,
   };
 }
 
@@ -115,7 +120,47 @@ export async function loadPlan(storeId: string, userId: string, date: Date) {
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
   const overlaps = await findOverlaps(storeId, userId, rows);
-  return rows.map((row) => planStopJson(row, overlaps.get(row.id) || []));
+  const names = await userNames(rows.map((row) => row.assigned_by));
+  return rows.map((row) => planStopJson(row, overlaps.get(row.id) || [], (row.assigned_by && names.get(row.assigned_by)) || null));
+}
+
+export async function userNames(ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.filter((id): id is string => !!id))];
+  if (unique.length === 0) return new Map();
+  const users = await prisma.user.findMany({ where: { id: { in: unique } }, select: { id: true, display_name: true, email: true } });
+  return new Map(users.map((user) => [user.id, user.display_name || user.email]));
+}
+
+/** Organization admins supervise everyone's plans in their stores. Everyone else sees only their own. */
+export async function canSeeTeamPlans(uid: string, storeId: string): Promise<boolean> {
+  const store = await prisma.store.findUnique({ where: { id: storeId }, select: { organization_id: true } });
+  return !!store?.organization_id && await isOrgAdmin(uid, store.organization_id);
+}
+
+/** People who can have a plan in this store: everyone with access to it. */
+export async function planPeople(storeId: string): Promise<Array<{ id: string; name: string }>> {
+  const members = await prisma.storePermission.findMany({
+    where: { store_id: storeId },
+    include: { user: { select: { id: true, display_name: true, email: true } } },
+  });
+  return members
+    .map((member) => ({ id: member.user.id, name: member.user.display_name || member.user.email }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Whose plan a change goes to. Your own by default. An organization admin may
+ * name a teammate who has access to the store. Returns null when not allowed.
+ */
+export async function planOwnerFor(uid: string, storeId: string, requestedUserId?: string | null): Promise<string | null> {
+  const target = (requestedUserId || '').trim();
+  if (!target || target === uid) return uid;
+  if (!(await canSeeTeamPlans(uid, storeId))) return null;
+  const member = await prisma.storePermission.findUnique({
+    where: { user_id_store_id: { user_id: target, store_id: storeId } },
+    select: { user_id: true },
+  });
+  return member ? target : null;
 }
 
 /** Put the day's planned stops in nearest-first driving order from the store. Done or skipped stops keep their place at the top. */

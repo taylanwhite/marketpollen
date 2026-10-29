@@ -19,6 +19,9 @@ export interface PlanStop {
   zipCode: string | null;
   status: 'planned' | 'done' | 'skipped';
   overlaps: PlanOverlap[];
+  /** Set when an admin put this stop on someone else's plan. */
+  assignedBy?: string | null;
+  assignedByName?: string | null;
 }
 
 /** Google Maps cuts a directions link off past about ten places, and sooner on phones. */

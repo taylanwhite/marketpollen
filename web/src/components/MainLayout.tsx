@@ -9,6 +9,7 @@ import { OfflineIndicator } from './OfflineIndicator';
 import { OfflineBanner } from './OnlineOnlyNotice';
 import { isStoreArchived, isStoreLocked } from '../utils/storeLock';
 import { BillingAccessGate } from './BillingAccessGate';
+import { DemoBanner } from './DemoBanner';
 import { Store } from '../types';
 import { api } from '../api/client';
 import { prefetchOfflineAssets } from '../utils/prefetchOfflineAssets';
@@ -84,8 +85,10 @@ export function MainLayout({ children }: MainLayoutProps) {
 
   const isStorePicker = location.pathname === '/select-store';
   const accessMode = currentOrg?.access?.mode;
+  const isDemoStore = !!currentStore?.isDemo;
   const orgLocked = !isAdmin()
     && !isStorePicker
+    && !isDemoStore
     && (accessMode === 'trial_ended' || accessMode === 'payment_locked');
   const isActive = (path: string) => location.pathname === path;
 
@@ -273,14 +276,16 @@ export function MainLayout({ children }: MainLayoutProps) {
             The pill in the top bar is easy to miss on a busy page; this
             ribbon is unmissable and tells marketers exactly what's degraded. */}
         <OfflineBanner />
-        {!isStorePicker && (
+        {/* A demo store isn't billed, so it shows the demo banner instead of the trial or payment one. */}
+        {!isStorePicker && isDemoStore && <DemoBanner />}
+        {!isStorePicker && !isDemoStore && (
           <BillingAccessGate
             access={currentOrg?.access}
             orgId={currentOrg?.id}
             orgName={currentOrg?.name}
             canPay={!!currentOrg?.isAdmin}
             isGlobalAdmin={isAdmin()}
-            storeCount={currentOrg?.stores.length || 1}
+            storeCount={currentOrg?.stores.filter((store) => !store.isDemo).length || 1}
             canSwitch={permissions.organizations.length > 1}
           />
         )}

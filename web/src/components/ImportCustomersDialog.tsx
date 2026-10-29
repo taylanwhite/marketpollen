@@ -13,6 +13,7 @@ interface ImportRow {
   phone: string;
   notes: string;
   businessAlreadyOnFile: boolean;
+  matchedBusinessName: string;
   contactAlreadyOnFile: boolean;
 }
 import {
@@ -34,9 +35,45 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { Close as CloseIcon, UploadFile as UploadIcon } from '@mui/icons-material';
+import { Close as CloseIcon, Download as DownloadIcon, UploadFile as UploadIcon } from '@mui/icons-material';
 
-const ROW_CAP = 200;
+// Kept in step with MAX_IMPORT_ROWS in handlers/lib/import-sheet.ts.
+const ROW_CAP = 1000;
+
+const EXAMPLE_COLUMNS = ['Business Name', 'Address', 'City', 'State', 'Zip', 'First Name', 'Last Name', 'Email', 'Phone', 'Notes'];
+const EXAMPLE_ROWS = [
+  ['Riverside Dental', '412 Oak Ave, Suite 200', 'Springfield', 'IL', '62704', 'Maria', 'Lopez', 'maria@riversidedental.com', '(217) 555-0142', 'Office manager. Loves lemon.'],
+  ['Riverside Dental', '412 Oak Ave, Suite 200', 'Springfield', 'IL', '62704', 'Sam', 'Chen', 'sam@riversidedental.com', '(217) 555-0143', 'Front desk'],
+  ['Hillcrest Realty', '88 Main St', 'Springfield', 'IL', '62701', 'Dana', 'Brooks', 'dana@hillcrestrealty.com', '(217) 555-0199', ''],
+  ['Lincoln Elementary School', '1200 W Lincoln Blvd', 'Springfield', 'IL', '62702', '', '', '', '(217) 555-0100', 'No contact yet'],
+];
+const EXAMPLE_TIPS = [
+  ['How to fill in this sheet'],
+  [''],
+  ['• One row per person. Repeat the business on each row for businesses with more than one person.'],
+  ['• Business Name is the only required column. Leave a person blank to add just the business.'],
+  ['• Businesses already in your store are matched by name, or by street address and zip, and not added twice.'],
+  ['• People already on file are matched by email, phone or name, and not added twice.'],
+  ['• Extra columns are fine. Anything we don’t recognize is saved in the person’s notes.'],
+  [`• Up to ${ROW_CAP} rows per import. Only the first tab is read.`],
+];
+
+async function downloadExample() {
+  const XLSX = await import('xlsx');
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([EXAMPLE_COLUMNS, ...EXAMPLE_ROWS]);
+  sheet['!cols'] = EXAMPLE_COLUMNS.map((name) => ({ wch: Math.max(name.length + 2, name === 'Email' ? 28 : name === 'Notes' ? 30 : 14) }));
+  // Keep zips as text so Excel doesn't drop leading zeros.
+  for (let r = 1; r <= EXAMPLE_ROWS.length; r += 1) {
+    const cell = sheet[XLSX.utils.encode_cell({ r, c: 4 })];
+    if (cell) { cell.t = 's'; cell.z = '@'; }
+  }
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Customers');
+  const tips = XLSX.utils.aoa_to_sheet(EXAMPLE_TIPS);
+  tips['!cols'] = [{ wch: 110 }];
+  XLSX.utils.book_append_sheet(workbook, tips, 'Instructions');
+  XLSX.writeFile(workbook, 'marketpollen-import-example.xlsx');
+}
 
 interface PreviewRow extends ImportRow {
   id: string;
@@ -159,7 +196,7 @@ export function ImportCustomersDialog({ open, storeId, onClose, onImported }: Im
     setSaving(true);
     setError('');
     try {
-      const result = await api.post<{ createdBusinesses: number; createdContacts: number; skipped: number }>(
+      const result = await api.post<{ createdBusinesses: number; createdContacts: number; updatedBusinesses?: number; skipped: number }>(
         `/import-customers?storeId=${storeId}`,
         { action: 'commit', rows: selected },
       );
@@ -167,6 +204,7 @@ export function ImportCustomersDialog({ open, storeId, onClose, onImported }: Im
         `${result.createdBusinesses} business${result.createdBusinesses === 1 ? '' : 'es'}`,
         `${result.createdContacts} contact${result.createdContacts === 1 ? '' : 's'}`,
       ];
+      if (result.updatedBusinesses) parts.push(`added addresses to ${result.updatedBusinesses}`);
       if (result.skipped) parts.push(`${result.skipped} already on file`);
       onImported(`Created ${parts.join(', ')}.`);
       close();
@@ -190,6 +228,19 @@ export function ImportCustomersDialog({ open, storeId, onClose, onImported }: Im
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Upload a spreadsheet of businesses and people. We’ll read it and show you exactly what will be created. Nothing is saved until you confirm.
         </Typography>
+        {rows.length === 0 && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Any layout works. For the fastest, most accurate import, use our columns:{' '}
+            <Button
+              size="small"
+              startIcon={<DownloadIcon fontSize="small" />}
+              onClick={() => { downloadExample().catch(() => setError('Could not create the example sheet')); }}
+              sx={{ textTransform: 'none', fontWeight: 600, py: 0, verticalAlign: 'baseline', color: '#7a5c00' }}
+            >
+              Download example sheet
+            </Button>
+          </Typography>
+        )}
         {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
         {truncated && (
           <Alert severity="info" sx={{ mb: 2 }}>
@@ -226,7 +277,7 @@ export function ImportCustomersDialog({ open, storeId, onClose, onImported }: Im
               multiline
               minRows={6}
               fullWidth
-              placeholder={'Business, Contact, Email, Phone, Address'}
+              placeholder={'Business Name, Address, City, State, Zip, First Name, Last Name, Email, Phone, Notes'}
               disabled={reading}
             />
             {emptyMessage && <Alert severity="warning">{emptyMessage}</Alert>}
@@ -266,7 +317,7 @@ export function ImportCustomersDialog({ open, storeId, onClose, onImported }: Im
                           {row.businessName}
                           {row.businessAlreadyOnFile && (
                             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                              Already in this store
+                              {row.matchedBusinessName ? `Matches ${row.matchedBusinessName} on file` : 'Already in this store'}
                             </Typography>
                           )}
                         </TableCell>
@@ -279,7 +330,7 @@ export function ImportCustomersDialog({ open, storeId, onClose, onImported }: Im
                           )}
                         </TableCell>
                         <TableCell>{row.email}</TableCell>
-                        <TableCell>{row.phone}</TableCell>
+                        <TableCell sx={{ whiteSpace: "nowrap" }}>{row.phone}</TableCell>
                         <TableCell>{[row.city, row.state].filter(Boolean).join(', ')}</TableCell>
                       </TableRow>
                     );
@@ -306,7 +357,7 @@ export function ImportCustomersDialog({ open, storeId, onClose, onImported }: Im
             startIcon={reading ? <CircularProgress size={16} color="inherit" /> : undefined}
             sx={{ bgcolor: '#f5c842', color: '#2d2d2d', fontWeight: 700, '&:hover': { bgcolor: '#e8b923' } }}
           >
-            {reading ? 'Reading…' : 'Preview'}
+            {reading ? 'Reading… (large sheets can take a minute)' : 'Preview'}
           </Button>
         ) : (
           <Button

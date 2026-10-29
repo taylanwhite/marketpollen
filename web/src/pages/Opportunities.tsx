@@ -35,6 +35,8 @@ import {
   Stack,
   Chip,
   Collapse,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import { useMediaQuery } from '@mui/material';
@@ -70,7 +72,17 @@ interface NearbyPlacesResponse {
   nextPageToken?: string;
   searchRadiusM?: number;
   expanded?: boolean;
+  /** Zip code searches: how many new places each zip had, and zips Google didn't recognize. */
+  zipCodes?: Array<{ zip: string; count: number }>;
+  missingZipCodes?: string[];
 }
+
+/** Unique 5-digit zips in what the marketer typed, in order. */
+function parseZipList(value: string): string[] {
+  return [...new Set(value.match(/\b\d{5}\b/g) || [])];
+}
+const MAX_ZIP_CODES = 10;
+const zipStorageKey = (storeId: string) => `mp:opportunity-zips:${storeId}`;
 
 /**
  * Common bakery prospect types, surfaced as quick-tap chips on the Generate
@@ -164,6 +176,10 @@ export function Opportunities() {
   const [searchState, setSearchState] = useState('');
   const [searchZipCode, setSearchZipCode] = useState('');
   const [textQuery, setTextQuery] = useState('');
+  // "address" searches around one spot; "zip" searches inside each listed zip code.
+  const [searchMode, setSearchMode] = useState<'address' | 'zip'>('address');
+  const [zipInput, setZipInput] = useState('');
+  const [zipSummary, setZipSummary] = useState<Array<{ zip: string; count: number }>>([]);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [nearbyPlaces, setNearbyPlaces] = useState<NearbyPlace[]>([]);
   // Google Places paginates with an opaque token. Empty string means "no
@@ -231,6 +247,13 @@ export function Opportunities() {
       return;
     }
     loadStoreAddress();
+    try {
+      const saved = localStorage.getItem(zipStorageKey(storeId));
+      setZipInput(saved || '');
+      setSearchMode(saved ? 'zip' : 'address');
+    } catch {
+      // Storage can be blocked; zips just aren't remembered.
+    }
     loadOpportunities();
     loadDismissedOpportunities();
     loadHeldOpportunities();
@@ -352,6 +375,7 @@ export function Opportunities() {
     setNearbySearchRadiusM(INITIAL_SEARCH_RADIUS_M);
     setNearbyExpanded(false);
     setSelectedPlaceIds(new Set());
+    setZipSummary([]);
     setError('');
     setSuccess('');
   };
@@ -361,8 +385,57 @@ export function Opportunities() {
    * label into `textQuery`; the server maps known labels to Place Types
    * (Nearby Search by distance) and treats anything else as free text.
    */
+  const handleFindByZip = async () => {
+    if (!storeId) return;
+    const zips = parseZipList(zipInput);
+    if (zips.length === 0) {
+      setError('Enter one or more 5-digit zip codes');
+      return;
+    }
+    if (zips.length > MAX_ZIP_CODES) {
+      setError(`Search up to ${MAX_ZIP_CODES} zip codes at a time`);
+      return;
+    }
+    try {
+      localStorage.setItem(zipStorageKey(storeId), zips.join(', '));
+    } catch {
+      // Not remembered; the search still runs.
+    }
+    setError('');
+    setSuccess('');
+    setLoadingNearby(true);
+    setNearbyPlaces([]);
+    setNearbyPageToken('');
+    setNearbyExpanded(false);
+    setSelectedPlaceIds(new Set());
+    setZipSummary([]);
+    try {
+      const payload: { storeId: string; zipCodes: string[]; textQuery?: string } = { storeId, zipCodes: zips };
+      if (textQuery.trim()) payload.textQuery = textQuery.trim();
+      const res = await api.post<NearbyPlacesResponse>('/places-nearby', payload);
+      setNearbyPlaces(res.places || []);
+      setZipSummary(res.zipCodes || []);
+      const missing = res.missingZipCodes || [];
+      if (missing.length === zips.length) {
+        setError(`We couldn't find ${missing.length === 1 ? 'that zip code' : 'those zip codes'}. Check the numbers and try again.`);
+      } else if (!res.places?.length) {
+        setSuccess(`No new places found in ${zips.join(', ')} (existing businesses and opportunities are excluded).`);
+      } else if (missing.length) {
+        setSuccess(`Couldn't find zip ${missing.join(', ')}, so it was skipped.`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to search those zip codes');
+    } finally {
+      setLoadingNearby(false);
+    }
+  };
+
   const handleFindNearby = async (radiusM = INITIAL_SEARCH_RADIUS_M) => {
     if (!storeId) return;
+    if (searchMode === 'zip') {
+      await handleFindByZip();
+      return;
+    }
     const address = buildAddressString();
     if (!address.trim()) {
       setError('Enter an address or use the store address above');
@@ -936,10 +1009,45 @@ export function Opportunities() {
                       full address picker stays collapsed by default since
                       the store address is the right answer 95% of the time. */}
                   <Box>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.7rem' }}>
-                      Search around
-                    </Typography>
-                    {!addressEditOpen ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 0.5 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '0.7rem' }}>
+                        {searchMode === 'zip' ? 'Search in zip codes' : 'Search around'}
+                      </Typography>
+                      <ToggleButtonGroup
+                        size="small"
+                        exclusive
+                        value={searchMode}
+                        onChange={(_, value) => {
+                          if (!value) return;
+                          setSearchMode(value);
+                          handleResetSearch();
+                        }}
+                        aria-label="Search by"
+                        disabled={loadingNearby}
+                      >
+                        <ToggleButton value="address" sx={{ textTransform: 'none', py: 0.25, px: 1.25, fontSize: '0.75rem' }}>Address</ToggleButton>
+                        <ToggleButton value="zip" sx={{ textTransform: 'none', py: 0.25, px: 1.25, fontSize: '0.75rem' }}>Zip codes</ToggleButton>
+                      </ToggleButtonGroup>
+                    </Box>
+                    {searchMode === 'zip' ? (
+                      <TextField
+                        value={zipInput}
+                        onChange={(e) => setZipInput(e.target.value)}
+                        placeholder="84095, 84096, 84020"
+                        size="small"
+                        fullWidth
+                        disabled={loadingNearby}
+                        inputProps={{ inputMode: 'numeric', 'aria-label': 'Zip codes' }}
+                        helperText={(() => {
+                          const count = parseZipList(zipInput).length;
+                          if (count > MAX_ZIP_CODES) return `Up to ${MAX_ZIP_CODES} zip codes at a time`;
+                          return count > 0
+                            ? `${count} zip code${count === 1 ? '' : 's'}. Only places inside ${count === 1 ? 'it' : 'them'} are shown.`
+                            : 'Separate zip codes with commas or spaces.';
+                        })()}
+                        error={parseZipList(zipInput).length > MAX_ZIP_CODES}
+                      />
+                    ) : !addressEditOpen ? (
                       <Box
                         sx={{
                           display: 'flex',
@@ -1148,7 +1256,7 @@ export function Opportunities() {
                           fontSize: { xs: '1rem', sm: '0.875rem' },
                         }}
                       >
-                        {loadingNearby ? 'Searching…' : 'Find nearby businesses'}
+                        {loadingNearby ? 'Searching…' : searchMode === 'zip' ? 'Find businesses in these zips' : 'Find nearby businesses'}
                       </Button>
                     </span>
                   </Tooltip>
@@ -1160,11 +1268,19 @@ export function Opportunities() {
                       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                         Tap places to select, then add them as opportunities.
                       </Typography>
-                      {nearbyExpanded && (
+                      {searchMode === 'zip' && zipSummary.length > 0 && (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 1 }}>
+                          {zipSummary.map((item) => (
+                            <Chip key={item.zip} size="small" label={`${item.zip} · ${item.count} new`} />
+                          ))}
+                        </Box>
+                      )}
+                      {searchMode === 'address' && nearbyExpanded && (
                         <Alert severity="info" sx={{ mb: 1 }}>
                           Showing a broadened search radius of {formatRadius(nearbySearchRadiusM)}.
                         </Alert>
                       )}
+                      {searchMode === 'address' && (
                       <Stack
                         direction={{ xs: 'column', sm: 'row' }}
                         spacing={1}
@@ -1195,6 +1311,7 @@ export function Opportunities() {
                           </Button>
                         )}
                       </Stack>
+                      )}
                       <List
                         disablePadding
                         sx={{

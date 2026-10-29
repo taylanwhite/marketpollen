@@ -36,6 +36,8 @@ export interface Store {
   pauseOn?: string | Date | null;
   statusMessage?: string | null;
   billingActive?: boolean;
+  /** Free store for demos: not billed, left out of multi-store reports. */
+  isDemo?: boolean;
   archivedAt?: string | Date | null;
   createdAt: Date;
   createdBy: string; // user uid
@@ -49,7 +51,7 @@ export interface Organization {
   name: string;
   quarterlyGoal: number;
   isAdmin: boolean;
-  stores: Array<{ id: string; name: string }>;
+  stores: Array<{ id: string; name: string; isDemo?: boolean }>;
   products: CampaignProduct[];
   access?: {
     mode: OrgAccessMode;
@@ -189,6 +191,8 @@ export interface Contact {
   suggestedFollowUpMethod?: 'email' | 'call' | 'meeting' | 'text' | 'other' | null; // AI-suggested follow-up method
   suggestedFollowUpNote?: string | null; // AI-suggested follow-up message/note
   suggestedFollowUpPriority?: 'low' | 'medium' | 'high' | null; // AI-suggested priority
+  followUpEveryDays?: number | null; // Repeating follow-up every N days after the last visit
+  followUpAssignee?: string | null; // Who gets the reminders; null means the contact's creator
   createdAt: Date;
   createdBy: string; // user uid
   createdByName?: string | null;

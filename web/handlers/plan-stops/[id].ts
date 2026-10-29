@@ -2,7 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { rejectIfStoreLocked } from '../lib/store-access.js';
-import { MAX_STOPS_PER_DAY, findOverlaps, parseDateKey, planStopJson } from '../lib/plan-stops.js';
+import { MAX_STOPS_PER_DAY, canSeeTeamPlans, findOverlaps, parseDateKey, planStopJson, userNames } from '../lib/plan-stops.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
@@ -11,9 +11,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const id = (req.query?.id as string)?.trim();
   if (!id) return res.status(400).json({ error: 'Stop id required' });
 
-  // Only the person whose plan it is can change it.
+  // The person whose plan it is can change it, and so can organization admins.
   const stop = await prisma.planStop.findUnique({ where: { id } });
-  if (!stop || stop.user_id !== uid) return res.status(404).json({ error: 'Stop not found' });
+  if (!stop) return res.status(404).json({ error: 'Stop not found' });
+  if (stop.user_id !== uid && !(await canSeeTeamPlans(uid, stop.store_id))) return res.status(404).json({ error: 'Stop not found' });
+  const owner = stop.user_id;
   if (await rejectIfStoreLocked(res, stop.store_id, uid)) return;
 
   if (req.method === 'DELETE') {
@@ -36,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (date.getTime() !== stop.plan_date.getTime()) {
         // Moving to another day puts the stop at the end of that day.
         const there = await prisma.planStop.findMany({
-          where: { store_id: stop.store_id, user_id: uid, plan_date: date },
+          where: { store_id: stop.store_id, user_id: owner, plan_date: date },
           select: { position: true, opportunity_id: true, business_id: true, place_id: true },
         });
         const duplicate = there.some((other) =>
@@ -54,8 +56,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
     const row = await prisma.planStop.update({ where: { id }, data });
-    const overlaps = await findOverlaps(row.store_id, uid, [row]);
-    return res.status(200).json(planStopJson(row, overlaps.get(row.id) || []));
+    const overlaps = await findOverlaps(row.store_id, owner, [row]);
+    const names = await userNames([row.assigned_by]);
+    return res.status(200).json(planStopJson(row, overlaps.get(row.id) || [], (row.assigned_by && names.get(row.assigned_by)) || null));
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

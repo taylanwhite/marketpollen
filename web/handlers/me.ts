@@ -41,7 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       org: {
         include: {
           products: { orderBy: { display_order: 'asc' } },
-          stores: { select: { id: true, name: true, archived_at: true } },
+          stores: { select: { id: true, name: true, archived_at: true, is_demo: true } },
         },
       },
     },
@@ -54,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     isAdmin,
     stores: org.stores
       .filter((s: any) => !s.archived_at && (!allowedStoreIds || allowedStoreIds.has(s.id)))
-      .map((s: any) => ({ id: s.id, name: s.name })),
+      .map((s: any) => ({ id: s.id, name: s.name, isDemo: s.is_demo })),
     products: org.products.map((p: any) => ({
       id: p.id,
       slug: p.slug,
@@ -73,7 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const allOrgs = await prisma.organization.findMany({
       include: {
         products: { orderBy: { display_order: 'asc' } },
-        stores: { select: { id: true, name: true, archived_at: true } },
+        stores: { select: { id: true, name: true, archived_at: true, is_demo: true } },
       },
     });
     organizations = allOrgs.map((org) => mapOrg(org, true));
@@ -99,7 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         where: { id: { in: storeOrgIds } },
         include: {
           products: { orderBy: { display_order: 'asc' } },
-          stores: { select: { id: true, name: true, archived_at: true } },
+          stores: { select: { id: true, name: true, archived_at: true, is_demo: true } },
         },
       });
       const allowedStoreIds = new Set(stores.map((store) => store.id));
@@ -129,6 +129,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdBy: s.created_by,
       organizationId: s.organization_id ?? undefined,
       billingStatus: s.billing_status,
+      isDemo: s.is_demo,
       pauseOn: s.pause_on,
       archivedAt: s.archived_at,
     })),

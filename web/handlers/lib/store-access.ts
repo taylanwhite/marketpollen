@@ -15,6 +15,7 @@ export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, ui
     where: { id: storeId },
     select: {
       billing_status: true,
+      is_demo: true,
       pause_on: true,
       archived_at: true,
       organization: {
@@ -28,7 +29,8 @@ export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, ui
     },
   });
   if (!store) return false;
-  if (store.organization) {
+  // Demo stores are free, so an unpaid organization doesn't lock them.
+  if (store.organization && !store.is_demo) {
     const access = billingAccess(store.organization);
     if (access.mode === 'trial_ended' || access.mode === 'payment_locked') {
       if (!(uid && await isPlatformAdmin(uid))) {
@@ -141,16 +143,31 @@ export async function readableStoreScope(
     if (!('all' in access) && !(await isOrgAdmin(uid, orgId))) return null;
     const orgStores = await prisma.store.findMany({
       where: { organization_id: orgId },
-      select: { id: true },
+      select: { id: true, is_demo: true },
     });
-    const storeIds = orgStores
-      .map((store) => store.id)
-      .filter((id) => 'all' in access || access.ids.includes(id));
-    return { storeIds };
+    const visible = orgStores.filter((store) => 'all' in access || access.ids.includes(store.id));
+    return { storeIds: withoutDemoStores(visible) };
   }
 
-  if ('all' in access) return { unrestricted: true };
-  return { storeIds: access.ids };
+  if ('all' in access) {
+    // Platform-wide totals leave demo stores out too.
+    const demoCount = await prisma.store.count({ where: { is_demo: true } });
+    if (demoCount === 0) return { unrestricted: true };
+    const real = await prisma.store.findMany({ where: { is_demo: false }, select: { id: true } });
+    return { storeIds: real.map((store) => store.id) };
+  }
+  const mine = await prisma.store.findMany({ where: { id: { in: access.ids } }, select: { id: true, is_demo: true } });
+  return { storeIds: withoutDemoStores(mine) };
+}
+
+/**
+ * Multi-store views (reports, bites, the org map) leave demo stores out so
+ * practice data doesn't inflate real numbers. When every store is a demo
+ * (a demo organization), keep them all so the demo still has numbers.
+ */
+function withoutDemoStores(stores: Array<{ id: string; is_demo: boolean }>): string[] {
+  const real = stores.filter((store) => !store.is_demo);
+  return (real.length > 0 ? real : stores).map((store) => store.id);
 }
 
 export function storeIdWhere(

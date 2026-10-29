@@ -6,6 +6,7 @@ import { usePermissions } from '../contexts/PermissionContext';
 import { Store } from '../types';
 import { api } from '../api/client';
 import { BillingAccessGate } from '../components/BillingAccessGate';
+import { DemoBanner } from '../components/DemoBanner';
 import { AddressPicker } from '../components/AddressPicker';
 import { BillingQuote, BillingQuoteDialog } from '../components/BillingQuoteDialog';
 import {
@@ -106,7 +107,9 @@ export function StorePicker() {
   const visibleStores = activeOrgId
     ? stores.filter((store) => store.organizationId === activeOrgId)
     : stores;
-  const orgLocked = !isAdmin() && (activeOrg?.access?.mode === 'trial_ended' || activeOrg?.access?.mode === 'payment_locked');
+  // An organization with only demo stores is a demo organization: no trial or payment lock.
+  const demoOrg = visibleStores.length > 0 && visibleStores.every((store) => store.isDemo);
+  const orgLocked = !isAdmin() && !demoOrg && (activeOrg?.access?.mode === 'trial_ended' || activeOrg?.access?.mode === 'payment_locked');
 
   const chooseOrg = (orgId: string) => {
     setSelectedOrgId(orgId);
@@ -114,7 +117,7 @@ export function StorePicker() {
   };
 
   const handleSelectStore = (storeId: string) => {
-    if (orgLocked) return;
+    if (orgLocked && !visibleStores.find((store) => store.id === storeId)?.isDemo) return;
     localStorage.setItem('selectedStoreId', storeId);
     if (activeOrgId) localStorage.setItem('selectedOrgId', activeOrgId);
     setCurrentStore(storeId);
@@ -336,16 +339,16 @@ export function StorePicker() {
                 </FormControl>
               )}
 
-              <BillingAccessGate
+              {demoOrg ? <DemoBanner label="Demo organization" /> : <BillingAccessGate
                 variant="banner"
                 access={activeOrg?.access}
                 orgId={activeOrg?.id}
                 orgName={activeOrg?.name}
                 canPay={!!activeOrg?.isAdmin}
                 isGlobalAdmin={isAdmin()}
-                storeCount={activeOrg?.stores.length || visibleStores.length || 1}
+                storeCount={activeOrg?.stores.filter((store) => !store.isDemo).length || 1}
                 canSwitch={organizations.length > 1}
-              />
+              />}
 
               <Grid container spacing={2} sx={{ mb: 3 }}>
                 {showAllStores && (
@@ -394,13 +397,15 @@ export function StorePicker() {
                     )}
                   </Grid>
                 )}
-                {visibleStores.map((store) => (
+                {visibleStores.map((store) => {
+                  const cardLocked = orgLocked && !store.isDemo;
+                  return (
                   <Grid size={{ xs: 12, sm: 6, md: 4 }} key={store.id} sx={{ display: 'flex' }}>
                     <Card
                       sx={{
-                        cursor: orgLocked ? 'default' : 'pointer',
-                        opacity: orgLocked ? 0.55 : 1,
-                        pointerEvents: orgLocked ? 'none' : 'auto',
+                        cursor: cardLocked ? 'default' : 'pointer',
+                        opacity: cardLocked ? 0.55 : 1,
+                        pointerEvents: cardLocked ? 'none' : 'auto',
                         transition: 'all 0.2s',
                         bgcolor: '#ffffff',
                         color: '#252525',
@@ -417,7 +422,7 @@ export function StorePicker() {
                         },
                       }}
                       onClick={() => handleSelectStore(store.id)}
-                      aria-disabled={orgLocked}
+                      aria-disabled={cardLocked}
                     >
                       <CardContent sx={{ textAlign: 'center', py: 3, flex: 1, display: 'flex', flexDirection: 'column' }}>
                         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -428,6 +433,9 @@ export function StorePicker() {
                             <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                               {store.city}, {store.state}
                             </Typography>
+                          )}
+                          {store.isDemo && (
+                            <Chip size="small" label="Demo" sx={{ mt: 1, alignSelf: 'center', bgcolor: '#efe9fb', color: '#4a2f8a', fontWeight: 600 }} />
                           )}
                           {store.billingStatus === 'paused' && (
                             <Chip size="small" color="warning" label="Paused" sx={{ mt: 1, alignSelf: 'center' }} />
@@ -528,7 +536,8 @@ export function StorePicker() {
                       </CardContent>
                     </Card>
                   </Grid>
-                ))}
+                  );
+                })}
               </Grid>
 
               <Box sx={{ textAlign: 'center', display: 'flex', justifyContent: 'center', gap: 1 }}>

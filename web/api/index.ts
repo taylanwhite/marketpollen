@@ -51,6 +51,8 @@ import platformHandler from '../dist-handlers/platform.js';
 import orgBillingHandler from '../dist-handlers/organizations/[id]/billing.js';
 import orgMembersHandler from '../dist-handlers/organizations/[id]/members.js';
 import billingCronHandler from '../dist-handlers/billing-cron.js';
+import followUpRemindersHandler from '../dist-handlers/follow-up-reminders.js';
+import storePeopleHandler from '../dist-handlers/store-people.js';
 import storeBillingHandler from '../dist-handlers/stores/[id]/billing.js';
 import importCustomersHandler from '../dist-handlers/import-customers.js';
 
@@ -87,6 +89,9 @@ const withIdPid = (handler: Handler): express.RequestHandler => (req, res) => {
 app.get('/api/health', route(healthHandler));
 app.get('/api/billing-cron', route(billingCronHandler));
 app.post('/api/billing-cron', route(billingCronHandler));
+app.get('/api/follow-up-reminders', route(followUpRemindersHandler));
+app.post('/api/follow-up-reminders', route(followUpRemindersHandler));
+app.get('/api/store-people', route(storePeopleHandler));
 app.head('/api/health', route(healthHandler));
 
 app.get('/api/me', route(meHandler));

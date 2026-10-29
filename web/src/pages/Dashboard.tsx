@@ -7,11 +7,14 @@ import { useDonation } from '../contexts/DonationContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { ContactForm } from '../components/ContactForm';
 import { ImportCustomersDialog } from '../components/ImportCustomersDialog';
-import { connectionValue } from '../utils/connectionLabel';
+import { connectionValue, lastVisit, visitorNames } from '../utils/connectionLabel';
 import { PhoneLink } from '../components/PhoneLink';
 import { knownOrganizationTypes, corporateAccountFromBusiness, corporateAccountPayload, type CorporateAccountFields } from '../utils/organizationTypes';
 import { CorporateAccountEditor } from '../components/ContactProfileFields';
 import { AddressPicker } from '../components/AddressPicker';
+import { FollowUpScheduleFields } from '../components/FollowUpScheduleFields';
+import { cadenceText, type FollowUpSchedule } from '../utils/followUpCadence';
+import { useStorePeople } from '../hooks/useStorePeople';
 
 // Heavy modals — pulled in on demand to keep the contacts list snappy on
 // first paint, especially on slow LTE.
@@ -236,7 +239,8 @@ export function Dashboard() {
     }
 
     if (marketerFilter) {
-      filtered = filtered.filter(c => (c.createdByName || '') === marketerFilter);
+      // Who actually made the visits, not who created the contact record.
+      filtered = filtered.filter(c => visitorNames(c.reachouts).includes(marketerFilter));
     }
 
     if (statusFilter) {
@@ -338,7 +342,9 @@ export function Dashboard() {
         const bName = `${b.firstName || ''} ${b.lastName || ''}`.trim();
         return aName.localeCompare(bName);
       }
-      if (contactSort === 'marketer') return (a.createdByName || '').localeCompare(b.createdByName || '');
+      if (contactSort === 'marketer') {
+        return (lastVisit(a.reachouts)?.createdByName || '').localeCompare(lastVisit(b.reachouts)?.createdByName || '');
+      }
       if (contactSort === 'updated') {
         return byTime(b.updatedAt || b.lastReachoutDate || b.createdAt) - byTime(a.updatedAt || a.lastReachoutDate || a.createdAt);
       }
@@ -470,7 +476,7 @@ export function Dashboard() {
   const marketers = useMemo(() => {
     const names = new Set<string>();
     contacts.forEach((contact) => {
-      if (contact.createdByName) names.add(contact.createdByName);
+      visitorNames(contact.reachouts).forEach((name) => names.add(name));
     });
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [contacts]);
@@ -659,6 +665,45 @@ export function Dashboard() {
       console.error('Failed to add to calendar:', err);
     } finally {
       setAddingToCalendar(false);
+    }
+  };
+
+  const [schedule, setSchedule] = useState<FollowUpSchedule>({ everyDays: null, assignee: '' });
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [scheduleSaved, setScheduleSaved] = useState('');
+  const schedulePeople = useStorePeople({ storeId: followUpDialogContact?.storeId || permissions.currentStoreId });
+  useEffect(() => {
+    setSchedule({ everyDays: followUpDialogContact?.followUpEveryDays ?? null, assignee: followUpDialogContact?.followUpAssignee || '' });
+    setScheduleSaved('');
+    // Reset only when a different contact opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followUpDialogContact?.id]);
+
+  const saveSchedule = async () => {
+    if (!followUpDialogContact) return;
+    setSavingSchedule(true);
+    setScheduleSaved('');
+    try {
+      const updated = await api.patch<Contact>(`/contacts/${followUpDialogContact.id}`, {
+        followUpEveryDays: schedule.everyDays,
+        followUpAssignee: schedule.everyDays ? schedule.assignee || null : null,
+      });
+      const next = {
+        ...followUpDialogContact,
+        followUpEveryDays: updated.followUpEveryDays ?? null,
+        followUpAssignee: updated.followUpAssignee ?? null,
+        suggestedFollowUpDate: updated.suggestedFollowUpDate ? new Date(updated.suggestedFollowUpDate) : null,
+        suggestedFollowUpNote: updated.suggestedFollowUpNote ?? null,
+      };
+      setFollowUpDialogContact(next);
+      setContacts((prev) => prev.map((contact) => (contact.id === next.id ? { ...contact, ...next } : contact)));
+      setScheduleSaved(next.followUpEveryDays && next.suggestedFollowUpDate
+        ? `Saved. Next follow-up ${new Date(next.suggestedFollowUpDate).toLocaleDateString()}, then ${cadenceText(next.followUpEveryDays).toLowerCase()} after each visit.`
+        : 'Schedule removed.');
+    } catch (err) {
+      setScheduleSaved(err instanceof Error ? err.message : 'Could not save the schedule');
+    } finally {
+      setSavingSchedule(false);
     }
   };
 
@@ -1081,7 +1126,7 @@ export function Dashboard() {
                 onChange={(_event, value) => setMarketerFilter(value || '')}
                 sx={{ minWidth: 200, flex: '1 1 180px', maxWidth: 260 }}
                 renderInput={(params) => (
-                  <TextField {...params} label="Created by" placeholder="Marketer" />
+                  <TextField {...params} label="Visited by" placeholder="Anyone" />
                 )}
               />
               <Autocomplete
@@ -1600,11 +1645,18 @@ export function Dashboard() {
                       </Box>
                       
                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 2 }}>
-                        {connectionValue(contact.createdByName, contact.createdAt) && (
-                          <Typography variant="caption" color="text.secondary">
-                            Connected by {connectionValue(contact.createdByName, contact.createdAt)}
-                          </Typography>
-                        )}
+                        {(() => {
+                          const visit = lastVisit(contact.reachouts);
+                          return (
+                            <Typography variant="caption" color="text.secondary">
+                              {!visit
+                                ? 'No visits yet'
+                                : visit.createdByName
+                                  ? `Last visit by ${connectionValue(visit.createdByName, visit.date)}`
+                                  : `Last visit ${connectionValue(null, visit.date) || ''}`}
+                            </Typography>
+                          );
+                        })()}
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <BusinessIcon fontSize="small" color="action" />
                           <Typography variant="body2" color="text.secondary">
@@ -1753,6 +1805,29 @@ export function Dashboard() {
                   {addingToCalendar ? 'Scheduling…' : 'Schedule this date'}
                 </Button>
               )}
+            </Box>
+
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 2, pt: 2, borderTop: 1, borderColor: 'divider' }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Repeat</Typography>
+              <FollowUpScheduleFields
+                value={schedule}
+                onChange={(next) => { setSchedule(next); setScheduleSaved(''); }}
+                people={schedulePeople}
+                creatorName={followUpDialogContact?.createdByName}
+                disabled={savingSchedule}
+              />
+              {scheduleSaved && <Alert severity="info" sx={{ py: 0.5 }}>{scheduleSaved}</Alert>}
+              <Button
+                variant="outlined"
+                onClick={saveSchedule}
+                disabled={savingSchedule || !followUpDialogContact || (
+                  schedule.everyDays === (followUpDialogContact.followUpEveryDays ?? null)
+                  && schedule.assignee === (followUpDialogContact.followUpAssignee || '')
+                )}
+                sx={{ alignSelf: 'flex-start' }}
+              >
+                {savingSchedule ? 'Saving…' : 'Save schedule'}
+              </Button>
             </Box>
 
             {followUpLoading ? (

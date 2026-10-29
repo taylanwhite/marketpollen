@@ -24,7 +24,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const orgs = await prisma.organization.findMany({
     orderBy: { name: 'asc' },
     include: {
-      stores: { where: { archived_at: null }, select: { id: true } },
+      stores: { where: { archived_at: null }, select: { id: true, is_demo: true } },
       members: { where: { is_admin: true }, select: { user: { select: { email: true } } } },
     },
   });
@@ -32,7 +32,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   return res.status(200).json(orgs.map((org) => ({
     id: org.id,
     name: org.name,
-    storeCount: org.stores.length,
+    storeCount: org.stores.filter((store) => !store.is_demo).length,
+    demoStoreCount: org.stores.filter((store) => store.is_demo).length,
     monthlyPriceCents: org.monthly_price_cents,
     billingEnabled: org.billing_enabled,
     subscriptionStatus: org.subscription_status,
