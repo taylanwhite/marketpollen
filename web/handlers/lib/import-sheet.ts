@@ -82,6 +82,8 @@ const HEADER_ALIASES: Record<string, Field> = {
   street: 'address',
   'address 1': 'address',
   'address line 1': 'address',
+  'business address': 'address',
+  'company address': 'address',
   city: 'city',
   town: 'city',
   state: 'state',
@@ -112,6 +114,7 @@ const HEADER_ALIASES: Record<string, Field> = {
   notes: 'notes',
   note: 'notes',
   comments: 'notes',
+  'visit notes': 'notes',
 };
 
 function headerKey(cell: string): string {

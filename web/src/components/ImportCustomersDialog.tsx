@@ -55,7 +55,7 @@ const EXAMPLE_TIPS = [
   ['• Businesses already in your store are matched by name, or by street address and zip, and not added twice.'],
   ['• People already on file are matched by email, phone or name, and not added twice.'],
   ['• Extra columns are fine. Anything we don’t recognize is saved in the person’s notes.'],
-  [`• Up to ${ROW_CAP} rows per import. Only the first tab is read.`],
+  [`• Up to ${ROW_CAP} rows per import. Every tab with a Business Name column is read.`],
 ];
 
 async function downloadExample() {
@@ -87,17 +87,82 @@ interface ImportCustomersDialogProps {
   onImported: (summary: string) => void;
 }
 
+// Header names that mean "business name". Kept in step with HEADER_ALIASES in handlers/lib/import-sheet.ts.
+const BUSINESS_HEADERS = new Set(['business name', 'business', 'company', 'company name', 'organization', 'organization name', 'account', 'account name']);
+
+function headerKey(cell: string): string {
+  return cell.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Index of the header row (one with a business name column) in the first 10 rows, or -1. */
+function findHeaderRow(rows: string[][]): number {
+  for (let h = 0; h < Math.min(rows.length, 10); h += 1) {
+    if (rows[h].some((cell) => BUSINESS_HEADERS.has(headerKey(cell)))) return h;
+  }
+  return -1;
+}
+
+/**
+ * Turns a workbook into one sheet. Every tab with a Business Name column is
+ * read and stacked under one header row; when there are several, a Tab column
+ * says where each row came from (it lands in the notes). Workbooks like the Nothing Bundt Cakes
+ * tracker keep an instructions tab first and one tab per kind of business.
+ * When no tab has that column, the fullest tab is sent for the AI to read.
+ */
 async function fileToText(file: File): Promise<{ text: string; truncated: boolean }> {
   const XLSX = await import('xlsx');
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) throw new Error('That file has no sheets');
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' }) as unknown[][];
-  const filled = rows.filter((row) => Array.isArray(row) && row.some((cell) => String(cell ?? '').trim()));
-  const limited = filled.slice(0, ROW_CAP + 1);
+  if (workbook.SheetNames.length === 0) throw new Error('That file has no sheets');
+
+  const tabs = workbook.SheetNames.map((name) => {
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: false, defval: '' }) as unknown[][];
+    const filled = rows
+      .map((row) => (Array.isArray(row) ? row.map((cell) => String(cell ?? '').trim()) : []))
+      .filter((row) => row.some(Boolean));
+    return { name, rows: filled, header: findHeaderRow(filled) };
+  });
+
+  const withHeaders = tabs.filter((tab) => tab.header >= 0 && tab.rows.length > tab.header + 1);
+  let grid: string[][];
+  if (withHeaders.length === 0) {
+    grid = tabs.reduce((best, tab) => (tab.rows.length > best.rows.length ? tab : best)).rows;
+  } else if (withHeaders.length === 1) {
+    grid = withHeaders[0].rows.slice(withHeaders[0].header);
+  } else {
+    // One header row for all tabs: columns with the same name share a column.
+    const header: string[] = [];
+    const columnOf = new Map<string, number>();
+    const column = (label: string) => {
+      const key = headerKey(label) || label;
+      if (!columnOf.has(key)) { columnOf.set(key, header.length); header.push(label); }
+      return columnOf.get(key)!;
+    };
+    const tabColumn = column('Tab');
+    const body: string[][] = [];
+    for (const tab of withHeaders) {
+      const labels = tab.rows[tab.header];
+      const rows = tab.rows.slice(tab.header + 1);
+      // Excel often reports hundreds of empty columns; only keep ones with a value.
+      // Columns with no header name keep their own spot, so they never merge.
+      const map = new Map<number, number>();
+      const columnFor = (i: number) => {
+        if (!map.has(i)) map.set(i, column(labels[i] || `${tab.name} column ${i + 1}`));
+        return map.get(i)!;
+      };
+      for (const cells of rows) {
+        const out: string[] = [];
+        out[tabColumn] = tab.name;
+        cells.forEach((value, i) => { if (value) out[columnFor(i)] = value; });
+        body.push(out);
+      }
+    }
+    grid = [header, ...body.map((row) => Array.from({ length: header.length }, (_, i) => row[i] || ''))];
+  }
+
+  const limited = grid.slice(0, ROW_CAP + 1);
   return {
     text: XLSX.utils.sheet_to_csv(XLSX.utils.aoa_to_sheet(limited)),
-    truncated: filled.length > ROW_CAP + 1,
+    truncated: grid.length > ROW_CAP + 1,
   };
 }
 
@@ -253,7 +318,7 @@ export function ImportCustomersDialog({ open, storeId, onClose, onImported }: Im
             <input
               ref={fileRef}
               type="file"
-              accept=".csv,.tsv,.txt,.xlsx,.xls"
+              accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls"
               hidden
               onChange={onFile}
             />
