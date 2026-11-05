@@ -67,8 +67,8 @@ import { connectionValue } from '../utils/connectionLabel';
 import { PhoneLink } from './PhoneLink';
 import { ContactProfileFields } from './ContactProfileFields';
 import { contactProfilePayload, type ContactProfileExtras } from '../utils/organizationTypes';
-import { FollowUpScheduleFields } from './FollowUpScheduleFields';
-import type { FollowUpSchedule } from '../utils/followUpCadence';
+import { FollowUpCadencesFields } from './FollowUpCadencesFields';
+import { toDrafts, toPayload, type FollowUpCadenceDraft } from '../utils/followUpCadence';
 import { useStorePeople } from '../hooks/useStorePeople';
 
 interface EditContactModalProps {
@@ -116,10 +116,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   const [profile, setProfile] = useState<ContactProfileExtras>({
     organizationType: contact.organizationType || '',
   });
-  const [schedule, setSchedule] = useState<FollowUpSchedule>({
-    everyDays: contact.followUpEveryDays ?? null,
-    assignee: contact.followUpAssignee || '',
-  });
+  const [cadences, setCadences] = useState<FollowUpCadenceDraft[]>(() => toDrafts(contact.followUpCadences));
   const storePeople = useStorePeople({ storeId: contact.storeId });
   
   // Note: newReachout, rawNotes, includeDonation, donationData removed - they were part of the "Add Reachout" tab that was removed
@@ -282,8 +279,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         personalDetails: formData.personalDetails || null,
         status: formData.status,
         ...contactProfilePayload(profile),
-        followUpEveryDays: schedule.everyDays,
-        followUpAssignee: schedule.everyDays ? schedule.assignee || null : null,
+        followUpCadences: toPayload(cadences),
       }, { label: 'Edit contact' });
 
       setSuccess('Contact updated!');
@@ -622,9 +618,9 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
               </TextField>
             </Grid>
             <Grid size={{ xs: 12 }}>
-              <FollowUpScheduleFields
-                value={schedule}
-                onChange={setSchedule}
+              <FollowUpCadencesFields
+                value={cadences}
+                onChange={setCadences}
                 people={storePeople}
                 creatorName={contact.createdByName}
                 disabled={loading}

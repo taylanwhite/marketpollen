@@ -12,12 +12,13 @@ function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-type Due = { name: string; business: string; store: string; date: Date; everyDays: number };
+type Due = { name: string; business: string; store: string; date: Date; everyDays: number; note: string | null };
 
 function line(item: Due, today: Date): string {
   const days = Math.round((today.getTime() - Date.UTC(item.date.getUTCFullYear(), item.date.getUTCMonth(), item.date.getUTCDate())) / 86_400_000);
   const when = days <= 0 ? 'due today' : days === 1 ? '1 day overdue' : `${days} days overdue`;
-  return `${item.name}${item.business ? ` at ${item.business}` : ''} · ${when} · ${cadenceLabel(item.everyDays)}`;
+  const why = item.note ? ` · ${item.note}` : '';
+  return `${item.name}${item.business ? ` at ${item.business}` : ''} · ${when} · ${cadenceLabel(item.everyDays)}${why}`;
 }
 
 /**
@@ -35,36 +36,43 @@ export async function sendFollowUpReminders(now = new Date()) {
   const endOfToday = new Date(today.getTime() + 86_400_000 - 1);
   const isMonday = today.getUTCDay() === 1;
 
-  const contacts = await prisma.contact.findMany({
+  // One line per schedule, so a contact with two schedules due shows both reasons.
+  const cadences = await prisma.followUpCadence.findMany({
     where: {
-      follow_up_every_days: { not: null },
-      suggested_follow_up_date: { lte: endOfToday },
-      store: { archived_at: null, is_demo: false },
+      next_date: { lte: endOfToday },
+      contact: { store: { archived_at: null, is_demo: false } },
     },
     select: {
-      first_name: true,
-      last_name: true,
-      email: true,
-      created_by: true,
-      follow_up_assignee: true,
-      follow_up_every_days: true,
-      suggested_follow_up_date: true,
-      business: { select: { name: true } },
-      store: { select: { name: true } },
+      every_days: true,
+      note: true,
+      assignee: true,
+      next_date: true,
+      contact: {
+        select: {
+          first_name: true,
+          last_name: true,
+          email: true,
+          created_by: true,
+          business: { select: { name: true } },
+          store: { select: { name: true } },
+        },
+      },
     },
-    orderBy: { suggested_follow_up_date: 'asc' },
+    orderBy: { next_date: 'asc' },
   });
 
   const byPerson = new Map<string, Due[]>();
-  for (const c of contacts) {
-    const recipient = c.follow_up_assignee || c.created_by;
+  for (const cadence of cadences) {
+    const c = cadence.contact;
+    const recipient = cadence.assignee || c.created_by;
     const list = byPerson.get(recipient) || [];
     list.push({
       name: [c.first_name, c.last_name].filter(Boolean).join(' ') || c.email || 'A contact',
       business: c.business?.name || '',
       store: c.store.name,
-      date: c.suggested_follow_up_date!,
-      everyDays: c.follow_up_every_days!,
+      date: cadence.next_date!,
+      everyDays: cadence.every_days,
+      note: cadence.note,
     });
     byPerson.set(recipient, list);
   }
@@ -111,7 +119,7 @@ export async function sendFollowUpReminders(now = new Date()) {
     }
     sent += 1;
   }
-  return { people: users.length, sent, skipped, contacts: contacts.length };
+  return { people: users.length, sent, skipped, followUps: cadences.length };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

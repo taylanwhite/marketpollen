@@ -13,6 +13,7 @@ export const contactInclude = {
     include: { creator: { select: { display_name: true, email: true } } },
   },
   contact_files: { orderBy: { uploaded_at: 'desc' as const } },
+  follow_up_cadences: { orderBy: { created_at: 'asc' as const } },
 };
 
 export function reachoutToJson(r: any) {
@@ -78,8 +79,13 @@ export function contactToJson(c: any) {
     suggestedFollowUpMethod: c.suggested_follow_up_method ?? null,
     suggestedFollowUpNote: c.suggested_follow_up_note ?? null,
     suggestedFollowUpPriority: c.suggested_follow_up_priority ?? null,
-    followUpEveryDays: c.follow_up_every_days ?? null,
-    followUpAssignee: c.follow_up_assignee ?? null,
+    followUpCadences: (c.follow_up_cadences || []).map((f: { id: string; every_days: number; note: string | null; assignee: string | null; next_date: Date | null }) => ({
+      id: f.id,
+      everyDays: f.every_days,
+      note: f.note ?? null,
+      assignee: f.assignee ?? null,
+      nextDate: f.next_date ?? null,
+    })),
     lastReachoutDate: c.last_reachout_date ?? null,
     status: c.status ?? null,
     organizationType: c.organization_type ?? null,

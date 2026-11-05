@@ -1,3 +1,4 @@
+import type { FollowUpCadence } from '../utils/followUpCadence';
 // User types
 export interface User {
   uid: string;
@@ -194,8 +195,7 @@ export interface Contact {
   suggestedFollowUpMethod?: 'email' | 'call' | 'meeting' | 'text' | 'other' | null; // AI-suggested follow-up method
   suggestedFollowUpNote?: string | null; // AI-suggested follow-up message/note
   suggestedFollowUpPriority?: 'low' | 'medium' | 'high' | null; // AI-suggested priority
-  followUpEveryDays?: number | null; // Repeating follow-up every N days after the last visit
-  followUpAssignee?: string | null; // Who gets the reminders; null means the contact's creator
+  followUpCadences?: FollowUpCadence[]; // Repeating follow-ups, each every N days after the last visit
   createdAt: Date;
   createdBy: string; // user uid
   createdByName?: string | null;

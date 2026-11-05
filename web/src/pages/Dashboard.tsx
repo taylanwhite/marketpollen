@@ -12,8 +12,8 @@ import { PhoneLink } from '../components/PhoneLink';
 import { knownOrganizationTypes, corporateAccountFromBusiness, corporateAccountPayload, type CorporateAccountFields } from '../utils/organizationTypes';
 import { CorporateAccountEditor } from '../components/ContactProfileFields';
 import { AddressPicker } from '../components/AddressPicker';
-import { FollowUpScheduleFields } from '../components/FollowUpScheduleFields';
-import { cadenceText, type FollowUpSchedule } from '../utils/followUpCadence';
+import { FollowUpCadencesFields } from '../components/FollowUpCadencesFields';
+import { draftsChanged, toDrafts, toPayload, type FollowUpCadenceDraft } from '../utils/followUpCadence';
 import { useStorePeople } from '../hooks/useStorePeople';
 
 // Heavy modals — pulled in on demand to keep the contacts list snappy on
@@ -668,12 +668,12 @@ export function Dashboard() {
     }
   };
 
-  const [schedule, setSchedule] = useState<FollowUpSchedule>({ everyDays: null, assignee: '' });
+  const [cadences, setCadences] = useState<FollowUpCadenceDraft[]>([]);
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [scheduleSaved, setScheduleSaved] = useState('');
   const schedulePeople = useStorePeople({ storeId: followUpDialogContact?.storeId || permissions.currentStoreId });
   useEffect(() => {
-    setSchedule({ everyDays: followUpDialogContact?.followUpEveryDays ?? null, assignee: followUpDialogContact?.followUpAssignee || '' });
+    setCadences(toDrafts(followUpDialogContact?.followUpCadences));
     setScheduleSaved('');
     // Reset only when a different contact opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -685,21 +685,20 @@ export function Dashboard() {
     setScheduleSaved('');
     try {
       const updated = await api.patch<Contact>(`/contacts/${followUpDialogContact.id}`, {
-        followUpEveryDays: schedule.everyDays,
-        followUpAssignee: schedule.everyDays ? schedule.assignee || null : null,
+        followUpCadences: toPayload(cadences),
       });
       const next = {
         ...followUpDialogContact,
-        followUpEveryDays: updated.followUpEveryDays ?? null,
-        followUpAssignee: updated.followUpAssignee ?? null,
+        followUpCadences: updated.followUpCadences || [],
         suggestedFollowUpDate: updated.suggestedFollowUpDate ? new Date(updated.suggestedFollowUpDate) : null,
         suggestedFollowUpNote: updated.suggestedFollowUpNote ?? null,
       };
       setFollowUpDialogContact(next);
       setContacts((prev) => prev.map((contact) => (contact.id === next.id ? { ...contact, ...next } : contact)));
-      setScheduleSaved(next.followUpEveryDays && next.suggestedFollowUpDate
-        ? `Saved. Next follow-up ${new Date(next.suggestedFollowUpDate).toLocaleDateString()}, then ${cadenceText(next.followUpEveryDays).toLowerCase()} after each visit.`
-        : 'Schedule removed.');
+      setCadences(toDrafts(next.followUpCadences));
+      setScheduleSaved(next.followUpCadences.length && next.suggestedFollowUpDate
+        ? `Saved. Next follow-up ${new Date(next.suggestedFollowUpDate).toLocaleDateString()}.`
+        : 'Repeating follow-ups removed.');
     } catch (err) {
       setScheduleSaved(err instanceof Error ? err.message : 'Could not save the schedule');
     } finally {
@@ -1808,10 +1807,9 @@ export function Dashboard() {
             </Box>
 
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mb: 2, pt: 2, borderTop: 1, borderColor: 'divider' }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Repeat</Typography>
-              <FollowUpScheduleFields
-                value={schedule}
-                onChange={(next) => { setSchedule(next); setScheduleSaved(''); }}
+              <FollowUpCadencesFields
+                value={cadences}
+                onChange={(next) => { setCadences(next); setScheduleSaved(''); }}
                 people={schedulePeople}
                 creatorName={followUpDialogContact?.createdByName}
                 disabled={savingSchedule}
@@ -1820,13 +1818,10 @@ export function Dashboard() {
               <Button
                 variant="outlined"
                 onClick={saveSchedule}
-                disabled={savingSchedule || !followUpDialogContact || (
-                  schedule.everyDays === (followUpDialogContact.followUpEveryDays ?? null)
-                  && schedule.assignee === (followUpDialogContact.followUpAssignee || '')
-                )}
+                disabled={savingSchedule || !followUpDialogContact || !draftsChanged(cadences, followUpDialogContact.followUpCadences)}
                 sx={{ alignSelf: 'flex-start' }}
               >
-                {savingSchedule ? 'Saving…' : 'Save schedule'}
+                {savingSchedule ? 'Saving…' : 'Save follow-ups'}
               </Button>
             </Box>
 

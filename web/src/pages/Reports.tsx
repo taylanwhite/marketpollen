@@ -268,7 +268,7 @@ export function Reports() {
     if (!marketer) return rawContacts;
     return rawContacts.flatMap((contact) => {
       const reachouts = contact.reachouts.filter((reachout) => reachout.createdBy === marketer);
-      const theirs = reachouts.length > 0 || contact.createdBy === marketer || contact.followUpAssignee === marketer;
+      const theirs = reachouts.length > 0 || contact.createdBy === marketer || (contact.followUpCadences || []).some((cadence) => cadence.assignee === marketer);
       return theirs ? [{ ...contact, reachouts }] : [];
     });
   }, [rawContacts, marketer]);

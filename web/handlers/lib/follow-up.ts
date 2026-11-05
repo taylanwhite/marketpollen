@@ -30,13 +30,28 @@ export function nextFollowUpDate(from: Date, days: number): Date {
   return next;
 }
 
+export const MAX_CADENCE_NOTE = 300;
+export const MAX_CADENCES_PER_CONTACT = 10;
+
+/** What the reminder says: the note when there is one, else the schedule. */
+export function cadenceText(c: { every_days: number; note: string | null }): string {
+  const label = cadenceLabel(c.every_days);
+  return c.note ? `${c.note} (${label})` : `Scheduled follow-up (${label})`;
+}
+
+function nextFrom(lastVisit: Date | undefined, days: number): Date {
+  const today = nextFollowUpDate(new Date(), 0);
+  const next = nextFollowUpDate(lastVisit || new Date(), lastVisit ? days : 0);
+  return next < today ? today : next;
+}
+
 /**
- * Sets the contact's next follow-up from its schedule: N days after the
- * latest visit (or today, if there are none yet, or if that day already
- * passed). Replaces any scheduled follow-up on the calendar with one for
- * the new date. Does nothing when the contact has no schedule.
+ * Sets each cadence's next follow-up: N days after the latest visit (or
+ * today, if there are none yet, or if that day already passed). Each one
+ * replaces only its own upcoming reminder on the calendar, so follow-ups
+ * added by hand and other schedules stay put. Pass no ids to do them all.
  */
-export async function scheduleNextFollowUp(contactId: string, actingUid: string): Promise<Date | null> {
+export async function scheduleCadences(contactId: string, actingUid: string, cadenceIds?: string[]): Promise<void> {
   const contact = await prisma.contact.findUnique({
     where: { id: contactId },
     select: {
@@ -46,45 +61,82 @@ export async function scheduleNextFollowUp(contactId: string, actingUid: string)
       first_name: true,
       last_name: true,
       email: true,
-      follow_up_every_days: true,
-      follow_up_assignee: true,
+      follow_up_cadences: true,
       reachouts: { orderBy: { date: 'desc' }, take: 1, select: { date: true } },
     },
   });
-  const days = contact?.follow_up_every_days;
-  if (!contact || !days) return null;
+  if (!contact) return;
+  const targets = contact.follow_up_cadences.filter((c) => !cadenceIds || cadenceIds.includes(c.id));
+  if (targets.length === 0) return;
 
   const lastVisit = contact.reachouts[0]?.date;
-  const today = nextFollowUpDate(new Date(), 0);
-  let next = nextFollowUpDate(lastVisit || new Date(), lastVisit ? days : 0);
-  if (next < today) next = today;
-
   const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || contact.email || 'Contact';
-  const note = `Scheduled follow-up (${cadenceLabel(days)})`;
+  await prisma.$transaction(targets.flatMap((cadence) => {
+    const next = nextFrom(lastVisit, cadence.every_days);
+    return [
+      prisma.followUpCadence.update({ where: { id: cadence.id }, data: { next_date: next } }),
+      prisma.calendarEvent.updateMany({
+        where: { follow_up_cadence_id: cadence.id, status: 'scheduled' },
+        data: { status: 'cancelled', cancelled_at: new Date() },
+      }),
+      prisma.calendarEvent.create({
+        data: {
+          store_id: contact.store_id,
+          title: `Follow-up: ${name}`,
+          description: cadenceText(cadence),
+          date: next,
+          type: 'followup',
+          contact_id: contact.id,
+          business_id: contact.business_id,
+          priority: 'medium',
+          status: 'scheduled',
+          created_by: cadence.assignee || actingUid,
+          follow_up_cadence_id: cadence.id,
+        },
+      }),
+    ];
+  }));
+  await syncContactFollowUp(contactId);
+}
 
-  await prisma.$transaction([
-    prisma.contact.update({
+/**
+ * Keeps the contact's "next follow-up" on the soonest schedule, which the
+ * dashboard and contact lists show. When the last schedule goes away, a
+ * date that came from a schedule is cleared; one set some other way stays.
+ */
+export async function syncContactFollowUp(contactId: string, removedTexts: string[] = []): Promise<void> {
+  const contact = await prisma.contact.findUnique({
+    where: { id: contactId },
+    select: { suggested_follow_up_note: true, follow_up_cadences: { where: { next_date: { not: null } }, orderBy: { next_date: 'asc' }, take: 1 } },
+  });
+  if (!contact) return;
+  const soonest = contact.follow_up_cadences[0];
+  if (soonest) {
+    await prisma.contact.update({
       where: { id: contactId },
-      data: { suggested_follow_up_date: next, suggested_follow_up_note: note },
-    }),
+      data: { suggested_follow_up_date: soonest.next_date, suggested_follow_up_note: cadenceText(soonest) },
+    });
+    return;
+  }
+  const note = contact.suggested_follow_up_note || '';
+  if (removedTexts.includes(note) || note.startsWith('Scheduled follow-up (')) {
+    await prisma.contact.update({
+      where: { id: contactId },
+      data: { suggested_follow_up_date: null, suggested_follow_up_note: null },
+    });
+  }
+}
+
+/** Takes the given schedules off the contact and their upcoming reminders off the calendar. */
+export async function removeCadences(contactId: string, cadenceIds: string[]): Promise<void> {
+  if (cadenceIds.length === 0) return;
+  const removed = await prisma.followUpCadence.findMany({ where: { id: { in: cadenceIds }, contact_id: contactId } });
+  await prisma.$transaction([
     prisma.calendarEvent.updateMany({
-      where: { contact_id: contactId, type: 'followup', status: 'scheduled' },
+      where: { follow_up_cadence_id: { in: cadenceIds }, status: 'scheduled' },
       data: { status: 'cancelled', cancelled_at: new Date() },
     }),
-    prisma.calendarEvent.create({
-      data: {
-        store_id: contact.store_id,
-        title: `Follow-up: ${name}`,
-        description: note,
-        date: next,
-        type: 'followup',
-        contact_id: contact.id,
-        business_id: contact.business_id,
-        priority: 'medium',
-        status: 'scheduled',
-        created_by: contact.follow_up_assignee || actingUid,
-      },
-    }),
+    prisma.followUpCadence.deleteMany({ where: { id: { in: cadenceIds }, contact_id: contactId } }),
   ]);
-  return next;
+  await syncContactFollowUp(contactId, removed.map(cadenceText));
 }

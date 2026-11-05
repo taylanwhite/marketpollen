@@ -237,9 +237,9 @@ model Contact {
   suggested_follow_up_method  String?
   suggested_follow_up_note    String?
   suggested_follow_up_priority String?
-  // Repeating follow-up: every N days after the last visit. Null means no schedule.
+  // Legacy single schedule, copied into follow_up_cadences on deploy and then
+  // cleared (see prisma/sql/copy-legacy-follow-up-cadences.sql). Not read by the app.
   follow_up_every_days       Int?
-  // Who gets the reminders. Null falls back to whoever created the contact.
   follow_up_assignee         String?
   last_reachout_date         DateTime?
   status                     String?
@@ -255,11 +255,35 @@ model Contact {
   reachouts Reachout[]
   contact_files ContactFile[]
   calendar_events CalendarEvent[]
+  follow_up_cadences FollowUpCadence[]
 
   @@unique([business_id, contact_id])
   @@index([store_id])
   @@index([business_id])
   @@map("contacts")
+}
+
+// A repeating follow-up on a contact: every N days after the latest visit.
+// A contact can have several, each with its own reason and owner.
+model FollowUpCadence {
+  id         String    @id @default(uuid()) @db.Uuid
+  contact_id String    @db.Uuid
+  every_days Int
+  // Why the reminder goes out, e.g. "Ask about holiday catering". Optional.
+  note       String?
+  // Who gets the reminders. Null falls back to whoever created the contact.
+  assignee   String?
+  next_date  DateTime?
+  created_by String
+  created_at DateTime  @default(now())
+  updated_at DateTime  @default(now()) @updatedAt
+
+  contact         Contact         @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  calendar_events CalendarEvent[]
+
+  @@index([contact_id])
+  @@index([next_date])
+  @@map("follow_up_cadences")
 }
 
 model ContactBusiness {
@@ -338,9 +362,12 @@ model CalendarEvent {
   created_at   DateTime  @default(now())
   completed_at DateTime?
   cancelled_at DateTime?
+  // Set on the reminder a repeating follow-up put on the calendar.
+  follow_up_cadence_id String? @db.Uuid
 
   store    Store    @relation(fields: [store_id], references: [id], onDelete: Cascade)
   contact  Contact? @relation(fields: [contact_id], references: [id], onDelete: SetNull)
+  follow_up_cadence FollowUpCadence? @relation(fields: [follow_up_cadence_id], references: [id], onDelete: SetNull)
   business Business? @relation(fields: [business_id], references: [id], onDelete: SetNull)
   creator  User     @relation("CalendarEventCreatedBy", fields: [created_by], references: [id])
 

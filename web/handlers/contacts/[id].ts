@@ -5,7 +5,17 @@ import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-
 import { contactInclude, contactToJson } from '../lib/contact-json.js';
 import { syncContactBusinesses } from '../lib/contact-businesses.js';
 import { contactProfileData } from '../lib/contact-profile.js';
-import { cleanEveryDays, scheduleNextFollowUp } from '../lib/follow-up.js';
+import {
+  MAX_CADENCES_PER_CONTACT,
+  MAX_CADENCE_NOTE,
+  cleanEveryDays,
+  removeCadences,
+  scheduleCadences,
+} from '../lib/follow-up.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type CadenceInput = { id?: string | null; everyDays?: number | null; note?: string | null; assignee?: string | null };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
@@ -42,9 +52,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastReachoutDate?: string | Date | null;
       status?: string | null;
       organizationType?: string | null;
-      /** Repeat follow-ups every N days. Null stops the schedule. */
+      /** The contact's repeating follow-ups, as a full list: left-out ones are removed. */
+      followUpCadences?: CadenceInput[];
+      /** Older app versions sent one schedule; still read so queued offline edits land. */
       followUpEveryDays?: number | null;
-      /** Who gets the reminders. Null means whoever created the contact. */
       followUpAssignee?: string | null;
       businessId?: string;
       businessIds?: string[];
@@ -70,22 +81,58 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.suggestedFollowUpMethod !== undefined) updateData.suggested_follow_up_method = body.suggestedFollowUpMethod;
     if (body.suggestedFollowUpNote !== undefined) updateData.suggested_follow_up_note = body.suggestedFollowUpNote;
     if (body.suggestedFollowUpPriority !== undefined) updateData.suggested_follow_up_priority = body.suggestedFollowUpPriority;
-    let cadenceChanged = false;
-    if (body.followUpEveryDays !== undefined) {
-      const days = cleanEveryDays(body.followUpEveryDays);
-      cadenceChanged = days !== contact.follow_up_every_days;
-      updateData.follow_up_every_days = days;
+    // Repeating follow-ups. Changes are saved now and put on the calendar at
+    // the end, after any new visit below restarts the countdown.
+    let cadencesToSchedule: string[] = [];
+    let cadenceInput = Array.isArray(body.followUpCadences) ? body.followUpCadences : null;
+    if (!cadenceInput && body.followUpEveryDays !== undefined) {
+      // Old clients only knew one schedule: it edits the first and keeps the rest.
+      const [first, ...rest] = contact.follow_up_cadences.map((c) => ({ id: c.id, everyDays: c.every_days, note: c.note, assignee: c.assignee }));
+      cadenceInput = body.followUpEveryDays == null
+        ? []
+        : [{ ...first, everyDays: body.followUpEveryDays, assignee: body.followUpAssignee ?? first?.assignee }, ...rest];
     }
-    if (body.followUpAssignee !== undefined) {
-      const assignee = typeof body.followUpAssignee === 'string' ? body.followUpAssignee.trim() : '';
-      if (assignee) {
-        const member = await prisma.storePermission.findUnique({
-          where: { user_id_store_id: { user_id: assignee, store_id: contact.store_id } },
+    if (cadenceInput) {
+      const wanted: Array<{ id: string | null; every_days: number; note: string | null; assignee: string | null }> = [];
+      for (const item of cadenceInput.slice(0, MAX_CADENCES_PER_CONTACT)) {
+        const days = cleanEveryDays(item?.everyDays);
+        if (!days) continue;
+        const note = typeof item.note === 'string' ? item.note.replace(/\s+/g, ' ').trim().slice(0, MAX_CADENCE_NOTE) : '';
+        const assignee = typeof item.assignee === 'string' ? item.assignee.trim() : '';
+        wanted.push({ id: typeof item.id === 'string' ? item.id : null, every_days: days, note: note || null, assignee: assignee || null });
+      }
+      const people = [...new Set(wanted.map((c) => c.assignee).filter((a): a is string => Boolean(a)))];
+      if (people.length) {
+        const members = await prisma.storePermission.findMany({
+          where: { store_id: contact.store_id, user_id: { in: people } },
           select: { user_id: true },
         });
-        if (!member) return res.status(400).json({ error: 'That person does not have access to this store' });
+        if (members.length < people.length) return res.status(400).json({ error: 'That person does not have access to this store' });
       }
-      updateData.follow_up_assignee = assignee || null;
+
+      const existing = new Map(contact.follow_up_cadences.map((c) => [c.id, c]));
+      const kept = new Set<string>();
+      for (const c of wanted) {
+        const before = c.id ? existing.get(c.id) : undefined;
+        if (before && !kept.has(before.id)) {
+          kept.add(before.id);
+          if (before.every_days !== c.every_days || before.note !== c.note || before.assignee !== c.assignee) {
+            await prisma.followUpCadence.update({ where: { id: before.id }, data: { every_days: c.every_days, note: c.note, assignee: c.assignee } });
+            cadencesToSchedule.push(before.id);
+          }
+        } else {
+          // The app picks the id for a new schedule, so a save sent twice adds it once.
+          const clientId = c.id && UUID.test(c.id) && !kept.has(c.id) && !(await prisma.followUpCadence.findUnique({ where: { id: c.id }, select: { id: true } }))
+            ? c.id
+            : undefined;
+          const created = await prisma.followUpCadence.create({
+            data: { id: clientId, contact_id: id, every_days: c.every_days, note: c.note, assignee: c.assignee, created_by: uid },
+          });
+          kept.add(created.id);
+          cadencesToSchedule.push(created.id);
+        }
+      }
+      await removeCadences(id, contact.follow_up_cadences.filter((c) => !kept.has(c.id)).map((c) => c.id));
     }
     if (body.lastReachoutDate !== undefined) updateData.last_reachout_date = body.lastReachoutDate == null ? null : (body.lastReachoutDate instanceof Date ? body.lastReachoutDate : new Date(body.lastReachoutDate));
 
@@ -96,7 +143,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await syncContactBusinesses(id, contact.store_id, linkedBusinesses);
     }
 
-    let reschedule = cadenceChanged && updateData.follow_up_every_days != null;
     if (Array.isArray(body.reachouts)) {
       const existing = await prisma.reachout.findMany({
         where: { contact_id: id },
@@ -146,7 +192,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             cancelled_at: new Date(),
           },
         });
-        // "No follow-up" also stops a repeating schedule.
+        // "No follow-up" also stops every repeating schedule.
+        const all = await prisma.followUpCadence.findMany({ where: { contact_id: id }, select: { id: true } });
+        await removeCadences(id, all.map((c) => c.id));
         await prisma.contact.update({
           where: { id },
           data: {
@@ -154,13 +202,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             suggested_follow_up_method: null,
             suggested_follow_up_note: null,
             suggested_follow_up_priority: null,
-            follow_up_every_days: null,
           },
         });
-        reschedule = false;
-      } else if (isNewReachout && ('follow_up_every_days' in updateData ? updateData.follow_up_every_days : contact.follow_up_every_days)) {
-        // A new visit restarts the countdown to the next follow-up.
-        reschedule = true;
+        cadencesToSchedule = [];
+      } else if (isNewReachout) {
+        // A new visit restarts the countdown on every schedule.
+        const all = await prisma.followUpCadence.findMany({ where: { contact_id: id }, select: { id: true } });
+        cadencesToSchedule = all.map((c) => c.id);
       }
 
       if (isNewReachout) {
@@ -177,15 +225,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    if (reschedule) {
-      await scheduleNextFollowUp(id, uid);
-    } else if (cadenceChanged && updateData.follow_up_every_days === null) {
-      // Stopping the schedule takes its upcoming reminder off the calendar.
-      await prisma.calendarEvent.updateMany({
-        where: { contact_id: id, type: 'followup', status: 'scheduled', description: { startsWith: 'Scheduled follow-up (' } },
-        data: { status: 'cancelled', cancelled_at: new Date() },
-      });
-    }
+    if (cadencesToSchedule.length) await scheduleCadences(id, uid, cadencesToSchedule);
 
     const updated = await prisma.contact.findUnique({
       where: { id },
