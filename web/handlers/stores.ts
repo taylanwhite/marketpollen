@@ -30,6 +30,7 @@ type StoreRow = {
   } | null;
   statusMessage?: string | null;
   billingActive?: boolean;
+  _count?: { contacts: number; businesses: number };
 };
 
 function toStoreJson(r: StoreRow) {
@@ -47,6 +48,7 @@ function toStoreJson(r: StoreRow) {
     archivedAt: r.archived_at,
     statusMessage: r.statusMessage ?? null,
     billingActive: r.billingActive ?? false,
+    ...(r._count && { contactCount: r._count.contacts, businessCount: r._count.businesses }),
     createdAt: r.created_at,
     createdBy: r.created_by,
   };
@@ -99,6 +101,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         organization: {
           select: { billing_enabled: true, subscription_status: true, paid_quantity: true, monthly_price_cents: true },
         },
+        // Stores with no contacts or businesses can be deleted instead of archived.
+        _count: { select: { contacts: true, businesses: true } },
       },
       orderBy: { name: 'asc' },
     });

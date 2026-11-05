@@ -41,6 +41,7 @@ import {
   Pause as PauseIcon,
   PlayArrow as PlayIcon,
   Archive as ArchiveIcon,
+  DeleteOutline as DeleteIcon,
 } from '@mui/icons-material';
 
 export function Stores() {
@@ -84,7 +85,7 @@ export function Stores() {
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<
     | { type: 'create' }
-    | { type: 'pause' | 'keep_open' | 'resume' | 'archive'; store: Store }
+    | { type: 'pause' | 'keep_open' | 'resume' | 'archive' | 'delete'; store: Store }
     | null
   >(null);
 
@@ -204,7 +205,20 @@ export function Stores() {
     navigate('/dashboard');
   };
 
-  const openStoreQuote = async (store: Store, intent: 'pause_store' | 'keep_open' | 'resume_store' | 'archive_store') => {
+  const isEmptyStore = (store: Store) => store.contactCount === 0 && store.businessCount === 0;
+
+  const openStoreQuote = async (store: Store, intent: 'pause_store' | 'keep_open' | 'resume_store' | 'archive_store' | 'delete_store') => {
+    if (!store.organizationId && intent === 'delete_store') {
+      setPendingAction({ type: 'delete', store });
+      setQuote({
+        intent: 'delete_store',
+        needsCharge: false,
+        needsCheckout: false,
+        message: `Delete ${store.name}? It has no contacts or businesses. The store, its opportunities, calendar events, and planned stops are deleted now. This cannot be undone.`,
+        dueTodayCents: 0,
+      });
+      return;
+    }
     if (!store.organizationId && intent === 'archive_store') {
       setPendingAction({ type: 'archive', store });
       setQuote({
@@ -225,7 +239,15 @@ export function Stores() {
         storeId: store.id,
         storeName: store.name,
       });
-      const type = intent === 'pause_store' ? 'pause' : intent === 'keep_open' ? 'keep_open' : intent === 'resume_store' ? 'resume' : 'archive';
+      const type = intent === 'pause_store'
+        ? 'pause'
+        : intent === 'keep_open'
+          ? 'keep_open'
+          : intent === 'resume_store'
+            ? 'resume'
+            : intent === 'delete_store'
+              ? 'delete'
+              : 'archive';
       setPendingAction({ type, store });
       setQuote(preview.quote);
     } catch (err: any) {
@@ -245,6 +267,15 @@ export function Stores() {
         markStoreArchived(pendingAction.store.id);
         setSuccess(`${pendingAction.store.name} was archived. Its contacts and businesses are still under Archived.`);
         setStoreTab('archived');
+        await loadStores();
+      } else if (pendingAction.type === 'delete') {
+        const deletedId = pendingAction.store.id;
+        await api.delete(`/stores/${deletedId}`);
+        if (permissions.currentStoreId === deletedId) {
+          const nextStore = stores.find((store) => store.id !== deletedId);
+          setCurrentStore(nextStore?.id ?? null);
+        }
+        setSuccess(`${pendingAction.store.name} was deleted.`);
         await loadStores();
       } else {
         await api.post(`/stores/${pendingAction.store.id}/billing`, {
@@ -539,9 +570,16 @@ export function Stores() {
                 </CardContent>
                 <CardActions sx={{ justifyContent: 'flex-end', pt: 0, flexWrap: 'wrap' }} onClick={(event) => event.stopPropagation()}>
                   {storeTab === 'archived' ? (
-                    <Button size="small" onClick={() => openArchivedStore(store)}>
-                      View contacts and businesses
-                    </Button>
+                    <>
+                      {isEmptyStore(store) && (
+                        <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => openStoreQuote(store, 'delete_store')}>
+                          Delete
+                        </Button>
+                      )}
+                      <Button size="small" onClick={() => openArchivedStore(store)}>
+                        View contacts and businesses
+                      </Button>
+                    </>
                   ) : (
                     <>
                       {store.billingActive && store.billingStatus !== 'paused' && store.billingStatus !== 'pause_scheduled' && (
@@ -559,9 +597,15 @@ export function Stores() {
                           Turn back on
                         </Button>
                       )}
-                      <Button size="small" startIcon={<ArchiveIcon />} onClick={() => openStoreQuote(store, 'archive_store')}>
-                        Archive
-                      </Button>
+                      {isEmptyStore(store) ? (
+                        <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => openStoreQuote(store, 'delete_store')}>
+                          Delete
+                        </Button>
+                      ) : (
+                        <Button size="small" startIcon={<ArchiveIcon />} onClick={() => openStoreQuote(store, 'archive_store')}>
+                          Archive
+                        </Button>
+                      )}
                       <Button
                         size="small"
                         startIcon={<EditIcon />}

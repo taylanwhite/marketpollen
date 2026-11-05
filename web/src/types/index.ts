@@ -39,6 +39,9 @@ export interface Store {
   /** Free store for demos: not billed, left out of multi-store reports. */
   isDemo?: boolean;
   archivedAt?: string | Date | null;
+  /** Sent by the store list. A store with no contacts or businesses can be deleted. */
+  contactCount?: number;
+  businessCount?: number;
   createdAt: Date;
   createdBy: string; // user uid
 }

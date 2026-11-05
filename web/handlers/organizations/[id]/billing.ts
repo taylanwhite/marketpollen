@@ -11,6 +11,7 @@ import {
   createPortal,
   quoteAddStore,
   quoteArchiveStore,
+  quoteDeleteStore,
   quoteKeepOpen,
   quotePauseStore,
   quoteResumeStore,
@@ -136,6 +137,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (body.intent === 'keep_open') return res.status(200).json({ quote: await quoteKeepOpen(store.id) });
       if (body.intent === 'resume_store') return res.status(200).json({ quote: await quoteResumeStore(store.id) });
       if (body.intent === 'archive_store') return res.status(200).json({ quote: await quoteArchiveStore(store.id) });
+      if (body.intent === 'delete_store') return res.status(200).json({ quote: await quoteDeleteStore(store.id) });
       return res.status(400).json({ error: 'Unknown preview' });
     }
 

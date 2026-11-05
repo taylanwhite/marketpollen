@@ -30,7 +30,7 @@ const TITLES: Record<BillingQuote['intent'], string> = {
   resume_store: 'Turn this store back on?',
   pause_store: 'Pause this store?',
   keep_open: 'Keep this store open?',
-  delete_store: 'Remove this store?',
+  delete_store: 'Delete this store?',
   archive_store: 'Archive this store?',
 };
 
@@ -59,7 +59,7 @@ function formatDate(value?: string | null): string | null {
 }
 
 function confirmLabel(quote: BillingQuote): string {
-  if (quote.intent === 'delete_store') return 'Remove store';
+  if (quote.intent === 'delete_store') return 'Delete store';
   if (quote.intent === 'archive_store') return 'Archive store';
   if (quote.intent === 'pause_store') return 'Pause store';
   if (quote.intent === 'keep_open') return 'Keep it open';

@@ -101,7 +101,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'DELETE') {
-    return res.status(405).json({ error: 'Stores are archived instead of deleted, so contacts and businesses stay on file.' });
+    const existing = await prisma.store.findUnique({
+      where: { id },
+      select: { organization_id: true, billing_status: true, is_demo: true, archived_at: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'Store not found' });
+    if (existing.organization_id) {
+      if (!(await isOrgAdmin(uid, existing.organization_id))) return res.status(403).json({ error: 'Org admin required' });
+    } else if (!(await canAccessStore(uid, id))) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+    // Only empty stores can be deleted. Anything with contacts or businesses is
+    // archived instead, so that work stays on file. Check and delete together so
+    // a contact added in between isn't erased with the store.
+    const deleted = await prisma.$transaction(async (tx) => {
+      const [contacts, businesses] = await Promise.all([
+        tx.contact.count({ where: { store_id: id } }),
+        tx.business.count({ where: { store_id: id } }),
+      ]);
+      if (contacts > 0 || businesses > 0) return false;
+      await tx.store.delete({ where: { id } });
+      return true;
+    });
+    if (!deleted) {
+      return res.status(409).json({ error: 'This store has contacts or businesses, so it can only be archived.' });
+    }
+    // Archived and demo stores already left the bill, so only an open billed store
+    // comes off the next renewal here.
+    const previousStatus = existing.archived_at || existing.is_demo ? 'archived' : existing.billing_status;
+    try {
+      await afterStoreDeleted(existing.organization_id, previousStatus);
+    } catch (err) {
+      console.error('Store deleted, but the subscription could not be updated', err);
+    }
+    return res.status(200).json({ ok: true });
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

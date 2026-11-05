@@ -956,7 +956,8 @@ export async function quoteDeleteStore(storeId: string): Promise<BillingQuote> {
     };
   }
   const fresh = org.stores.find((row) => row.id === storeId);
-  const dropping = fresh?.billing_status === 'active';
+  // Archived stores already came off the bill when they were archived.
+  const dropping = fresh?.billing_status === 'active' && !fresh.archived_at;
   const nextCount = dropping ? Math.max(0, scheduledRenewal(org) - 1) : scheduledRenewal(org);
   const current = org.paid_quantity * unitOf(org);
   const next = nextCount * unitOf(org);

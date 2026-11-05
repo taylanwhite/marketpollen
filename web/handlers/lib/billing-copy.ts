@@ -93,9 +93,12 @@ export function deleteStoreMessage(input: QuoteInput): string {
   const to = money(input.newMonthlyCents);
   const date = input.periodEnd ? longDate(input.periodEnd) : 'the next subscription renewal';
   if (!input.periodEnd) {
-    return `Remove ${name}? The store and everything in it are deleted now. This cannot be undone.`;
+    return `Delete ${name}? It has no contacts or businesses. The store, its opportunities, calendar events, and planned stops are deleted now. This cannot be undone.`;
   }
-  return `Remove ${name}? The store and everything in it are deleted now. You've already paid through ${date}, so nothing is refunded. ${name} comes off the next subscription, and the monthly total goes from ${from} to ${to}.`;
+  if (input.currentMonthlyCents === input.newMonthlyCents) {
+    return `Delete ${name}? It has no contacts or businesses. The store, its opportunities, calendar events, and planned stops are deleted now. This cannot be undone. The next subscription charge stays ${to}.`;
+  }
+  return `Delete ${name}? It has no contacts or businesses. The store, its opportunities, calendar events, and planned stops are deleted now. This cannot be undone. You've already paid through ${date}, so nothing is refunded. ${name} comes off the next subscription, and the monthly total goes from ${from} to ${to}.`;
 }
 
 export function scheduledPauseBanner(storeName: string, pauseOn: Date, currentMonthlyCents: number, nextMonthlyCents: number): string {
