@@ -422,6 +422,8 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         city: extracted.city || undefined,
         state: extracted.state || undefined,
         zipCode: extracted.zipCode || undefined,
+        // Cards without an address still match the branch near this store.
+        storeId: permissions.currentStoreId || undefined,
       });
       const place = lookup.places?.[0];
       if (!place) {
@@ -831,15 +833,21 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   const hasNotes = rawNotes.trim().length > 0 || hasBusinessCardDraft;
 
   const handleNearbyPlaceTap = (place: NearbyPlace) => {
-    // Pre-fill: drop the business name into the raw notes so AI extraction will
-    // pick it up, and stage the place as the new-business candidate. The
-    // /places-nearby endpoint already filters out places we already have, so
-    // this branch is always a "new business" — no need to also check `businesses`.
+    // Drop the business name into the raw notes so AI extraction picks it up.
     const prefix = `Visited ${place.name}. `;
     setRawNotes((prev) => (prev.trim() ? `${prefix}${prev}` : prefix));
+
+    // A business the store already has: select it instead of creating a copy.
+    const businessId = place.businessId;
+    if (businessId) {
+      setSelectedBusinessIds((current) => current.includes(businessId) ? current : [...current, businessId]);
+      setShowNewBusiness(false);
+      return;
+    }
+
     setShowNewBusiness(true);
     setNewBusinessName(place.name);
-    setNewBusinessPlaceId(place.placeId);
+    setNewBusinessPlaceId(place.placeId || null);
     setNewBusinessAddress((prev) => ({
       address: place.address || prev.address,
       city: place.city || prev.city,

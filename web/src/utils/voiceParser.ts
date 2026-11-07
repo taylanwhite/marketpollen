@@ -91,9 +91,19 @@ export function parseVoiceTranscript(transcript: string): ParsedContactInfo {
 }
 
 // Phone dictation does not know the word "bundtini" and hears something close
-// instead, most often "panini". Nobody hands out paninis on a bakery visit, so
-// swap these back before the notes are shown or sent to the AI.
-const BUNDTINI_MISHEARINGS = /\b(?:paninis?|bundinis?|bun[\s-]?tinis?|bun[\s-]?teen(?:y|ies)|bunt[\s-]?(?:ini|eeny|eenie)s?)\b/gi;
+// instead, most often "panini". Nobody hands out paninis, bikinis, or martinis
+// on a bakery visit, so swap these back before the notes are shown or sent to
+// the AI. Real words other than "panini" are only swapped in the plural, so a
+// note about an actual bikini or martini stays as written.
+const BUNDTINI_MISHEARINGS = new RegExp(
+  [
+    // Made-up spellings: always a bundtini.
+    String.raw`\b(?:bundinis?|bunteenis?|bundteenis?|bun[\s-]?tinis?|bun[\s-]?tiny|bun[\s-]?tinies|bun[\s-]?teen(?:y|ies)|bunt[\s-]?(?:ini|inis|eeny|eenie|eenies|tiny|tinies)|bundt[\s-]?(?:ini|inis|eeny|tiny|tinies))\b`,
+    // Real words dictation swaps in.
+    String.raw`\b(?:paninis?|bikinis|martinis|zucchinis|bun\s+tins)\b`,
+  ].join('|'),
+  'gi',
+);
 
 export function fixBakeryTerms(text: string): string {
   return text.replace(BUNDTINI_MISHEARINGS, (word) => {

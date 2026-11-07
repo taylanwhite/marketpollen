@@ -46,6 +46,18 @@ interface PlaceMatchPickerProps {
   onClose: () => void;
 }
 
+/** The phone's location if it can be had quickly, else null. */
+function currentPosition(): Promise<{ lat: number; lng: number } | null> {
+  if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: false, maximumAge: 120_000, timeout: 4000 },
+    );
+  });
+}
+
 export function PlaceMatchPicker({
   open,
   businessName,
@@ -98,13 +110,19 @@ export function PlaceMatchPicker({
       const searchName = customQuery || businessName;
       const hasBusinessLocation = businessAddress || businessCity || businessState || businessZipCode;
       const store = storeRef.current;
+      const here = await currentPosition();
       const res = await api.post<{ places: PlaceResult[] }>('/places-lookup', {
         name: searchName,
         address: customQuery ? undefined : (businessAddress || undefined),
         city: customQuery ? undefined : (businessCity || undefined),
         state: customQuery ? undefined : (businessState || undefined),
         zipCode: customQuery ? undefined : (businessZipCode || undefined),
-        ...((!customQuery && !hasBusinessLocation && store) && {
+        // Always search around the marketer (or the store), including typed
+        // searches, so a common name doesn't match a place in another state.
+        storeId: permissions.currentStoreId || undefined,
+        lat: here?.lat,
+        lng: here?.lng,
+        ...((customQuery || !hasBusinessLocation) && store && {
           storeAddress: store.address,
           storeCity: store.city,
           storeState: store.state,

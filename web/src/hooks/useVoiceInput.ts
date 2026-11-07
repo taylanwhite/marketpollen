@@ -17,6 +17,10 @@ export function useVoiceInput(): UseVoiceInputReturn {
   const [isListening, setIsListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // Text heard so far in the current dictation session. Kept in refs so the
+  // words still being processed when the mic stops can be saved, not dropped.
+  const sessionFinalRef = useRef('');
+  const sessionInterimRef = useRef('');
 
   useEffect(() => {
     // Check if browser supports Web Speech API
@@ -48,12 +52,11 @@ export function useVoiceInput(): UseVoiceInputReturn {
         }
       }
 
-      // Set the final transcript (accumulated final results)
+      sessionFinalRef.current = final.trim();
+      sessionInterimRef.current = interim.trim();
       if (final) {
         setTranscript(final.trim());
       }
-      
-      // Set interim transcript (temporary, will be replaced)
       setInterimTranscript(interim);
     };
 
@@ -77,8 +80,13 @@ export function useVoiceInput(): UseVoiceInputReturn {
 
     recognition.onend = () => {
       setIsListening(false);
-      // Move any remaining interim to final when stopping
+      // Phones often stop without ever finalizing the last words, so keep
+      // whatever was still in progress as part of the transcript.
+      const kept = [sessionFinalRef.current, sessionInterimRef.current].filter(Boolean).join(' ');
+      if (kept) setTranscript(kept);
       setInterimTranscript('');
+      sessionFinalRef.current = '';
+      sessionInterimRef.current = '';
     };
 
     recognitionRef.current = recognition;
@@ -102,6 +110,10 @@ export function useVoiceInput(): UseVoiceInputReturn {
         return;
       }
       setError(null);
+      // Each session starts fresh; the form already kept the earlier text.
+      sessionFinalRef.current = '';
+      sessionInterimRef.current = '';
+      setTranscript('');
       setInterimTranscript('');
       setIsListening(true);
       try {
@@ -115,9 +127,10 @@ export function useVoiceInput(): UseVoiceInputReturn {
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current && isListening) {
+      // Don't clear the in-progress words here: the browser may still send
+      // them as final, and onend keeps them if it doesn't.
       recognitionRef.current.stop();
       setIsListening(false);
-      setInterimTranscript('');
     }
   }, [isListening]);
 

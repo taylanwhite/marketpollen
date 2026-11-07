@@ -26,12 +26,14 @@ import planStopsHandler from './dist-handlers/plan-stops.js';
 import planStopsIdHandler from './dist-handlers/plan-stops/[id].js';
 import chatCompletionHandler from './dist-handlers/chat-completion.js';
 import extractBusinessCardHandler from './dist-handlers/extract-business-card.js';
+import extractVisitNotesHandler from './dist-handlers/extract-visit-notes.js';
 import createContactFromCallHandler from './dist-handlers/create-contact-from-call.js';
 import sendInviteEmailHandler from './dist-handlers/send-invite-email.js';
 import placesAutocompleteHandler from './dist-handlers/places-autocomplete.js';
 import placesDetailsHandler from './dist-handlers/places-details.js';
 import placesNearbyHandler from './dist-handlers/places-nearby.js';
 import placesLookupHandler from './dist-handlers/places-lookup.js';
+import placesHereHandler from './dist-handlers/places-here.js';
 import usersIndexHandler from './dist-handlers/users/index.js';
 import usersUidHandler from './dist-handlers/users/[uid].js';
 import usersSyncHandler from './dist-handlers/users/sync.js';
@@ -145,6 +147,7 @@ app.all('/api/plan-stops/:id', withId(planStopsIdHandler));
 // AI / integrations
 app.post('/api/chat-completion', route(chatCompletionHandler));
 app.post('/api/extract-business-card', route(extractBusinessCardHandler));
+app.post('/api/extract-visit-notes', route(extractVisitNotesHandler));
 app.post('/api/generate-email', route(generateEmailHandler));
 app.post('/api/create-contact-from-call', route(createContactFromCallHandler));
 app.post('/api/send-invite-email', route(sendInviteEmailHandler));
@@ -154,6 +157,7 @@ app.post('/api/places-autocomplete', route(placesAutocompleteHandler));
 app.post('/api/places-details', route(placesDetailsHandler));
 app.post('/api/places-nearby', route(placesNearbyHandler));
 app.post('/api/places-lookup', route(placesLookupHandler));
+app.post('/api/places-here', route(placesHereHandler));
 
 // Users
 app.get('/api/users', route(usersIndexHandler));

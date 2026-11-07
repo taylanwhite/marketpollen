@@ -1,6 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 import { getAuthUid } from './lib/auth.js';
+import { aiErrorMessage, extractJson, getOpenAI } from './lib/ai.js';
 
 const ALLOWED_IMAGE_DATA_URL_RE = /^data:image\/(png|jpe?g|webp);base64,/i;
 const MAX_IMAGE_DATA_URL_LENGTH = 8_000_000;
@@ -46,9 +47,35 @@ function numberField(value: unknown, key: string): number | undefined {
   return typeof field === 'number' ? field : undefined;
 }
 
+/** Title-cases a name part guessed from an email, like "smith" -> "Smith". */
+function capitalize(part: string): string {
+  return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+}
+
+/**
+ * First and last name from the full name printed on the card. Falls back to
+ * the email address (jane.smith@...) when the card only shows a first name.
+ */
+function splitName(fullName: string | undefined, email: string | undefined): { firstName?: string; lastName?: string } {
+  const parts = (fullName || '')
+    .replace(/,?\s+(jr|sr|ii|iii|iv|md|dds|dmd|phd|cpa|esq|rn)\.?$/i, '')
+    .split(/\s+/)
+    .filter(Boolean);
+  let firstName = parts[0];
+  let lastName = parts.length > 1 ? parts.slice(1).join(' ') : undefined;
+  if (!lastName && email) {
+    const local = email.split('@')[0].toLowerCase();
+    const pieces = local.split(/[._-]/).filter((x) => /^[a-z]{2,}$/.test(x));
+    if (pieces.length >= 2 && (!firstName || pieces[0] === firstName.toLowerCase())) {
+      firstName = firstName || capitalize(pieces[0]);
+      lastName = capitalize(pieces[pieces.length - 1]);
+    }
+  }
+  return { firstName, lastName };
+}
+
 function cleanExtracted(value: unknown): ExtractedBusinessCard {
-  const firstName = stringField(value, 'firstName');
-  const lastName = stringField(value, 'lastName');
+  const { firstName, lastName } = splitName(stringField(value, 'fullName'), stringField(value, 'email'));
   const businessName = stringField(value, 'businessName');
   const title = stringField(value, 'title');
   const email = stringField(value, 'email');
@@ -88,14 +115,58 @@ function cleanExtracted(value: unknown): ExtractedBusinessCard {
   };
 }
 
+/** Reads a business card photo (as a data URL) into contact fields. */
+export async function readBusinessCard(openai: OpenAI, imageDataUrl: string): Promise<ExtractedBusinessCard> {
+  const parsed = await extractJson<Record<string, unknown>>(openai, {
+    name: 'business_card',
+    system: `You read a business card photo and fill in a CRM contact for a bakery's marketing team.
+
+- fullName: the person's complete name exactly as printed, including the last name. Look carefully: the last name may be on its own line, in a different font or color, or next to a logo. Leave out credentials like MD or CPA.
+- businessName: the company or organization, not the person's title.
+- title: their job title or role.
+- phone: the person's direct or mobile number if there is one, otherwise the main number.
+- address is the street address only; city, state (2-letter), and zipCode go in their own fields.
+- personalDetails: only if the card says something useful for sales, otherwise leave it out.
+- reachoutNote: "Contact was created via uploaded business card." plus title or website if helpful.
+- suggestedFollowUpDays: usually 3.
+
+Only fill in what is on the card. If several people appear, use the most prominent one.`,
+    content: [
+      { type: 'image_url', image_url: { url: imageDataUrl, detail: 'high' } },
+      { type: 'text', text: 'Read this business card.' },
+    ],
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        fullName: { type: 'string' },
+        businessName: { type: 'string' },
+        title: { type: 'string' },
+        email: { type: 'string' },
+        phone: { type: 'string' },
+        address: { type: 'string' },
+        city: { type: 'string' },
+        state: { type: 'string' },
+        zipCode: { type: 'string' },
+        website: { type: 'string' },
+        personalDetails: { type: 'string' },
+        reachoutNote: { type: 'string' },
+        suggestedFollowUpDays: { type: 'integer' },
+      },
+      required: ['reachoutNote', 'suggestedFollowUpDays'],
+    },
+  });
+  return cleanExtracted(parsed);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const uid = await getAuthUid(req);
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'OpenAI API key is not configured' });
+  const openai = getOpenAI();
+  if (!openai) return res.status(500).json({ error: 'OpenAI API key is not configured' });
 
   const { imageDataUrl } = req.body as { imageDataUrl?: string };
   if (!imageDataUrl || typeof imageDataUrl !== 'string') {
@@ -109,49 +180,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const openai = new OpenAI({ apiKey });
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-      max_tokens: 600,
-      messages: [
-        {
-          role: 'system',
-          content: `Extract structured CRM contact data from a business card image for a marketing app.
-
-Return valid JSON only with these optional fields when visible:
-- firstName, lastName
-- businessName: company/organization name, not the person's title
-- title: job title or role
-- email
-- phone: main direct phone if present
-- address: street address only
-- city
-- state: 2-letter abbreviation when possible
-- zipCode
-- website
-- personalDetails: short useful sales note only if the card includes something relevant
-- reachoutNote: include "Contact was created via uploaded business card." and add concise context from the card when useful, such as title or website
-- suggestedFollowUpDays: usually 3
-
-Do not invent missing fields. If multiple people appear, extract the most prominent named person.`,
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'Extract the contact and business information from this business card.' },
-            { type: 'image_url', image_url: { url: imageDataUrl, detail: 'high' } },
-          ],
-        },
-      ],
-    });
-
-    const parsed = JSON.parse(response.choices[0]?.message?.content || '{}');
-    return res.status(200).json(cleanExtracted(parsed));
+    return res.status(200).json(await readBusinessCard(openai, imageDataUrl));
   } catch (err: unknown) {
     console.error('Business card extraction error:', err);
-    const message = err instanceof Error ? err.message : 'Business card extraction failed';
-    return res.status(500).json({ error: message });
+    return res.status(500).json({ error: aiErrorMessage(err) });
   }
 }

@@ -4,7 +4,9 @@ import { LocationOn as LocationIcon, Refresh as RefreshIcon } from '@mui/icons-m
 import { api } from '../api/client';
 
 export interface NearbyPlace {
-  placeId: string;
+  /** Set when this is a business the store already has. */
+  businessId?: string;
+  placeId?: string;
   name: string;
   address?: string;
   city?: string;
@@ -19,11 +21,11 @@ interface NearbyPlacesChipsProps {
   maxChips?: number;
 }
 
-// Cache nearby-place results in sessionStorage to avoid burning Google Places
-// quota every time the marketer pops open the +sheet. Cache key is a coarse
-// grid cell (~110m) so small position drift between opens still hits.
-const CACHE_TTL_MS = 5 * 60 * 1000;
-const GRID_DEGREES = 0.001;
+// Cache results briefly in sessionStorage so reopening the form in the same
+// spot doesn't search Google again. The grid cell is small (~30m) so walking
+// next door gives fresh results.
+const CACHE_TTL_MS = 2 * 60 * 1000;
+const GRID_DEGREES = 0.0003;
 
 interface CacheEntry {
   fetchedAt: number;
@@ -33,7 +35,7 @@ interface CacheEntry {
 function cacheKey(storeId: string, lat: number, lng: number): string {
   const gLat = Math.round(lat / GRID_DEGREES) * GRID_DEGREES;
   const gLng = Math.round(lng / GRID_DEGREES) * GRID_DEGREES;
-  return `nearby:${storeId}:${gLat.toFixed(3)}:${gLng.toFixed(3)}`;
+  return `here:${storeId}:${gLat.toFixed(4)}:${gLng.toFixed(4)}`;
 }
 
 function readCache(key: string): NearbyPlace[] | null {
@@ -61,7 +63,7 @@ type GeoState =
   | { kind: 'loading'; message: string }
   | { kind: 'denied'; message: string }
   | { kind: 'error'; message: string }
-  | { kind: 'ready'; lat: number; lng: number };
+  | { kind: 'ready'; lat: number; lng: number; accuracyM: number };
 
 function metersLabel(m: number): string {
   if (m < 1000) return `${Math.round(m / 10) * 10}m`;
@@ -70,9 +72,9 @@ function metersLabel(m: number): string {
 }
 
 /**
- * Asks for the device's location and shows the closest 3–5 nearby places
- * (Places API). Marketers tap a chip and the place name is filled in for them,
- * skipping a lot of typing in noisy field environments.
+ * Asks for the device's location and shows the closest places, including
+ * businesses the store already has. Marketers tap a chip and the business is
+ * filled in for them, skipping a lot of typing in noisy field environments.
  */
 export function NearbyPlacesChips({ storeId, onSelect, maxChips = 5 }: NearbyPlacesChipsProps) {
   const [geo, setGeo] = useState<GeoState>({ kind: 'idle' });
@@ -88,7 +90,7 @@ export function NearbyPlacesChips({ storeId, onSelect, maxChips = 5 }: NearbyPla
     }
     setGeo({ kind: 'loading', message: 'Finding nearby spots…' });
     const watcher = navigator.geolocation.getCurrentPosition(
-      (pos) => setGeo({ kind: 'ready', lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (pos) => setGeo({ kind: 'ready', lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy }),
       (err) => {
         if (err.code === err.PERMISSION_DENIED) {
           setGeo({ kind: 'denied', message: 'Location off — enable for nearby suggestions' });
@@ -96,7 +98,8 @@ export function NearbyPlacesChips({ storeId, onSelect, maxChips = 5 }: NearbyPla
           setGeo({ kind: 'error', message: 'Could not get location' });
         }
       },
-      { enableHighAccuracy: false, maximumAge: 60_000, timeout: 8000 }
+      // Precise, fresh GPS: a rough or minute-old fix suggests the wrong building.
+      { enableHighAccuracy: true, maximumAge: 10_000, timeout: 10_000 }
     );
     return () => {
       // getCurrentPosition has no cleanup but cancel any in-flight call by ignoring it
@@ -128,10 +131,11 @@ export function NearbyPlacesChips({ storeId, onSelect, maxChips = 5 }: NearbyPla
     setLoadingPlaces(true);
     (async () => {
       try {
-        const data = await api.post<{ places: NearbyPlace[] }>('/places-nearby', {
+        const data = await api.post<{ places: NearbyPlace[] }>('/places-here', {
           storeId,
           lat: geo.lat,
           lng: geo.lng,
+          accuracyM: geo.accuracyM,
         });
         if (cancelled) return;
         const list = data.places || [];
@@ -196,7 +200,7 @@ export function NearbyPlacesChips({ storeId, onSelect, maxChips = 5 }: NearbyPla
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
         {visible.map((place) => (
           <Chip
-            key={place.placeId}
+            key={place.businessId || place.placeId}
             label={
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <span>{place.name}</span>

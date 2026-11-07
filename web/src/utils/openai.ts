@@ -86,75 +86,11 @@ export async function extractContactInfo(transcript: string, products?: ExtractP
     followedUp?: boolean;
   };
 }> {
-  const productList = products && products.length > 0 ? products : [
-    { slug: 'freeBundletCard', name: 'Coupon', mouthValue: 1 },
-    { slug: 'dozenBundtinis', name: 'Dozen Bundtinis', mouthValue: 12 },
-    { slug: 'cake8inch', name: '8" Cake', mouthValue: 10 },
-    { slug: 'cake10inch', name: '10" Cake', mouthValue: 20 },
-    { slug: 'sampleTray', name: 'Sample Tray', mouthValue: 40 },
-    { slug: 'bundtletTower', name: 'Bundtlet/Tower', mouthValue: 1 },
-  ];
-
-  const productListDescription = productList.map(p => `${p.name} (${p.mouthValue} mouths)`).join(', ');
-  // Words marketers actually say for a product when it differs from its name.
-  const PRODUCT_ALIASES: Record<string, string> = {
-    freeBundletCard: 'also called a "coupon", "free card", or "bundtlet card"',
-  };
-  const productExtractionLines = productList.map(p => {
-    const alias = PRODUCT_ALIASES[p.slug] && !/coupon/i.test(p.name) ? `, ${PRODUCT_ALIASES[p.slug]}` : '';
-    return `  * ${p.slug}: number of "${p.name}" given (${p.mouthValue} mouths each${alias})`;
-  }).join('\n');
-
-  const systemPrompt = `You are an AI assistant that extracts contact information from voice transcripts for a bakery marketing program.
-
-IMPORTANT CONTEXT:
-- This is a bakery (Nothing Bundt Cake) giving away free products to businesses/contacts
-- "Donations" means WE (the bakery) gave products TO the contact/business, not the other way around
-- Available products: ${productListDescription}
-- Notes are often dictated by phone. Dictation mishears "bundtini" as "panini", "bikini", "martini", "zucchini", or other words ending in "-ini". In these notes, treat any such word as "bundtini"/"bundtinis", and write "bundtini" in reachoutNote and cakesDonatedNotes.
-- A "coupon" is a product we hand out. Count each coupon given as one of the coupon/card product above.
-
-Extract the following information and return it as JSON:
-- firstName: person's first name
-- lastName: person's last name
-- businessName: the name of the business or organization the contact works at (e.g. "Lewis Bank", "Acme Corp"). Extract this from mentions like "at [business]", "from [business]", "[business] office", etc.
-- email: email address
-- phone: phone number (formatted as (XXX) XXX-XXXX if 10 digits)
-- address: street address
-- city: city name
-- state: state abbreviation (2 letters, e.g., CA, NY)
-- zipCode: 5-digit zip code
-- personalDetails: any personal information mentioned (hobbies, family, interests, preferences, etc.) in a friendly sentence
-- reachoutNote: a clear, detailed note of what was discussed. CRITICAL: Preserve ALL important information including:
-  * Orders placed (quantities, products, dates, deadlines, delivery dates)
-  * Products given away (what was donated, quantities)
-  * Key business information (meetings scheduled, proposals, quotes, pricing discussed)
-  * Action items (what needs to happen next, who is responsible)
-  * Important dates and deadlines
-  * Customer sentiment and feedback
-  * Any specific numbers, quantities, or amounts mentioned
-  DO NOT summarize or condense - include all relevant details. If the original notes are already clear and complete, use them as-is or only make minor improvements for clarity.
-- reachoutType: how the interaction happened. Must be one of: "call" (phone call), "email" (email exchange), "meeting" (in-person visit, drop-off, face-to-face), "other" (anything else). Look for clues like "in person", "visited", "stopped by", "dropped off", "met with" → "meeting"; "called", "phone" → "call"; "emailed", "sent an email" → "email". Default to "other" if unclear.
-- suggestedFollowUpDays: suggest number of days until next follow-up (typically 2-7 days)
-- donation: (optional object) CRITICAL: Extract donation information if ANY of these phrases appear: "gave", "gave away", "gave them", "gave her", "gave him", "for free", "free", "donated", "sample", "treat", "gift", "complimentary", or any mention of products being provided at no cost. Extract:
-${productExtractionLines}
-  * cakesDonatedNotes: fill this when any donation is detected. Write a brief human-readable summary of what was given, Include context about why or for what purpose if mentioned.
-  * orderedFromUs: boolean - did they place an order with us? Look for "ordering", "ordered", "order", "purchased", "buying" (default false)
-  * followedUp: boolean - did we follow up? Look for "followed up", "follow up", "called back", "reached out" (default false)
-  
-  IMPORTANT: If someone mentions giving products but the exact type isn't clear, use your best guess to match to the closest product above, and always note the details in cakesDonatedNotes.
-
-If information is not mentioned, omit that field. Return valid JSON only.`;
-
-  const response = await chatCompletion(
-    [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: `Extract contact info from this transcript: "${fixBakeryTerms(transcript)}"` }
-    ],
-    { jsonMode: true, temperature: 0.3 }
-  );
-
-  return JSON.parse(response);
+  // The prompt lives on the server (handlers/extract-visit-notes.ts).
+  return api.post('/extract-visit-notes', {
+    notes: fixBakeryTerms(transcript),
+    products,
+  });
 }
 
 /**
