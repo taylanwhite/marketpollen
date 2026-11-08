@@ -43,6 +43,7 @@ import {
   EventBusy as OverdueIcon,
   Schedule as FollowUpIcon,
   Sync as SyncIcon,
+  AutoAwesome as SparkleIcon,
 } from '@mui/icons-material';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
@@ -53,6 +54,8 @@ import { PullToRefreshIndicator } from '../components/PullToRefreshIndicator';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { ChartCard, ChartEmpty, ChartTooltip } from '../components/reports/ChartCard';
 import { CalendarSyncDialog } from '../components/CalendarSyncDialog';
+import { WeeklyHighlightsDialog } from '../components/WeeklyHighlightsDialog';
+import { useAuth } from '../contexts/AuthContext';
 import {
   ReportDrilldownDrawer,
   type DrilldownState,
@@ -161,6 +164,8 @@ export function Reports() {
   const [drilldown, setDrilldown] = useState<DrilldownState | null>(null);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [highlightsOpen, setHighlightsOpen] = useState(false);
+  const { userData } = useAuth();
 
   const reportStores = useMemo(() => {
     const list = currentOrg?.stores?.length ? currentOrg.stores : permissions.accessibleStores;
@@ -263,6 +268,9 @@ export function Reports() {
     return [...names].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
   }, [storePeople, rawContacts]);
   const marketerName = marketers.find((person) => person.id === marketer)?.name;
+  // Highlights cover one store: the one picked, or the one you're working in.
+  const highlightsStoreId = storeScope === 'all' ? permissions.currentStoreId : storeScope;
+  const highlightsForOther = !!marketer && marketer !== userData?.uid && marketer !== 'ai-phone-system';
 
   const contacts = useMemo(() => {
     if (!marketer) return rawContacts;
@@ -409,6 +417,18 @@ export function Reports() {
                 ? 'Tap a card for the records behind it.'
                 : 'Click any chart to see the records behind it.'}
           </Typography>
+          {highlightsStoreId && (
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<SparkleIcon />}
+              onClick={() => setHighlightsOpen(true)}
+              sx={{ mt: 1.5 }}
+              fullWidth={isMobile}
+            >
+              {highlightsForOther ? `Weekly highlights for ${marketerName || 'them'}` : 'Write my weekly highlights'}
+            </Button>
+          )}
         </Box>
         {!isMobile && (
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1022,6 +1042,15 @@ export function Reports() {
       </Grid>
 
       <CalendarSyncDialog open={syncOpen} onClose={() => setSyncOpen(false)} />
+      {highlightsStoreId && (
+        <WeeklyHighlightsDialog
+          open={highlightsOpen}
+          onClose={() => setHighlightsOpen(false)}
+          storeId={highlightsStoreId}
+          marketerId={highlightsForOther ? marketer : undefined}
+          marketerName={highlightsForOther ? marketerName : undefined}
+        />
+      )}
 
       <ReportDrilldownDrawer
         open={!!drilldown}
