@@ -70,7 +70,7 @@ We use reasonable safeguards, such as encrypted connections and access controls,
 ## 8. Your choices and rights
 
 - You can view and update much of your information in the app.
-- You can ask us to access, correct, export, or delete your personal information by emailing taylan@marketpollen.com. We may need to verify your identity. If your account belongs to an organization, we may refer your request to its owner.
+- You can ask us to access, correct, export, or delete your personal information by emailing support@marketpollen.com. We may need to verify your identity. If your account belongs to an organization, we may refer your request to its owner.
 - Depending on where you live, you may have additional rights under state privacy laws. We will respond to requests as those laws require, and we will not discriminate against you for using them.
 - You can turn off location and microphone access at any time in your browser or device settings.
 
@@ -88,5 +88,5 @@ We may update this Policy. If a change is material, we will notify you by email 
 
 ## 12. Contact us
 
-Tawk Tech LLC (MarketPollen), taylan@marketpollen.com.
+Tawk Tech LLC (MarketPollen), support@marketpollen.com.
 `;

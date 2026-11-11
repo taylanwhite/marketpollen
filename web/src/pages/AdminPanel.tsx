@@ -49,6 +49,19 @@ type AccessLevel = 'none' | 'view' | 'full';
 interface UserWithPermissions extends User {
   email: string;
   orgMemberships?: Array<{ orgId: string; orgName: string; isAdmin: boolean }>;
+  /** Only sent to platform super users. */
+  terms?: { acceptedAt: string | null; isCurrent: boolean };
+}
+
+function termsLabel(terms: NonNullable<UserWithPermissions['terms']>): { text: string; color: string } {
+  if (terms.isCurrent && terms.acceptedAt) {
+    const when = new Date(terms.acceptedAt).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+    return { text: `Accepted terms ${when}`, color: 'success.main' };
+  }
+  if (terms.acceptedAt) return { text: 'Accepted older terms; needs to accept the update', color: 'warning.main' };
+  return { text: 'Has not accepted terms yet', color: 'text.secondary' };
 }
 
 interface PendingInvite {
@@ -603,9 +616,16 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                       </Box>
                     }
                     secondary={
-                      <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
-                        {getUserAccessSummary(user)}
-                      </Typography>
+                      <>
+                        <Typography component="span" variant="body2" sx={{ wordBreak: 'break-word', display: 'block' }}>
+                          {getUserAccessSummary(user)}
+                        </Typography>
+                        {user.terms && (
+                          <Typography component="span" variant="caption" sx={{ display: 'block', mt: 0.25, color: termsLabel(user.terms).color }}>
+                            {termsLabel(user.terms).text}
+                          </Typography>
+                        )}
+                      </>
                     }
                   />
                   <ListItemSecondaryAction sx={{ position: { xs: 'relative', sm: 'absolute' }, right: { xs: 0, sm: 0 }, top: { xs: 'auto', sm: '50%' }, transform: { xs: 'none', sm: 'translateY(-50%)' }, mt: { xs: 1, sm: 0 } }}>

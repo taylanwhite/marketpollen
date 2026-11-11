@@ -3,6 +3,7 @@ import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { adminOrgIds } from '../lib/org-access.js';
 import { isKingAdminEmail } from '../lib/king-admin-email.js';
+import { CURRENT_TERMS_VERSION } from '../lib/legal.js';
 
 function toUserJson(
   user: {
@@ -11,10 +12,13 @@ function toUserJson(
     display_name: string | null;
     created_at: Date;
     is_global_admin: boolean;
+    terms_accepted_version: string | null;
+    terms_accepted_at: Date | null;
     store_permissions: Array<{ store_id: string; can_edit: boolean }>;
     organization_memberships: Array<{ org_id: string; is_admin: boolean; org: { name: string } }>;
   },
   scope: { storeIds: Set<string> | null; orgIds: Set<string> | null },
+  includeTerms = false,
 ) {
   const storePermissions = user.store_permissions
     .filter((permission) => !scope.storeIds || scope.storeIds.has(permission.store_id))
@@ -34,6 +38,13 @@ function toUserJson(
     isGlobalAdmin: user.is_global_admin || isKingAdminEmail(user.email),
     storePermissions,
     orgMemberships,
+    // Terms acceptance is only shown to platform super users.
+    ...(includeTerms ? {
+      terms: {
+        acceptedAt: user.terms_accepted_at,
+        isCurrent: user.terms_accepted_version === CURRENT_TERMS_VERSION,
+      },
+    } : {}),
   };
 }
 
@@ -70,7 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rows = orgIds === 'all'
       ? found
       : found.filter((user) => !user.is_global_admin && !isKingAdminEmail(user.email));
-    return res.status(200).json(rows.map((user) => toUserJson(user, { storeIds, orgIds: orgIdSet })));
+    return res.status(200).json(rows.map((user) => toUserJson(user, { storeIds, orgIds: orgIdSet }, orgIds === 'all')));
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

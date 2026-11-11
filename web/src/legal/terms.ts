@@ -25,7 +25,7 @@ These Terms of Service ("**Terms**") are a binding contract between you and Tawk
 
 **1.4 Accounts and invited users.** A Customer's account owner or admin may invite marketers, staff, or other users ("**Authorized Users**"). The Customer is responsible for who it invites, what they do in the Service, and removing their access when they leave. Every Authorized User must agree to these Terms.
 
-**1.5 Account security.** Keep your login private and tell us promptly at taylan@marketpollen.com if you think your account was accessed without permission. You are responsible for activity under your account. We are not liable for losses caused by someone using your credentials.
+**1.5 Account security.** Keep your login private and tell us promptly at support@marketpollen.com if you think your account was accessed without permission. You are responsible for activity under your account. We are not liable for losses caused by someone using your credentials.
 
 **1.6 Accurate information.** Give us accurate account and billing information and keep it current.
 
@@ -33,7 +33,7 @@ These Terms of Service ("**Terms**") are a binding contract between you and Tawk
 
 **2.1 Fees.** Paid plans are billed per store, per month, at the price shown in the app when you subscribe, or in your written order if you have one. Free or trial access may be offered, changed, or ended at any time.
 
-**2.2 Automatic renewal.** Subscriptions renew automatically each month and your payment method is charged until you cancel. You can cancel anytime in the app or by emailing taylan@marketpollen.com. Cancellation takes effect at the end of the current billing period.
+**2.2 Automatic renewal.** Subscriptions renew automatically each month and your payment method is charged until you cancel. You can cancel anytime in the app or by emailing support@marketpollen.com. Cancellation takes effect at the end of the current billing period.
 
 **2.3 No refunds.** Fees are non-refundable, including for partial months, unused stores or seats, downtime, or if we discontinue the Service mid-period, except where the law requires a refund or we choose to give one. If we shut the Service down for good (Section 5.3), we will stop charging you.
 
@@ -116,7 +116,7 @@ These limits apply to every theory of liability (contract, tort, negligence, str
 
 ## 7. Disputes and arbitration
 
-**7.1 Talk first.** Before filing any claim, contact us at taylan@marketpollen.com and try in good faith to resolve it for 30 days.
+**7.1 Talk first.** Before filing any claim, contact us at support@marketpollen.com and try in good faith to resolve it for 30 days.
 
 **7.2 Binding individual arbitration.** Any dispute arising from or relating to these Terms or the Service will be resolved by final, binding arbitration administered by the American Arbitration Association under its Commercial Arbitration Rules, before one arbitrator, held in Utah County, Utah, or by video. Judgment on the award may be entered in any court with jurisdiction. Either party may instead bring an individual claim in small-claims court, and either party may seek a court order to stop misuse of its intellectual property or the Service.
 
@@ -128,7 +128,7 @@ These limits apply to every theory of liability (contract, tort, negligence, str
 
 **8.1 Entire agreement.** These Terms, the Privacy Policy, and any order form or written agreement signed by both parties are the entire agreement about the Service. If a signed written agreement conflicts with these Terms, the signed agreement controls.
 
-**8.2 Electronic acceptance and notices.** Clicking "I agree" or similar is your electronic signature. We may send notices by email to your account address or in the app; you send notices to taylan@marketpollen.com.
+**8.2 Electronic acceptance and notices.** Clicking "I agree" or similar is your electronic signature. We may send notices by email to your account address or in the app; you send notices to support@marketpollen.com.
 
 **8.3 Assignment.** You may not transfer these Terms without our written consent. We may transfer them, including in a merger, sale, or reorganization.
 
@@ -138,5 +138,5 @@ These limits apply to every theory of liability (contract, tort, negligence, str
 
 **8.6 Relationship.** We are independent contractors. Nothing here creates a partnership, franchise, joint venture, agency, or employment relationship.
 
-**8.7 Contact.** Tawk Tech LLC (MarketPollen), taylan@marketpollen.com.
+**8.7 Contact.** Tawk Tech LLC (MarketPollen), support@marketpollen.com.
 `;
