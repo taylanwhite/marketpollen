@@ -20,6 +20,8 @@ import { Platform } from './pages/Platform';
 import { StorePicker } from './pages/StorePicker';
 import { NoAccess } from './pages/NoAccess';
 import { Reports } from './pages/Reports';
+import { LegalPage } from './pages/Legal';
+import { TermsGate } from './components/legal/TermsGate';
 import './App.css';
 
 const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
@@ -31,7 +33,10 @@ function AppRoutes() {
         <OfflineProvider>
         <CampaignProvider>
         <DonationProvider>
+          <TermsGate>
           <Routes>
+            <Route path="/terms" element={<LegalPage doc="terms" />} />
+            <Route path="/privacy" element={<LegalPage doc="privacy" />} />
             <Route path="/login/*" element={<Login />} />
             <Route path="/signup/*" element={<Signup />} />
             <Route path="/no-access" element={
@@ -136,6 +141,7 @@ function AppRoutes() {
             {/* Catch-all for any unknown URL (typo, stale share link, etc.) */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
+          </TermsGate>
         </DonationProvider>
         </CampaignProvider>
         </OfflineProvider>

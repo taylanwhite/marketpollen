@@ -6,6 +6,7 @@
 import express from 'express';
 import healthHandler from './dist-handlers/health.js';
 import meHandler from './dist-handlers/me.js';
+import legalAcceptHandler from './dist-handlers/legal-accept.js';
 import storesHandler from './dist-handlers/stores.js';
 import storesIdHandler from './dist-handlers/stores/[id].js';
 import businessesHandler from './dist-handlers/businesses.js';
@@ -99,6 +100,7 @@ app.head('/api/health', route(healthHandler));
 
 // Me
 app.get('/api/me', route(meHandler));
+app.post('/api/legal/accept', route(legalAcceptHandler));
 
 // Stores
 app.get('/api/stores', route(storesHandler));

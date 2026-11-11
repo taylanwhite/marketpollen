@@ -4,6 +4,7 @@ import { getAuthUid } from './lib/auth.js';
 import { getAccessibleStores } from './lib/store-access.js';
 import { billingAccess } from './lib/org-billing-access.js';
 import { isKingAdminEmail } from './lib/king-admin-email.js';
+import { CURRENT_TERMS_VERSION } from './lib/legal.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -13,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const user = await prisma.user.findUnique({
     where: { id: uid },
-    select: { id: true, email: true, display_name: true, created_at: true, is_global_admin: true },
+    select: { id: true, email: true, display_name: true, created_at: true, is_global_admin: true, terms_accepted_version: true },
   });
 
   if (!user) {
@@ -116,7 +117,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       displayName: user.display_name ?? undefined,
       createdAt: user.created_at,
       isGlobalAdmin: platformOwner,
+      termsAccepted: user.terms_accepted_version === CURRENT_TERMS_VERSION,
     },
+    termsVersion: CURRENT_TERMS_VERSION,
     storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
     stores: stores.map((s) => ({
       id: s.id,

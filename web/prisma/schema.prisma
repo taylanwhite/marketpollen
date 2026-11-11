@@ -16,6 +16,9 @@ model User {
   display_name   String?
   created_at     DateTime @default(now())
   is_global_admin Boolean @default(false)
+  /// Version of the Terms/Privacy Policy this user last accepted (see handlers/lib/legal.ts)
+  terms_accepted_version String?
+  terms_accepted_at      DateTime?
 
   store_permissions StorePermission[]
   stores_created     Store[]            @relation("StoreCreatedBy")
@@ -32,6 +35,21 @@ model User {
   organization_invites_sent OrganizationInvite[] @relation("OrgInviteSentBy")
 
   @@map("users")
+}
+
+/// One row per click of "I agree" on the Terms of Service and Privacy Policy.
+/// Kept as proof of acceptance; no foreign key so legacy user-id migrations never break it.
+model LegalAcceptance {
+  id          String   @id @default(uuid()) @db.Uuid
+  user_id     String
+  email       String
+  version     String
+  accepted_at DateTime @default(now())
+  ip_address  String?
+  user_agent  String?
+
+  @@index([user_id])
+  @@map("legal_acceptances")
 }
 
 model Organization {
