@@ -9,3 +9,7 @@ We don't always build what a customer asks for. When a customer request comes in
 3. **Check fit for every customer.** MarketPollen serves multiple stores/organizations. A change should make sense for other customers too, not just the one asking. If it only fits one customer, consider a setting, a different design, or declining.
 4. **Recommend**: build as asked / build differently / defer / decline, with rough effort. Separate clear bugs (fix) from feature requests (decide).
 5. **Wait for Taylan's go-ahead** before implementing.
+
+## Mobile first
+
+MarketPollen is a mobile-first app: marketers and managers use it on their phones. Check every UI change at phone width (about 375px) first, including popups, dialogs, and rows of controls that wrap, then at desktop width.

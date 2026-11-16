@@ -248,10 +248,6 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
     setSearchAroundState(around);
     saveSearchPrefs(around, radiusMi);
   };
-  const setRadiusMi = (miles: number) => {
-    setRadiusMiState(miles);
-    saveSearchPrefs(searchAround, miles);
-  };
   const [planDate, setPlanDate] = useState(() => localDateKey(new Date()));
   const [planStops, setPlanStops] = useState<PlanStop[]>([]);
 
@@ -485,8 +481,6 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
       if (!places.length) {
         const where = label ? ` near ${label}` : '';
         setSearchNote(`No new places${where}${query ? ` for "${query}"` : ''}. Places that are already businesses or opportunities are left out.`);
-      } else if (label) {
-        setSearchNote(`Near ${label}.`);
       }
     } catch (err) {
       setSearchNote((err as Error).message || 'Search failed');
@@ -693,29 +687,30 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
 
       {storeScope && (
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1.5, alignItems: 'center' }}>
+          {/* One menu for where and how far, so phones get one row of controls, not two. */}
           <TextField
             select
             size="small"
-            label="Around"
-            value={searchAround}
-            onChange={(e) => setSearchAround(e.target.value as SearchAround)}
-            sx={{ width: 130 }}
+            label="Search around"
+            value={searchAround === 'view' ? 'view' : `store:${radiusMi}`}
+            onChange={(e) => {
+              const [around, miles] = e.target.value.split(':');
+              if (around === 'view') setSearchAround('view');
+              else {
+                setSearchAroundState('store');
+                setRadiusMiState(Number(miles));
+                saveSearchPrefs('store', Number(miles));
+              }
+            }}
+            sx={{ width: { xs: '100%', sm: 190 } }}
           >
-            <MenuItem value="store">{storeScope === 'all' ? 'Nearest store' : 'My store'}</MenuItem>
-            <MenuItem value="view">This view</MenuItem>
+            {RADIUS_CHOICES_MI.map((mi) => (
+              <MenuItem key={mi} value={`store:${mi}`}>
+                {storeScope === 'all' ? 'Nearest store' : 'My store'} · {mi} mi
+              </MenuItem>
+            ))}
+            <MenuItem value="view">What's on screen</MenuItem>
           </TextField>
-          {searchAround === 'store' && (
-            <TextField
-              select
-              size="small"
-              label="Within"
-              value={radiusMi}
-              onChange={(e) => setRadiusMi(Number(e.target.value))}
-              sx={{ width: 96 }}
-            >
-              {RADIUS_CHOICES_MI.map((mi) => <MenuItem key={mi} value={mi}>{mi} mi</MenuItem>)}
-            </TextField>
-          )}
           <TextField
             size="small"
             placeholder="Look for… e.g. Dentist"
@@ -724,7 +719,7 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
             onKeyDown={(e) => {
               if (e.key === 'Enter') searchArea();
             }}
-            sx={{ flex: 1, minWidth: 160, maxWidth: { sm: 360 } }}
+            sx={{ flex: 1, minWidth: 0, maxWidth: { sm: 360 } }}
             inputProps={{ 'aria-label': 'What to look for' }}
           />
           <Button
@@ -734,19 +729,8 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
             startIcon={searching ? <CircularProgress size={16} color="inherit" /> : <SearchIcon />}
             sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
           >
-            {searchAround === 'store' ? 'Search' : 'Search this area'}
+            Search
           </Button>
-          {planStoreId && (
-            <TextField
-              type="date"
-              size="small"
-              label="Show plan for"
-              value={planDate}
-              onChange={(e) => setPlanDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-              sx={{ width: 160, ml: { sm: 'auto' } }}
-            />
-          )}
         </Box>
       )}
 
@@ -1021,7 +1005,7 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
                 sx={{ flex: 1, minWidth: 200, display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer' }}
               >
                 <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                  {`${found.length} new ${found.length === 1 ? 'opportunity' : 'opportunities'} found`}
+                  {`${found.length} new ${found.length === 1 ? 'opportunity' : 'opportunities'} ${searchedArea?.label ? `near ${searchedArea.label}` : 'found'}`}
                 </Typography>
                 <ExpandMoreIcon
                   fontSize="small"
@@ -1078,8 +1062,9 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
                     }}
                     sx={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
                   >
-                    <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap>{p.name}</Typography>
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                    {/* Wrap instead of cutting off: on a phone the Add and Plan buttons leave little room. */}
+                    <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.3 }}>{p.name}</Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.3 }}>
                       {[distanceFromStore(p), [p.address, p.city].filter(Boolean).join(', ')].filter(Boolean).join(' · ')}
                     </Typography>
                   </Box>
@@ -1131,6 +1116,19 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
             swatch={<Dot color={COLORS.notVisited} />}
             label={`Not visited (${filtered.notVisited.length})`}
           />
+          {planStoreId && (
+            // Which day's plan gets the numbered rings. It sits with the other
+            // "what's shown" controls so the search row stays short on phones.
+            <TextField
+              type="date"
+              size="small"
+              label="Show plan for"
+              value={planDate}
+              onChange={(e) => setPlanDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ width: 160 }}
+            />
+          )}
         </Box>
       )}
 
@@ -1200,7 +1198,16 @@ function PinPopup({
           <Typography key={line} variant="body2" sx={{ fontSize: '0.8rem' }}>{line}</Typography>
         ))}
       </Box>
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1, '& .MuiButton-root': { minWidth: 0, px: 1, py: 0.25, fontSize: '0.75rem' } }}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 0.75,
+          mt: 1,
+          // Thumb-sized on phones; compact with a mouse.
+          '& .MuiButton-root': { minWidth: 0, px: 1.25, py: { xs: 0.75, sm: 0.25 }, minHeight: { xs: 40, sm: 0 }, fontSize: { xs: '0.8rem', sm: '0.75rem' } },
+        }}
+      >
         {onAdd && (
           <Button size="small" variant="contained" onClick={onAdd} disabled={adding}>
             {adding ? 'Adding…' : 'Add as opportunity'}

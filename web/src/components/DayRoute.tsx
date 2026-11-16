@@ -192,7 +192,8 @@ export function DayRoute({
         <Paper sx={{ overflow: 'hidden' }}>
           <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
             <RouteIcon fontSize="small" color="action" />
-            <Typography variant="body2" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
+            {/* Wraps on phones so the store name isn't cut off next to "Optimize route". */}
+            <Typography variant="body2" color="text.secondary" sx={{ flex: 1, minWidth: 0, lineHeight: 1.35 }}>
               {viewUserId && viewingName ? `${viewingName}'s plan · ` : ''}Start and end at {storeName}
             </Typography>
             {editable && stops.length > 1 && (
