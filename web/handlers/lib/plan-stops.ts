@@ -1,6 +1,6 @@
 import { prisma } from './db.js';
 import { businessLocationKey, locationKey } from './map-geocode.js';
-import { geocode, cheapestInsertion, optimizedRoundTrip, roundTripByDistance, type LatLng } from './route.js';
+import { geocode, cheapestInsertion, roundTripByDistance, type LatLng } from './route.js';
 import { isOrgAdmin } from './org-access.js';
 
 export const MAX_STOPS_PER_DAY = 25;
@@ -272,9 +272,8 @@ export async function placeNewStop(storeId: string, userId: string, date: Date, 
 }
 
 /**
- * Put the day's planned stops in the best driving loop from the store and
- * back, using Google's route optimization (real drive times), or straight-line
- * distance when that isn't available. Done or skipped stops keep their place
+ * Put the day's planned stops in a short loop from the store and back, by
+ * straight-line distance (no extra Google service). Done or skipped stops keep their place
  * at the top. Clears "rearranged by hand" so later stops are fitted in again.
  */
 export async function optimizePlan(storeId: string, userId: string, date: Date) {
@@ -284,8 +283,9 @@ export async function optimizePlan(storeId: string, userId: string, date: Date) 
   if (!start) return false;
   const route = planned.filter((row) => located.has(row.id));
   const points = route.map((row) => located.get(row.id)!);
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-  const order = (apiKey && await optimizedRoundTrip(start, points, apiKey)) || roundTripByDistance(start, points);
+  // Straight-line distance on purpose: Google's route optimization is a
+  // separate paid service.
+  const order = roundTripByDistance(start, points);
   await saveOrder(rows, order.map((index) => route[index]), { manual_order: false });
   return true;
 }
