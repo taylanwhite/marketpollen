@@ -24,8 +24,7 @@ Use ngrok to expose your local Vercel dev server for testing with external servi
    This runs `ngrok http 3000`.
 
 3. **Use the ngrok URL** (e.g. `https://abc123.ngrok-free.app`) to hit your API:
-   - `POST https://your-url.ngrok-free.app/api/create-contact-from-call`
-   - `POST https://your-url.ngrok-free.app/api/get-calendar-events`
+   - `GET https://your-url.ngrok-free.app/api/health`
    - etc.
 
 ## Notes

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -96,6 +96,21 @@ export function DayRoute({
   }, [storeId, date, viewUserId]);
 
   useEffect(() => { load(); }, [load, refreshKey]);
+
+  /** New stops are fitted into the route on the server, so fetch the new order quietly. */
+  // Only the newest refresh may replace the list: an older one finishing
+  // late would drop a stop added after it started.
+  const refreshSeq = useRef(0);
+  const refreshOrder = useCallback(async () => {
+    const seq = ++refreshSeq.current;
+    try {
+      const who = viewUserId ? `&userId=${encodeURIComponent(viewUserId)}` : '';
+      const data = await api.get<PlanResponse>(`/plan-stops?storeId=${storeId}&date=${date}${who}`);
+      if (seq === refreshSeq.current) setPlan(data);
+    } catch {
+      // The added stop is already shown; the order catches up on the next load.
+    }
+  }, [storeId, date, viewUserId]);
   useEffect(() => { if (plan && !viewUserId) onCountChange?.(plan.stops.length); }, [plan, viewUserId, onCountChange]);
 
   const editable = canEdit && !!plan?.editable;
@@ -178,11 +193,11 @@ export function DayRoute({
           <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
             <RouteIcon fontSize="small" color="action" />
             <Typography variant="body2" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>
-              {viewUserId && viewingName ? `${viewingName}'s plan · ` : ''}Start at {storeName}
+              {viewUserId && viewingName ? `${viewingName}'s plan · ` : ''}Start and end at {storeName}
             </Typography>
             {editable && stops.length > 1 && (
               <Button size="small" startIcon={<OptimizeIcon />} onClick={optimize} disabled={busy} sx={{ minHeight: 40, flexShrink: 0 }}>
-                Sort by distance
+                Optimize route
               </Button>
             )}
           </Box>
@@ -278,7 +293,9 @@ export function DayRoute({
               >
                 {legs.length === 1
                   ? 'Open route in Google Maps'
-                  : `Open stops ${index * STOPS_PER_MAPS_LEG + 1}–${Math.min((index + 1) * STOPS_PER_MAPS_LEG, plannedAddresses.length)} in Google Maps`}
+                  : index * STOPS_PER_MAPS_LEG >= plannedAddresses.length
+                    ? 'Drive back to the store'
+                    : `Open stops ${index * STOPS_PER_MAPS_LEG + 1}–${Math.min((index + 1) * STOPS_PER_MAPS_LEG, plannedAddresses.length)} in Google Maps`}
               </Button>
             ))}
           </Box>
@@ -336,7 +353,11 @@ export function DayRoute({
         planned={stops}
         userId={viewUserId || undefined}
         onClose={() => setAdding(false)}
-        onAdded={(stop) => setPlan((prev) => prev && { ...prev, stops: [...prev.stops, stop] })}
+        onAdded={(stop) => {
+          refreshSeq.current += 1; // a refresh already in flight predates this stop
+          setPlan((prev) => prev && { ...prev, stops: [...prev.stops, stop] });
+          refreshOrder();
+        }}
       />
     </Box>
   );
@@ -451,7 +472,8 @@ function AddStopsDialog({
                   <Button
                     size="small"
                     variant={onPlan ? 'text' : 'outlined'}
-                    disabled={onPlan || savingId === row.id}
+                    // One add at a time: each add re-fits the route on the server.
+                    disabled={onPlan || savingId !== null}
                     onClick={() => add(row)}
                     sx={{ minHeight: 40, flexShrink: 0 }}
                   >

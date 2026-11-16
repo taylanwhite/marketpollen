@@ -170,6 +170,48 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   const [newBusinessName, setNewBusinessName] = useState('');
   const [newBusinessAddress, setNewBusinessAddress] = useState<AddressData>({ address: '', city: '', state: '', zipCode: '' });
   const [newBusinessPlaceId, setNewBusinessPlaceId] = useState<string | null>(null);
+  // Name of the Google place the new business's link and address came from
+  // (a Near-you chip or a business card). Renaming the business to something
+  // else drops that link and address so they don't stick to another business.
+  const newBusinessPlaceNameRef = useRef<string | null>(null);
+  // The place picker was opened by Save: finish saving once a place is picked or skipped.
+  const [saveAfterPick, setSaveAfterPick] = useState(false);
+
+  /** Same business, allowing small edits like "Starbucks" → "Starbucks Coffee". */
+  const sameBusinessName = (a: string, b: string) => {
+    const norm = (v: string) => v.toLowerCase().replace(/^the\s+/, '').replace(/[^a-z0-9]/g, '');
+    const x = norm(a);
+    const y = norm(b);
+    return !!x && !!y && (x.startsWith(y) || y.startsWith(x));
+  };
+
+  /** Forget the Google link and the address that came with it. */
+  const clearNewBusinessPlace = () => {
+    if (newBusinessPlaceNameRef.current == null) return;
+    newBusinessPlaceNameRef.current = null;
+    setNewBusinessPlaceId(null);
+    setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+  };
+
+  /** Set the new business's name; a different business no longer gets the old place's link or address. */
+  const changeNewBusinessName = (name: string) => {
+    setNewBusinessName(name);
+    const placeName = newBusinessPlaceNameRef.current;
+    if (placeName != null && !sameBusinessName(name, placeName)) clearNewBusinessPlace();
+  };
+
+  /** Fill the new business from a Google place (Near-you chip, business card match). */
+  const fillNewBusinessFromPlace = (place: { name: string; placeId?: string | null; address?: string; city?: string; state?: string; zipCode?: string }) => {
+    newBusinessPlaceNameRef.current = place.name;
+    setNewBusinessName(place.name);
+    setNewBusinessPlaceId(place.placeId || null);
+    setNewBusinessAddress({
+      address: place.address || '',
+      city: place.city || '',
+      state: place.state || '',
+      zipCode: place.zipCode || '',
+    });
+  };
   const [showPlacePicker, setShowPlacePicker] = useState(false);
   const [creatingBusiness, setCreatingBusiness] = useState(false);
 
@@ -325,13 +367,13 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
           setShowNewBusiness(false);
         } else {
           setShowNewBusiness(true);
-          setNewBusinessName(extracted.businessName);
+          changeNewBusinessName(extracted.businessName);
         }
       }
 
       // Carry the AI-extracted address into the "new business" payload so it
       // gets saved if the user creates the business without picking a Place.
-      if (extracted.address || extracted.city || extracted.state || extracted.zipCode) {
+      if ((extracted.address || extracted.city || extracted.state || extracted.zipCode) && newBusinessPlaceNameRef.current == null) {
         setNewBusinessAddress((prev) => ({
           address: extracted.address || prev.address,
           city: extracted.city || prev.city,
@@ -406,6 +448,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     }
 
     setShowNewBusiness(true);
+    newBusinessPlaceNameRef.current = null;
     setNewBusinessName(extracted.businessName);
     setNewBusinessAddress({
       address: extracted.address || '',
@@ -430,9 +473,9 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         setBusinessCardMessage(`Ready to create new business: ${extracted.businessName}`);
         return;
       }
-      setNewBusinessName(place.name || extracted.businessName);
-      setNewBusinessPlaceId(place.placeId);
-      setNewBusinessAddress({
+      fillNewBusinessFromPlace({
+        name: place.name || extracted.businessName,
+        placeId: place.placeId,
         address: place.address || extracted.address || '',
         city: place.city || extracted.city || '',
         state: place.state || extracted.state || '',
@@ -536,6 +579,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     setNewBusinessName('');
     setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
     setNewBusinessPlaceId(null);
+    newBusinessPlaceNameRef.current = null;
     typedPrefixRef.current = '';
     clearTranscript();
     if (isListening) stopListening();
@@ -608,6 +652,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       setNewBusinessName('');
       setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
       setNewBusinessPlaceId(null);
+      newBusinessPlaceNameRef.current = null;
       setShowNewBusiness(false);
       setShowPlacePicker(false);
     } catch (err) {
@@ -618,7 +663,13 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     }
   };
 
-  const handleSubmit = async () => {
+  /**
+   * Save the visit. A new business with no Google place yet is looked up
+   * first (the same "which one is it?" picker as Create), so it gets a real
+   * address with city and ZIP; the picker then calls back with `place` or
+   * `skipLookup`. Offline, it saves with whatever address is known.
+   */
+  const handleSubmit = async (opts: { place?: PlaceResult; skipLookup?: boolean } = {}) => {
     setError('');
     setSuccess(false);
 
@@ -634,6 +685,11 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       setError('Pick a follow-up date before saving. If there is truly nothing to plan, choose no follow-up.');
       return;
     }
+    if (showNewBusiness && newBusinessName.trim() && !newBusinessPlaceId && !opts.place && !opts.skipLookup && isOnline) {
+      setSaveAfterPick(true);
+      setShowPlacePicker(true);
+      return;
+    }
 
     setLoading(true);
     try {
@@ -642,12 +698,13 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
       const storeId = permissions.currentStoreId;
       let businessIdsForSave = [...selectedBusinessIds];
       if (showNewBusiness && newBusinessName.trim()) {
-        const createdBusinessId = await createBusinessRecord();
+        const createdBusinessId = await createBusinessRecord(opts.place);
         businessIdsForSave = [...businessIdsForSave, createdBusinessId];
         setSelectedBusinessIds(businessIdsForSave);
         setNewBusinessName('');
         setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
         setNewBusinessPlaceId(null);
+        newBusinessPlaceNameRef.current = null;
         setShowNewBusiness(false);
       }
       if (businessIdsForSave.length === 0) {
@@ -846,14 +903,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
     }
 
     setShowNewBusiness(true);
-    setNewBusinessName(place.name);
-    setNewBusinessPlaceId(place.placeId || null);
-    setNewBusinessAddress((prev) => ({
-      address: place.address || prev.address,
-      city: place.city || prev.city,
-      state: place.state || prev.state,
-      zipCode: place.zipCode || prev.zipCode,
-    }));
+    fillNewBusinessFromPlace(place);
   };
 
   return (
@@ -1127,7 +1177,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                 size="small"
                 label="Business name"
                 value={newBusinessName}
-                onChange={(e) => setNewBusinessName(e.target.value)}
+                onChange={(e) => changeNewBusinessName(e.target.value)}
                 autoFocus
                 disabled={creatingBusiness}
                 fullWidth
@@ -1137,8 +1187,13 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                 <Button
                   size="small"
                   onClick={() => {
+                    // Forget everything about the cancelled business, so the
+                    // next new business doesn't inherit its address or link.
                     setShowNewBusiness(false);
                     setNewBusinessName('');
+                    setNewBusinessAddress({ address: '', city: '', state: '', zipCode: '' });
+                    setNewBusinessPlaceId(null);
+                    newBusinessPlaceNameRef.current = null;
                   }}
                   disabled={creatingBusiness}
                 >
@@ -1422,7 +1477,7 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
                   variant="contained"
                   size="large"
                   fullWidth
-                  onClick={handleSubmit}
+                  onClick={() => handleSubmit()}
                   disabled={loading || aiProcessing || !followUpReady}
                   startIcon={loading ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
                   sx={{
@@ -1479,9 +1534,25 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         businessCity={newBusinessAddress.city}
         businessState={newBusinessAddress.state}
         businessZipCode={newBusinessAddress.zipCode}
-        onSelect={(place: PlaceResult) => finishCreateBusiness(place)}
-        onSkip={() => finishCreateBusiness()}
-        onClose={() => setShowPlacePicker(false)}
+        onSelect={(place: PlaceResult) => {
+          // A second tap while the dialog fades out must not create the business twice.
+          if (loading || creatingBusiness) return;
+          if (!saveAfterPick) return finishCreateBusiness(place);
+          setSaveAfterPick(false);
+          setShowPlacePicker(false);
+          return handleSubmit({ place });
+        }}
+        onSkip={() => {
+          if (loading || creatingBusiness) return;
+          if (!saveAfterPick) return finishCreateBusiness();
+          setSaveAfterPick(false);
+          setShowPlacePicker(false);
+          return handleSubmit({ skipLookup: true });
+        }}
+        onClose={() => {
+          setShowPlacePicker(false);
+          setSaveAfterPick(false);
+        }}
       />
     </Box>
   );

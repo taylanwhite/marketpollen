@@ -20,6 +20,7 @@ export async function geocode(address: string, apiKey: string): Promise<{ lat: n
   try {
     const res = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
       params: { address: address.trim(), key: apiKey },
+      timeout: 5000,
     });
     if (res.data?.status !== 'OK' && res.data?.status !== 'ZERO_RESULTS') return null;
     const loc = res.data?.results?.[0]?.geometry?.location;
@@ -58,4 +59,100 @@ export function orderByNearest<T extends { lat: number; lng: number }>(
     remaining = remaining.filter((_, i) => i !== nearestIdx);
   }
   return ordered;
+}
+
+export type LatLng = { lat: number; lng: number };
+
+const meters = (a: LatLng, b: LatLng) => distanceMeters(a.lat, a.lng, b.lat, b.lng);
+
+/** Straight-line length of store → stops in this order → store. */
+function loopLength(start: LatLng, stops: LatLng[]): number {
+  let total = 0;
+  let at = start;
+  for (const stop of stops) {
+    total += meters(at, stop);
+    at = stop;
+  }
+  return total + meters(at, start);
+}
+
+/**
+ * Where to put a new stop in a store → stops → store loop so it adds the
+ * least distance. Returns the index to insert at (0 = first stop).
+ */
+export function cheapestInsertion(start: LatLng, stops: LatLng[], added: LatLng): number {
+  let best = stops.length;
+  let bestCost = Infinity;
+  for (let i = 0; i <= stops.length; i++) {
+    const before = i === 0 ? start : stops[i - 1];
+    const after = i === stops.length ? start : stops[i];
+    const cost = meters(before, added) + meters(added, after) - meters(before, after);
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/**
+ * A short store → stops → store loop by straight-line distance: nearest
+ * neighbor to start, then 2-opt (reverse any stretch that makes it shorter).
+ * Returns the stop indexes in driving order.
+ */
+export function roundTripByDistance(start: LatLng, stops: LatLng[]): number[] {
+  const order = orderByNearest(start.lat, start.lng, stops.map((s, index) => ({ ...s, index }))).map((s) => s.index);
+  const at = (o: number[]) => o.map((i) => stops[i]);
+  let improved = true;
+  for (let pass = 0; improved && pass < 50; pass++) {
+    improved = false;
+    for (let i = 0; i < order.length - 1; i++) {
+      for (let j = i + 1; j < order.length; j++) {
+        const next = [...order.slice(0, i), ...order.slice(i, j + 1).reverse(), ...order.slice(j + 1)];
+        if (loopLength(start, at(next)) + 1 < loopLength(start, at(order))) {
+          order.splice(0, order.length, ...next);
+          improved = true;
+        }
+      }
+    }
+  }
+  return order;
+}
+
+/**
+ * Google's driving-time route optimization for store → stops → store
+ * (Routes API, up to 25 stops). Returns the stop indexes in driving order, or
+ * null if Google can't do it (API not enabled on the key, too many stops, …).
+ */
+export async function optimizedRoundTrip(start: LatLng, stops: LatLng[], apiKey: string): Promise<number[] | null> {
+  if (stops.length < 2) return stops.map((_, i) => i);
+  if (stops.length > 25) return null;
+  const waypoint = (p: LatLng) => ({ location: { latLng: { latitude: p.lat, longitude: p.lng } } });
+  try {
+    const res = await axios.post(
+      'https://routes.googleapis.com/directions/v2:computeRoutes',
+      {
+        origin: waypoint(start),
+        destination: waypoint(start),
+        intermediates: stops.map(waypoint),
+        travelMode: 'DRIVE',
+        optimizeWaypointOrder: true,
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'routes.optimizedIntermediateWaypointIndex',
+        },
+        timeout: 10000,
+      },
+    );
+    const order = res.data?.routes?.[0]?.optimizedIntermediateWaypointIndex;
+    if (!Array.isArray(order) || order.length !== stops.length) return null;
+    return order as number[];
+  } catch (err) {
+    const e = err as { response?: { data?: unknown }; message?: string };
+    console.error('Route optimization failed, using straight-line order:', e.response?.data || e.message);
+    return null;
+  }
 }

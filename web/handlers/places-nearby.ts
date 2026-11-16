@@ -1,5 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import axios from 'axios';
+import { placeAddressFields } from './lib/place-address.js';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canViewStore } from './lib/store-access.js';
@@ -45,6 +46,10 @@ const DEFAULT_BUSINESS_TYPES: string[] = [
   'restaurant', 'cafe', 'bakery', 'bar', 'meal_takeaway',
   'store', 'shopping_mall', 'clothing_store', 'florist', 'gift_shop',
   'jewelry_store', 'book_store',
+  // Big-box and shopping-center neighbors (a Home Depot's parking lot).
+  'department_store', 'discount_store', 'home_improvement_store', 'home_goods_store',
+  'furniture_store', 'electronics_store', 'sporting_goods_store', 'shoe_store', 'pet_store',
+  'supermarket', 'pharmacy', 'car_dealer',
   'beauty_salon', 'hair_care', 'spa', 'gym',
   'lodging',
   'real_estate_agency', 'insurance_agency', 'lawyer', 'accounting', 'bank',
@@ -200,19 +205,6 @@ function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number):
     Math.sin(dLng / 2) * Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
-}
-
-function parseAddressComponents(components: Array<{ longText?: string; shortText?: string; types?: string[] }> | undefined): { city?: string; state?: string; zipCode?: string } {
-  const out: { city?: string; state?: string; zipCode?: string } = {};
-  if (!Array.isArray(components)) return out;
-  for (const c of components) {
-    const types = c.types || [];
-    const name = (c.longText ?? c.shortText ?? '') || '';
-    if (types.includes('locality')) out.city = name;
-    else if (types.includes('administrative_area_level_1')) out.state = name;
-    else if (types.includes('postal_code')) out.zipCode = name;
-  }
-  return out;
 }
 
 /** Extract place ID from Places API v1 resource name "places/ChIJ..." */
@@ -384,7 +376,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const placeId = placeIdFromName(p.name) || placeIdFromName(p.id) || (p.id && typeof p.id === 'string' ? p.id.replace(/^places\//, '') : null);
         if (!placeId || existingSet.has(placeId)) continue;
 
-        const { city, state, zipCode } = parseAddressComponents(p.addressComponents);
+        const { address, city, state, zipCode } = placeAddressFields(p.addressComponents, p.formattedAddress);
         if (opts.onlyZip && zipCode?.slice(0, 5) !== opts.onlyZip) continue;
 
         const placeLat = p.location?.latitude;
@@ -401,7 +393,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         existingSet.add(placeId);
         const name = p.displayName?.text || p.displayName || 'Unknown';
-        const address = p.formattedAddress || undefined;
         out.push({ placeId, name, address, city, state, zipCode, distanceM, lat: placeLat, lng: placeLng });
       }
     };

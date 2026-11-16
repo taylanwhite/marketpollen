@@ -63,9 +63,17 @@ export function mapsLegs(origin: string, stops: string[]): string[] {
   let from = origin;
   for (let i = 0; i < stops.length; i += STOPS_PER_MAPS_LEG) {
     const leg = stops.slice(i, i + STOPS_PER_MAPS_LEG);
-    const points = [from, ...leg].filter(Boolean).map(encodeURIComponent);
+    // The day ends back at the store: the last leg drives home (it has room
+    // for one more place unless it is full, and then home is its own leg).
+    const last = i + STOPS_PER_MAPS_LEG >= stops.length;
+    const home = last && origin && leg.length < STOPS_PER_MAPS_LEG ? [origin] : [];
+    const points = [from, ...leg, ...home].filter(Boolean).map(encodeURIComponent);
     legs.push(`https://www.google.com/maps/dir/${points.join('/')}`);
     from = leg[leg.length - 1];
+  }
+  const lastLegFull = stops.length > 0 && stops.length % STOPS_PER_MAPS_LEG === 0;
+  if (origin && lastLegFull) {
+    legs.push(`https://www.google.com/maps/dir/${[from, origin].map(encodeURIComponent).join('/')}`);
   }
   return legs;
 }

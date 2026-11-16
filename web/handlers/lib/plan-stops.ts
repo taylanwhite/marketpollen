@@ -1,5 +1,6 @@
 import { prisma } from './db.js';
-import { geocode, orderByNearest } from './route.js';
+import { businessLocationKey, locationKey } from './map-geocode.js';
+import { geocode, cheapestInsertion, optimizedRoundTrip, roundTripByDistance, type LatLng } from './route.js';
 import { isOrgAdmin } from './org-access.js';
 
 export const MAX_STOPS_PER_DAY = 25;
@@ -163,33 +164,128 @@ export async function planOwnerFor(uid: string, storeId: string, requestedUserId
   return member ? target : null;
 }
 
-/** Put the day's planned stops in nearest-first driving order from the store. Done or skipped stops keep their place at the top. */
-export async function optimizePlan(storeId: string, userId: string, date: Date) {
+type StopRow = Awaited<ReturnType<typeof prisma.planStop.findMany>>[number];
+
+/**
+ * The store and each stop on the map. A stop's own business or opportunity
+ * pin is used when it has one (no extra lookup); otherwise its address is
+ * looked up. Stops that can't be found are left out.
+ */
+async function locateDay(storeId: string, rows: StopRow[]): Promise<{ start: LatLng | null; located: Map<string, LatLng> }> {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   const store = await prisma.store.findUnique({ where: { id: storeId } });
-  const rows = await prisma.planStop.findMany({
+  const storeAddress = [store?.address, store?.city, store?.state, store?.zip_code].filter(Boolean).join(', ');
+  // A saved pin counts only if it was looked up from the current address
+  // (an edited address waits for the map to look it up again).
+  const storePinCurrent = !!store && store.lat != null && store.lng != null && store.geocoded_address === locationKey(store);
+  const start = storePinCurrent
+    ? { lat: store!.lat!, lng: store!.lng! }
+    : apiKey && storeAddress ? await geocode(storeAddress, apiKey) : null;
+
+  const bizIds = rows.map((r) => r.business_id).filter((v): v is string => !!v);
+  const oppIds = rows.map((r) => r.opportunity_id).filter((v): v is string => !!v);
+  const [bizzes, opps] = await Promise.all([
+    bizIds.length
+      ? prisma.business.findMany({
+          where: { id: { in: bizIds } },
+          select: { id: true, lat: true, lng: true, geocoded_address: true, address: true, city: true, state: true, zip_code: true, place_id: true },
+        })
+      : [],
+    oppIds.length
+      ? prisma.opportunity.findMany({
+          where: { id: { in: oppIds } },
+          select: { id: true, lat: true, lng: true, geocoded_address: true, address: true, city: true, state: true, zip_code: true, place_id: true },
+        })
+      : [],
+  ]);
+  const pin = new Map<string, LatLng>();
+  for (const b of bizzes) {
+    if (b.lat != null && b.lng != null && b.geocoded_address === businessLocationKey(b)) pin.set(b.id, { lat: b.lat, lng: b.lng });
+  }
+  for (const o of opps) {
+    if (o.lat != null && o.lng != null && o.geocoded_address === locationKey(o, true)) pin.set(o.id, { lat: o.lat, lng: o.lng });
+  }
+
+  const located = new Map<string, LatLng>();
+  await Promise.all(rows.map(async (row) => {
+    const known = (row.business_id && pin.get(row.business_id)) || (row.opportunity_id && pin.get(row.opportunity_id));
+    if (known) {
+      located.set(row.id, known);
+      return;
+    }
+    const address = [row.address, row.city, row.state, row.zip_code].filter(Boolean).join(', ');
+    const coords = apiKey && address ? await geocode(address, apiKey) : null;
+    if (coords) located.set(row.id, coords);
+  }));
+  return { start, located };
+}
+
+/** Done or skipped stops first (where they were), then the route, then stops we couldn't find. */
+async function saveOrder(rows: StopRow[], route: StopRow[], extra: Record<string, unknown> = {}) {
+  const finished = rows.filter((row) => row.status !== 'planned');
+  const inRoute = new Set(route.map((row) => row.id));
+  const lost = rows.filter((row) => row.status === 'planned' && !inRoute.has(row.id));
+  const ordered = [...finished, ...route, ...lost];
+  await prisma.$transaction(ordered.map((row, index) =>
+    prisma.planStop.update({ where: { id: row.id }, data: { position: index, ...extra } }),
+  ));
+}
+
+async function dayRows(storeId: string, userId: string, date: Date) {
+  return prisma.planStop.findMany({
     where: { store_id: storeId, user_id: userId, plan_date: date },
     orderBy: [{ position: 'asc' }, { created_at: 'asc' }],
   });
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-  const storeAddress = [store?.address, store?.city, store?.state, store?.zip_code].filter(Boolean).join(', ');
-  if (!apiKey || !storeAddress) return false;
-  const start = await geocode(storeAddress, apiKey);
-  if (!start) return false;
-  const finished = rows.filter((row) => row.status !== 'planned');
+}
+
+/**
+ * Fit a newly added stop into the day's route where it adds the least
+ * driving (store → stops → back to the store). Days someone rearranged by
+ * hand are left alone: the new stop stays at the end.
+ */
+export async function placeNewStop(storeId: string, userId: string, date: Date, newStopId: string): Promise<void> {
+  try {
+    const rows = await dayRows(storeId, userId, date);
+    if (rows.some((row) => row.manual_order)) return;
+    const added = rows.find((row) => row.id === newStopId);
+    const planned = rows.filter((row) => row.status === 'planned' && row.id !== newStopId);
+    if (!added || planned.length === 0) return;
+    const { start, located } = await locateDay(storeId, [...planned, added]);
+    const spot = located.get(newStopId);
+    if (!start || !spot) return;
+    const route = planned.filter((row) => located.has(row.id));
+    if (route.length === 0) return;
+    const at = cheapestInsertion(start, route.map((row) => located.get(row.id)!), spot);
+    // Move only the new stop: put it just before the route stop it goes
+    // ahead of (or right after the last one), and leave every other stop
+    // where it was.
+    const order = rows.filter((row) => row.id !== newStopId);
+    const anchor = at < route.length ? order.indexOf(route[at]) : order.indexOf(route[route.length - 1]) + 1;
+    order.splice(anchor, 0, added);
+    await prisma.$transaction(order.flatMap((row, index) =>
+      row.position === index && row.id !== newStopId ? [] : [prisma.planStop.update({ where: { id: row.id }, data: { position: index } })],
+    ));
+  } catch (err) {
+    // The stop is saved either way; it just stays at the end.
+    console.error('Could not fit new stop into route:', (err as Error)?.message);
+  }
+}
+
+/**
+ * Put the day's planned stops in the best driving loop from the store and
+ * back, using Google's route optimization (real drive times), or straight-line
+ * distance when that isn't available. Done or skipped stops keep their place
+ * at the top. Clears "rearranged by hand" so later stops are fitted in again.
+ */
+export async function optimizePlan(storeId: string, userId: string, date: Date) {
+  const rows = await dayRows(storeId, userId, date);
   const planned = rows.filter((row) => row.status === 'planned');
-  const located = await Promise.all(planned.map(async (row) => {
-    const coords = await geocode([row.address, row.city, row.state, row.zip_code].filter(Boolean).join(', '), apiKey);
-    return coords ? { row, ...coords } : null;
-  }));
-  const withCoords = located.filter((item): item is { row: typeof rows[number]; lat: number; lng: number } => item !== null);
-  const lost = planned.filter((row) => !withCoords.some((item) => item.row.id === row.id));
-  const ordered = [
-    ...finished,
-    ...orderByNearest(start.lat, start.lng, withCoords).map((item) => item.row),
-    ...lost,
-  ];
-  await prisma.$transaction(ordered.map((row, index) =>
-    prisma.planStop.update({ where: { id: row.id }, data: { position: index } }),
-  ));
+  const { start, located } = await locateDay(storeId, planned);
+  if (!start) return false;
+  const route = planned.filter((row) => located.has(row.id));
+  const points = route.map((row) => located.get(row.id)!);
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  const order = (apiKey && await optimizedRoundTrip(start, points, apiKey)) || roundTripByDistance(start, points);
+  await saveOrder(rows, order.map((index) => route[index]), { manual_order: false });
   return true;
 }

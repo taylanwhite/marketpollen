@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { placeAddressFields, type AddressFields } from './place-address.js';
 
 const PLACES_API_BASE = 'https://places.googleapis.com/v1';
 
@@ -30,6 +31,8 @@ export interface PlaceBasic {
 }
 
 export interface PlaceDetails extends PlaceBasic {
+  /** Street, city, state, and ZIP split out the way the app stores them. */
+  addressFields?: AddressFields;
   phone?: string;
   website?: string;
   rating?: number;
@@ -169,6 +172,7 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceDetails> {
           'id',
           'displayName',
           'formattedAddress',
+          'addressComponents',
           'primaryType',
           'location',
           'nationalPhoneNumber',
@@ -203,6 +207,7 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceDetails> {
     placeId: extractedPlaceId,
     name: p.displayName?.text || p.displayName || 'Unknown',
     formattedAddress: p.formattedAddress || undefined,
+    addressFields: placeAddressFields(p.addressComponents, p.formattedAddress),
     primaryType: p.primaryType || undefined,
     lat: p.location?.latitude,
     lng: p.location?.longitude,
@@ -216,4 +221,20 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceDetails> {
       openNow: p.currentOpeningHours.openNow,
     } : undefined,
   };
+}
+
+/**
+ * Just a place's address (street, city, state, ZIP). Asks Google only for the
+ * address fields, which bill at the basic rate, and gives up after 5 seconds.
+ */
+export async function getPlaceAddress(placeId: string): Promise<AddressFields> {
+  const response = await axios.get(`${PLACES_API_BASE}/places/${placeId}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': getApiKey(),
+      'X-Goog-FieldMask': 'formattedAddress,addressComponents',
+    },
+    timeout: 5000,
+  });
+  return placeAddressFields(response.data?.addressComponents, response.data?.formattedAddress);
 }

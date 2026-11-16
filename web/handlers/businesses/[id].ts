@@ -13,6 +13,7 @@ function toBusinessJson(r: {
   state: string | null;
   zip_code: string | null;
   place_id: string | null;
+  place_mismatch?: boolean;
   is_corporate_account: boolean;
   tax_exempt_number: string | null;
   card_on_file_last4: string | null;
@@ -29,6 +30,8 @@ function toBusinessJson(r: {
     state: r.state ?? undefined,
     zipCode: r.zip_code ?? undefined,
     placeId: r.place_id ?? undefined,
+    // The linked Google place is far from the typed address (checked when the map loads).
+    placeMismatch: r.place_mismatch === true,
     isCorporateAccount: r.is_corporate_account === true,
     taxExemptNumber: r.tax_exempt_number ?? null,
     cardOnFileLast4: r.card_on_file_last4 ?? null,
@@ -77,6 +80,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...(body?.state !== undefined && { state: body.state }),
         ...(body?.zipCode !== undefined && { zip_code: body.zipCode }),
         ...(body?.placeId !== undefined && { place_id: body.placeId || null }),
+        // A changed link or address is checked again the next time the map
+        // loads (the cleared key makes it look the pin up again).
+        ...(locationChanged(business, body) && { place_mismatch: false, geocoded_address: null }),
         ...businessCorporateData(body, true),
       },
     });
@@ -134,4 +140,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
+}
+
+/** Whether a PATCH really changes the Google link or any part of the address (the edit dialog always sends them all). */
+function locationChanged(
+  row: { place_id: string | null; address: string | null; city: string | null; state: string | null; zip_code: string | null },
+  body: { placeId?: string; address?: string; city?: string; state?: string; zipCode?: string } | undefined,
+): boolean {
+  const differs = (sent: string | undefined, saved: string | null) => sent !== undefined && (sent || null) !== (saved || null);
+  return differs(body?.placeId, row.place_id)
+    || differs(body?.address, row.address)
+    || differs(body?.city, row.city)
+    || differs(body?.state, row.state)
+    || differs(body?.zipCode, row.zip_code);
 }

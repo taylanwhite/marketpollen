@@ -1,5 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import axios from 'axios';
+import { placeAddressFields } from './lib/place-address.js';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canViewStore } from './lib/store-access.js';
@@ -44,18 +45,6 @@ function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number):
   const a = Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function addressParts(components: GooglePlace['addressComponents']) {
-  const out: { city?: string; state?: string; zipCode?: string } = {};
-  for (const c of components || []) {
-    const types = c.types || [];
-    const name = c.longText ?? c.shortText ?? '';
-    if (types.includes('locality')) out.city = name;
-    else if (types.includes('administrative_area_level_1')) out.state = name;
-    else if (types.includes('postal_code')) out.zipCode = name;
-  }
-  return out;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -145,15 +134,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (saved) {
         if (seenBusinesses.has(saved.id)) continue;
         seenBusinesses.add(saved.id);
-        out.push({ businessId: saved.id, placeId, name: saved.name, address: p.formattedAddress, distanceM, ...addressParts(p.addressComponents) });
+        out.push({ businessId: saved.id, placeId, name: saved.name, distanceM, ...placeAddressFields(p.addressComponents, p.formattedAddress) });
         continue;
       }
       out.push({
         placeId,
         name: p.displayName?.text || 'Unknown',
-        address: p.formattedAddress,
         distanceM,
-        ...addressParts(p.addressComponents),
+        // Street on its own; city, state, and ZIP in their own fields.
+        ...placeAddressFields(p.addressComponents, p.formattedAddress),
       });
     }
   } catch (err: any) {

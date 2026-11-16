@@ -189,6 +189,9 @@ model Business {
   lat              Float?
   lng              Float?
   geocoded_address String?
+  // The linked Google place is far from the typed address, so the pin uses
+  // the address and the Businesses page asks for the link to be checked.
+  place_mismatch   Boolean @default(false)
   is_corporate_account Boolean @default(false)
   tax_exempt_number    String?
   card_on_file_last4   String?
@@ -465,6 +468,9 @@ model PlanStop {
   status         String    @default("planned") // planned | done | skipped
   // Set when an admin put this stop on someone else's plan.
   assigned_by    String?
+  // The person rearranged this day by hand. New stops then go at the end
+  // instead of being fitted into the route; "Optimize route" clears it.
+  manual_order   Boolean   @default(false)
   created_at     DateTime  @default(now())
 
   store       Store        @relation(fields: [store_id], references: [id], onDelete: Cascade)

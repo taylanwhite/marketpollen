@@ -4,7 +4,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore, readableStoreScope, rejectIfStoreLocked, storeIdWhere } from './lib/store-access.js';
 import { businessCorporateData } from './lib/contact-profile.js';
-import { getPlaceDetails } from './lib/places-client.js';
+import { getPlaceAddress } from './lib/places-client.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -17,6 +17,7 @@ function toBusinessJson(r: {
   state: string | null;
   zip_code: string | null;
   place_id: string | null;
+  place_mismatch?: boolean;
   is_corporate_account: boolean;
   tax_exempt_number: string | null;
   card_on_file_last4: string | null;
@@ -33,6 +34,8 @@ function toBusinessJson(r: {
     state: r.state ?? undefined,
     zipCode: r.zip_code ?? undefined,
     placeId: r.place_id ?? undefined,
+    // The linked Google place is far from the typed address (checked when the map loads).
+    placeMismatch: r.place_mismatch === true,
     isCorporateAccount: r.is_corporate_account === true,
     taxExemptNumber: r.tax_exempt_number ?? null,
     cardOnFileLast4: r.card_on_file_last4 ?? null,
@@ -96,11 +99,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // A business linked to a Google Place should not be saved without an
-    // address. Older clients sent only the place id, so look it up here.
+    // address. Fill in whatever is missing (street, city, state, ZIP) from
+    // the place, keeping anything the person typed.
     let address = body.address ?? null;
-    if (body.placeId && !address && !body.city) {
+    let city = body.city ?? null;
+    let state = body.state ?? null;
+    let zipCode = body.zipCode ?? null;
+    if (body.placeId && (!address || !city || !zipCode)) {
       try {
-        address = (await getPlaceDetails(body.placeId)).formattedAddress ?? null;
+        const fields = await getPlaceAddress(body.placeId);
+        address = address || fields.address || null;
+        city = city || fields.city || null;
+        state = state || fields.state || null;
+        zipCode = zipCode || fields.zipCode || null;
       } catch (err) {
         console.error('Could not look up place address for new business:', err);
       }
@@ -114,9 +125,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           store_id: storeId,
           name: body.name,
           address,
-          city: body.city ?? null,
-          state: body.state ?? null,
-          zip_code: body.zipCode ?? null,
+          city,
+          state,
+          zip_code: zipCode,
           place_id: body.placeId ?? null,
           ...businessCorporateData(body, false),
           created_by: uid,

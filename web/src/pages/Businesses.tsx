@@ -45,12 +45,40 @@ interface BusinessWithStats extends Business {
   lastReachout?: Date;
 }
 
+/**
+ * No street address, or a street with no town or ZIP at all (in their own
+ * fields or typed into the street line). These can't be put on the map
+ * reliably; linking the Google place fills them in.
+ */
+function missingAddress(b: { address?: string | null; city?: string | null; zipCode?: string | null }): boolean {
+  const street = b.address?.trim() || '';
+  if (!street) return true;
+  return !b.city?.trim() && !b.zipCode?.trim() && !street.includes(',') && !/\b\d{5}\b/.test(street);
+}
+
+const norm = (v?: string | null) => (v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Whether a typed business address and a Google place look like the same spot (same ZIP, else town, plus street number). */
+function sameAddress(
+  b: { address?: string | null; city?: string | null; zipCode?: string | null },
+  place: { address?: string; city?: string; zipCode?: string },
+): boolean {
+  const zipA = norm(b.zipCode).slice(0, 5) || (b.address?.match(/\b\d{5}\b/)?.[0] ?? '');
+  const zipB = norm(place.zipCode).slice(0, 5);
+  if (zipA && zipB && zipA !== zipB) return false;
+  if (!(zipA && zipB) && b.city && place.city && norm(b.city) !== norm(place.city)) return false;
+  const numA = b.address?.trim().match(/^\d+/)?.[0];
+  const numB = place.address?.trim().match(/^\d+/)?.[0];
+  return !(numA && numB && numA !== numB);
+}
+
 export function Businesses() {
   const navigate = useNavigate();
   const { permissions, canEdit } = usePermissions();
   const [businesses, setBusinesses] = useState<BusinessWithStats[]>([]);
   const [filteredBusinesses, setFilteredBusinesses] = useState<BusinessWithStats[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [missingOnly, setMissingOnly] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editingBusiness, setEditingBusiness] = useState<BusinessWithStats | null>(null);
   const [editFormData, setEditFormData] = useState({
@@ -73,16 +101,15 @@ export function Businesses() {
   }, [permissions.currentStoreId]);
 
   useEffect(() => {
-    if (searchTerm) {
-      setFilteredBusinesses(
-        businesses.filter(b =>
-          b.name.toLowerCase().includes(searchTerm.toLowerCase())
-        )
-      );
-    } else {
-      setFilteredBusinesses(businesses);
-    }
-  }, [searchTerm, businesses]);
+    const term = searchTerm.toLowerCase();
+    setFilteredBusinesses(
+      businesses.filter((b) =>
+        (!term || b.name.toLowerCase().includes(term)) && (!missingOnly || missingAddress(b)),
+      ),
+    );
+  }, [searchTerm, missingOnly, businesses]);
+
+  const missingCount = businesses.filter(missingAddress).length;
 
   const loadBusinesses = async () => {
     try {
@@ -165,16 +192,34 @@ export function Businesses() {
   const handleLinkPlace = async (place: PlaceResult) => {
     if (!placePickerBusiness) return;
     try {
-      // Fill in the address from the place, but keep any the user already entered.
-      const hasAddress = !!(placePickerBusiness.address || placePickerBusiness.city);
-      await api.patch(`/businesses/${placePickerBusiness.id}`, {
+      // Fill in the address from the place. If one is already entered and
+      // the place is somewhere else, ask which is right: the popup shows the
+      // address, so the two have to agree for the map pin to make sense.
+      const b = placePickerBusiness;
+      const hasAddress = !!(b.address || b.city);
+      const typed = [b.address, b.city, b.state, b.zipCode].filter(Boolean).join(', ');
+      const differs = hasAddress && !sameAddress(b, place);
+      const googleAddress = [place.address, place.city, place.state, place.zipCode].filter(Boolean).join(', ');
+      const useGoogle = !hasAddress || (differs && window.confirm(
+        `This Google place is at:\n${googleAddress}\n\nThe business has:\n${typed}\n\nUse Google's address?`,
+      ));
+      await api.patch(`/businesses/${b.id}`, {
         placeId: place.placeId,
-        ...(!hasAddress && {
-          address: place.address,
-          city: place.city,
-          state: place.state,
-          zipCode: place.zipCode,
-        }),
+        ...(useGoogle
+          ? {
+              address: place.address,
+              city: place.city,
+              state: place.state,
+              zipCode: place.zipCode,
+            }
+          : {
+              // Same place: keep what was typed, but fill in any missing
+              // street, city, state, or ZIP from Google.
+              ...(!b.address && place.address && { address: place.address }),
+              ...(!b.city && place.city && { city: place.city }),
+              ...(!b.state && place.state && { state: place.state }),
+              ...(!b.zipCode && place.zipCode && { zipCode: place.zipCode }),
+            }),
       });
       setShowPlacePicker(false);
       setPlacePickerBusiness(null);
@@ -272,6 +317,15 @@ export function Businesses() {
             ),
           }}
         />
+        {(missingCount > 0 || missingOnly) && (
+          <Chip
+            label={`Missing address (${missingCount})`}
+            color="warning"
+            variant={missingOnly ? 'filled' : 'outlined'}
+            onClick={() => setMissingOnly((on) => !on)}
+            sx={{ ml: { sm: 1.5 }, mt: { xs: 1.5, sm: 0 }, verticalAlign: 'middle' }}
+          />
+        )}
       </Paper>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
@@ -281,7 +335,9 @@ export function Businesses() {
       {filteredBusinesses.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <Typography color="text.secondary">
-            {searchTerm ? 'No businesses match your search' : 'No businesses yet. Create one when adding a contact!'}
+            {missingOnly
+              ? 'Every business has an address.'
+              : searchTerm ? 'No businesses match your search' : 'No businesses yet. Create one when adding a contact!'}
           </Typography>
         </Paper>
       ) : (
@@ -342,7 +398,16 @@ export function Businesses() {
                           color="primary" 
                           variant="outlined"
                         />
-                        {business.placeId ? (
+                        {business.placeId && business.placeMismatch ? (
+                          <Chip
+                            icon={<PlaceIcon sx={{ fontSize: 14 }} />}
+                            label="Check Google link"
+                            title="The linked Google place is far from this address, so the map uses the address. Relink it to the right place."
+                            size="small"
+                            color="warning"
+                            variant="outlined"
+                          />
+                        ) : business.placeId ? (
                           <Chip
                             icon={<PlaceIcon sx={{ fontSize: 14 }} />}
                             label="Linked"
@@ -358,6 +423,9 @@ export function Businesses() {
                             variant="outlined"
                             sx={{ color: 'text.disabled', borderColor: 'divider' }}
                           />
+                        )}
+                        {missingAddress(business) && (
+                          <Chip label="No address" size="small" color="warning" variant="outlined" />
                         )}
                       </Box>
                     </CardContent>
@@ -450,12 +518,17 @@ export function Businesses() {
               <Typography variant="subtitle2" sx={{ fontWeight: 600, color: 'text.secondary' }}>
                 Google Place
               </Typography>
+              {editingBusiness?.placeId && editingBusiness.placeMismatch && (
+                <Alert severity="warning" sx={{ py: 0 }}>
+                  The linked Google place is far from this address, so the map pin uses the address. If it's the wrong location, unlink it and link the right one.
+                </Alert>
+              )}
               {editingBusiness?.placeId ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Chip
                     icon={<PlaceIcon />}
                     label="Linked to Google Place"
-                    color="success"
+                    color={editingBusiness.placeMismatch ? 'warning' : 'success'}
                     size="small"
                   />
                   <Button

@@ -22,6 +22,7 @@ import { Map as MapIcon, Search as SearchIcon, ExpandMore as ExpandMoreIcon, Sto
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { AddToPlanDialog } from '../components/AddToPlanDialog';
+import { localDateKey, type PlanStop } from '../utils/planStops';
 import { getDateRange, type DateRangeKey } from '../utils/reportAggregations';
 
 type VisitTuple = [number, number, number]; // [time ms, type index, person index]
@@ -59,7 +60,29 @@ type FoundPlace = {
   lng?: number;
 };
 
-type SearchedArea = { lat: number; lng: number; radiusM: number; storeId: string };
+type SearchedArea = { lat: number; lng: number; radiusM: number; storeId: string; label?: string };
+
+/** Where a search is centered: the store (fixed circle) or whatever is on screen. */
+type SearchAround = 'store' | 'view';
+
+const METERS_PER_MILE = 1609.34;
+const RADIUS_CHOICES_MI = [1, 3, 5, 10, 25] as const;
+const DEFAULT_RADIUS_MI = 5;
+/** "What's nearby" around a stop: about a shopping center or a couple of blocks. */
+const NEARBY_STOP_RADIUS_M = 400;
+const SEARCH_PREFS_KEY = 'marketMap.searchPrefs';
+
+function savedSearchPrefs(): { around: SearchAround; radiusMi: number } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SEARCH_PREFS_KEY) || '{}');
+    return {
+      around: raw.around === 'view' ? 'view' : 'store',
+      radiusMi: RADIUS_CHOICES_MI.includes(raw.radiusMi) ? raw.radiusMi : DEFAULT_RADIUS_MI,
+    };
+  } catch {
+    return { around: 'store', radiusMi: DEFAULT_RADIUS_MI };
+  }
+}
 
 // Google's nearby search can't cover more than about 50 km around a point.
 const MAX_AREA_RADIUS_M = 50_000;
@@ -97,6 +120,7 @@ const COLORS = {
   notVisited: '#9e9e9e',
   opportunity: '#3498db',
   store: '#2d2d2d',
+  planned: '#8e24aa', // on the plan for the day picked
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -211,6 +235,25 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
   const [foundListOpen, setFoundListOpen] = useState(false);
   const foundMarkers = useRef(new Map<string, LeafletCircleMarker>());
   const [planTarget, setPlanTarget] = useState<{ storeId: string; name: string; opportunityId?: string; businessId?: string } | null>(null);
+  const [searchAround, setSearchAroundState] = useState<SearchAround>(() => savedSearchPrefs().around);
+  const [radiusMi, setRadiusMiState] = useState<number>(() => savedSearchPrefs().radiusMi);
+  const saveSearchPrefs = (around: SearchAround, miles: number) => {
+    try {
+      localStorage.setItem(SEARCH_PREFS_KEY, JSON.stringify({ around, radiusMi: miles }));
+    } catch {
+      // Not saved; the choice still applies for this visit.
+    }
+  };
+  const setSearchAround = (around: SearchAround) => {
+    setSearchAroundState(around);
+    saveSearchPrefs(around, radiusMi);
+  };
+  const setRadiusMi = (miles: number) => {
+    setRadiusMiState(miles);
+    saveSearchPrefs(searchAround, miles);
+  };
+  const [planDate, setPlanDate] = useState(() => localDateKey(new Date()));
+  const [planStops, setPlanStops] = useState<PlanStop[]>([]);
 
   const mapStores = useMemo(() => {
     const list = currentOrg?.stores?.length ? currentOrg.stores : permissions.accessibleStores;
@@ -336,21 +379,88 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
     return best;
   };
 
-  const searchArea = async () => {
-    if (!leafletMap || searching) return;
-    const center = leafletMap.getCenter();
-    const bounds = leafletMap.getBounds();
-    // The biggest circle that fits on screen.
-    const radiusM = Math.min(
-      center.distanceTo([bounds.getNorth(), center.lng]),
-      center.distanceTo([center.lat, bounds.getEast()]),
-    );
-    if (radiusM > MAX_AREA_RADIUS_M) {
-      setSearchNote('Zoom in closer to search. The area on screen is too big.');
+  // The day's plan (one store only), so its stops stand out on the map.
+  const planStoreId = storeScope && storeScope !== 'all' ? storeScope : '';
+  const loadPlan = useCallback(async () => {
+    if (!planStoreId || !planDate) {
+      setPlanStops([]);
       return;
     }
-    const storeId = storeFor(center.lat, center.lng);
+    try {
+      const res = await api.get<{ stops: PlanStop[] }>(`/plan-stops?storeId=${encodeURIComponent(planStoreId)}&date=${planDate}`);
+      setPlanStops(res.stops || []);
+    } catch {
+      setPlanStops([]);
+    }
+  }, [planStoreId, planDate]);
+  useEffect(() => {
+    loadPlan();
+  }, [loadPlan]);
+
+  /** Where planned stops are on the map, in driving order. */
+  const plannedPins = useMemo(() => {
+    if (!data) return [];
+    const businessById = new Map(data.businesses.map((b) => [b.id, b]));
+    const opportunityById = new Map(data.opportunities.map((o) => [o.id, o]));
+    return planStops.flatMap((stop, index) => {
+      const pin = (stop.businessId && businessById.get(stop.businessId)) || (stop.opportunityId && opportunityById.get(stop.opportunityId));
+      return pin ? [{ stop, number: index + 1, lat: pin.lat, lng: pin.lng }] : [];
+    });
+  }, [data, planStops]);
+
+  /** The store a "My store" search centers on: the store picked, or the closest to the map's center on "All stores". */
+  const anchorStore = () => {
+    const stores = data?.stores ?? [];
+    if (storeScope !== 'all') return stores.find((st) => st.id === storeScope);
+    const center = leafletMap?.getCenter();
+    if (!center) return stores[0];
+    return [...stores].sort((a, b) => center.distanceTo([a.lat, a.lng]) - center.distanceTo([b.lat, b.lng]))[0];
+  };
+
+  /**
+   * Search for places that aren't businesses or opportunities yet. With no
+   * `around`, it uses the "Around" choice: a fixed circle around the store,
+   * or the biggest circle that fits on screen. `around` is "What's nearby"
+   * on a pin: every kind of business close to that stop.
+   */
+  const searchArea = async (around?: { lat: number; lng: number; radiusM: number; storeId: string; label: string }) => {
+    if (!leafletMap || searching) return;
+    let center: { lat: number; lng: number };
+    let radiusM: number;
+    let storeId: string;
+    let label: string | undefined;
+    const query = around ? '' : areaQuery.trim();
+    if (around) {
+      center = { lat: around.lat, lng: around.lng };
+      radiusM = around.radiusM;
+      storeId = around.storeId;
+      label = around.label;
+    } else if (searchAround === 'store') {
+      const store = anchorStore();
+      if (!store) {
+        setSearchNote('The store has no map location yet. Add its address, or search "This view" instead.');
+        return;
+      }
+      center = { lat: store.lat, lng: store.lng };
+      radiusM = radiusMi * METERS_PER_MILE;
+      storeId = store.id;
+    } else {
+      const mapCenter = leafletMap.getCenter();
+      const bounds = leafletMap.getBounds();
+      center = { lat: mapCenter.lat, lng: mapCenter.lng };
+      // The biggest circle that fits on screen.
+      radiusM = Math.min(
+        mapCenter.distanceTo([bounds.getNorth(), mapCenter.lng]),
+        mapCenter.distanceTo([mapCenter.lat, bounds.getEast()]),
+      );
+      if (radiusM > MAX_AREA_RADIUS_M) {
+        setSearchNote('Zoom in closer to search. The area on screen is too big.');
+        return;
+      }
+      storeId = storeFor(center.lat, center.lng);
+    }
     if (!storeId) return;
+    leafletMap.closePopup();
     setSearching(true);
     setSearchNote('');
     try {
@@ -361,15 +471,22 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
         radiusM: Math.round(radiusM),
         exactRadius: true,
       };
-      if (areaQuery.trim()) payload.textQuery = areaQuery.trim();
+      if (query) payload.textQuery = query;
       const res = await api.post<{ places: FoundPlace[] }>('/places-nearby', payload);
       const places = (res.places || []).filter((p) => p.lat != null && p.lng != null);
       setFound(places);
-      setFoundListOpen(false);
-      setSearchedArea({ lat: center.lat, lng: center.lng, radiusM, storeId });
+      setFoundListOpen(!!around && places.length > 0);
+      setSearchedArea({ lat: center.lat, lng: center.lng, radiusM, storeId, label });
       setShowOpportunities(true);
+      // Show the whole circle searched (the view search already is on screen).
+      if (around || searchAround === 'store') {
+        leafletMap.fitBounds(latLng(center.lat, center.lng).toBounds(radiusM * 2), { padding: [16, 16] });
+      }
       if (!places.length) {
-        setSearchNote(`No new places here${areaQuery.trim() ? ` for "${areaQuery.trim()}"` : ''}. Places that are already businesses or opportunities are left out.`);
+        const where = label ? ` near ${label}` : '';
+        setSearchNote(`No new places${where}${query ? ` for "${query}"` : ''}. Places that are already businesses or opportunities are left out.`);
+      } else if (label) {
+        setSearchNote(`Near ${label}.`);
       }
     } catch (err) {
       setSearchNote((err as Error).message || 'Search failed');
@@ -384,8 +501,8 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
     setSearchNote('');
   };
 
-  const addAsOpportunities = async (places: FoundPlace[]) => {
-    if (!searchedArea || !places.length) return;
+  const addAsOpportunities = async (places: FoundPlace[]): Promise<MapOpportunity[]> => {
+    if (!searchedArea || !places.length) return [];
     const storeId = searchedArea.storeId;
     const ids = new Set(places.map((p) => p.placeId));
     setAddingIds((prev) => new Set([...prev, ...ids]));
@@ -426,8 +543,10 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
       if (places.length > 1) {
         setSearchNote(`Added ${added.length} ${added.length === 1 ? 'opportunity' : 'opportunities'}${storeScope === 'all' ? ` to ${storeNames.get(storeId) ?? 'the closest store'}` : ''}.`);
       }
+      return added;
     } catch (err) {
       setSearchNote((err as Error).message || 'Could not add those places');
+      return [];
     } finally {
       setAddingIds((prev) => {
         const next = new Set(prev);
@@ -438,6 +557,16 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
   };
 
   const canAddFound = !!searchedArea && canEdit(searchedArea.storeId);
+
+  /** "What's nearby" on a pin: every kind of business within a couple of blocks. */
+  const nearby = (pin: { lat: number; lng: number; storeId: string; name: string }) => () =>
+    searchArea({ lat: pin.lat, lng: pin.lng, radiusM: NEARBY_STOP_RADIUS_M, storeId: pin.storeId, label: pin.name });
+
+  /** A found place goes on a plan by becoming an opportunity first. */
+  const planFound = async (p: FoundPlace) => {
+    const [opp] = await addAsOpportunities([p]);
+    if (opp) setPlanTarget({ storeId: opp.storeId, name: opp.name, opportunityId: opp.id });
+  };
 
   /** Bring the store (or every store on "All stores") back into view. */
   const backToStore = () => {
@@ -563,7 +692,30 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
       {filters}
 
       {storeScope && (
-        <Box sx={{ display: 'flex', gap: 1, mb: 1.5, alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1.5, alignItems: 'center' }}>
+          <TextField
+            select
+            size="small"
+            label="Around"
+            value={searchAround}
+            onChange={(e) => setSearchAround(e.target.value as SearchAround)}
+            sx={{ width: 130 }}
+          >
+            <MenuItem value="store">{storeScope === 'all' ? 'Nearest store' : 'My store'}</MenuItem>
+            <MenuItem value="view">This view</MenuItem>
+          </TextField>
+          {searchAround === 'store' && (
+            <TextField
+              select
+              size="small"
+              label="Within"
+              value={radiusMi}
+              onChange={(e) => setRadiusMi(Number(e.target.value))}
+              sx={{ width: 96 }}
+            >
+              {RADIUS_CHOICES_MI.map((mi) => <MenuItem key={mi} value={mi}>{mi} mi</MenuItem>)}
+            </TextField>
+          )}
           <TextField
             size="small"
             placeholder="Look for… e.g. Dentist"
@@ -572,18 +724,29 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
             onKeyDown={(e) => {
               if (e.key === 'Enter') searchArea();
             }}
-            sx={{ flex: 1, maxWidth: { sm: 360 } }}
+            sx={{ flex: 1, minWidth: 160, maxWidth: { sm: 360 } }}
             inputProps={{ 'aria-label': 'What to look for' }}
           />
           <Button
             variant="contained"
-            onClick={searchArea}
+            onClick={() => searchArea()}
             disabled={!leafletMap || searching}
             startIcon={searching ? <CircularProgress size={16} color="inherit" /> : <SearchIcon />}
             sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
           >
-            Search this area
+            {searchAround === 'store' ? 'Search' : 'Search this area'}
           </Button>
+          {planStoreId && (
+            <TextField
+              type="date"
+              size="small"
+              label="Show plan for"
+              value={planDate}
+              onChange={(e) => setPlanDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ width: 160, ml: { sm: 'auto' } }}
+            />
+          )}
         </Box>
       )}
 
@@ -605,6 +768,10 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
             // Leaflet spaces out paragraphs; the popup text is MUI Typography.
             '& .leaflet-popup-content p': { m: 0 },
             '& .map-tiles-muted': { filter: 'grayscale(100%) brightness(1.06) contrast(0.88)' },
+            '& .map-plan-number': {
+              bgcolor: COLORS.planned, color: '#fff', border: 0, borderRadius: '9px', px: 0.6, py: 0, fontWeight: 700, fontSize: '0.7rem', boxShadow: 'none',
+            },
+            '& .map-plan-number::before': { display: 'none' },
           }}
         >
           <MapContainer
@@ -640,6 +807,7 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
                     lines={[b.visits.length ? `Last visit ${shortDate(b.visits[0][0])}` : 'No visits logged yet']}
                     onContacts={b.storeId === permissions.currentStoreId ? () => navigate(`/dashboard?business=${b.id}`) : undefined}
                     onPlan={canEdit(b.storeId) ? () => setPlanTarget({ storeId: b.storeId, name: b.name, businessId: b.id }) : undefined}
+                    onNearby={nearby(b)}
                   />
                 </Popup>
               </CircleMarker>
@@ -660,6 +828,7 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
                     lines={[o.status === 'hold' ? 'Opportunity · on hold' : 'Opportunity · not visited yet']}
                     onDiscover={o.storeId === permissions.currentStoreId ? (onOpenOpportunities ?? (() => navigate('/opportunities'))) : undefined}
                     onPlan={canEdit(o.storeId) ? () => setPlanTarget({ storeId: o.storeId, name: o.name, opportunityId: o.id }) : undefined}
+                    onNearby={nearby(o)}
                   />
                 </Popup>
               </CircleMarker>
@@ -685,20 +854,43 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
                       ]}
                       onContacts={b.storeId === permissions.currentStoreId ? () => navigate(`/dashboard?business=${b.id}`) : undefined}
                       onPlan={canEdit(b.storeId) ? () => setPlanTarget({ storeId: b.storeId, name: b.name, businessId: b.id }) : undefined}
+                      onNearby={nearby(b)}
                     />
                   </Popup>
                 </CircleMarker>
               );
             })}
 
-            {searchedArea && (
+            {plannedPins.map(({ stop, number, lat, lng }) => (
+              <CircleMarker
+                key={`plan-${stop.id}`}
+                center={[lat, lng]}
+                radius={11}
+                interactive={false}
+                pathOptions={{ color: COLORS.planned, weight: 3, fill: false, opacity: stop.status === 'planned' ? 1 : 0.45 }}
+              >
+                <Tooltip direction="right" offset={[10, 0]} permanent className="map-plan-number">
+                  {number}
+                </Tooltip>
+              </CircleMarker>
+            ))}
+
+            {searchedArea ? (
               <Circle
                 center={[searchedArea.lat, searchedArea.lng]}
                 radius={searchedArea.radiusM}
                 pathOptions={{ color: COLORS.opportunity, weight: 1.5, dashArray: '6 6', fill: false }}
                 interactive={false}
               />
-            )}
+            ) : searchAround === 'store' && storeScope !== 'all' && data?.stores.find((st) => st.id === storeScope) ? (
+              // The fixed search zone around the store, before searching.
+              <Circle
+                center={[data.stores.find((st) => st.id === storeScope)!.lat, data.stores.find((st) => st.id === storeScope)!.lng]}
+                radius={radiusMi * METERS_PER_MILE}
+                pathOptions={{ color: COLORS.opportunity, weight: 1.5, dashArray: '6 6', fill: false, opacity: 0.5 }}
+                interactive={false}
+              />
+            ) : null}
 
             {found.map((p) => (
               <CircleMarker
@@ -718,6 +910,7 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
                     store={searchedArea && storeScope === 'all' ? `Would go to ${storeNames.get(searchedArea.storeId) ?? 'the closest store'}` : undefined}
                     lines={['Not an opportunity yet', distanceFromStore(p) ?? ''].filter(Boolean)}
                     onAdd={canAddFound ? () => addAsOpportunities([p]) : undefined}
+                    onPlan={canAddFound ? () => planFound(p) : undefined}
                     adding={addingIds.has(p.placeId)}
                   />
                 </Popup>
@@ -901,6 +1094,16 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
                       {addingIds.has(p.placeId) ? 'Adding…' : 'Add'}
                     </Button>
                   )}
+                  {canAddFound && (
+                    <Button
+                      size="small"
+                      disabled={addingIds.has(p.placeId)}
+                      onClick={() => planFound(p)}
+                      sx={{ flexShrink: 0 }}
+                    >
+                      Plan
+                    </Button>
+                  )}
                 </Box>
               ))}
             </Box>
@@ -936,6 +1139,12 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
           <KeyItem swatch={<Dot color={COLORS.recent} />} label="Last 30 days" />
           <KeyItem swatch={<Dot color={COLORS.month3} />} label="31–90 days" />
           <KeyItem swatch={<Dot color={COLORS.older} />} label="Older" />
+          {plannedPins.length > 0 && (
+            <KeyItem
+              swatch={<Box sx={{ width: 12, height: 12, borderRadius: '50%', border: `2px solid ${COLORS.planned}` }} />}
+              label={`On the plan (${plannedPins.length})`}
+            />
+          )}
           {found.length > 0 && (
             <KeyItem
               swatch={<Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: '#fff', border: `2px solid ${COLORS.opportunity}` }} />}
@@ -950,6 +1159,9 @@ export function MarketMap({ embedded = false, onOpenOpportunities }: { embedded?
         storeId={planTarget?.storeId || ''}
         target={planTarget ? { name: planTarget.name, opportunityId: planTarget.opportunityId, businessId: planTarget.businessId } : null}
         onClose={() => setPlanTarget(null)}
+        onAdded={(stop) => {
+          if (stop.date === planDate && stop.storeId === planStoreId) loadPlan();
+        }}
       />
     </Box>
   );
@@ -964,6 +1176,7 @@ function PinPopup({
   onDiscover,
   onPlan,
   onAdd,
+  onNearby,
   adding = false,
 }: {
   title: string;
@@ -974,6 +1187,7 @@ function PinPopup({
   onDiscover?: () => void;
   onPlan?: () => void;
   onAdd?: () => void;
+  onNearby?: () => void;
   adding?: boolean;
 }) {
   return (
@@ -995,6 +1209,7 @@ function PinPopup({
         {onContacts && <Button size="small" variant="outlined" onClick={onContacts}>Contacts</Button>}
         {onDiscover && <Button size="small" variant="outlined" onClick={onDiscover}>Open list</Button>}
         {onPlan && <Button size="small" variant="outlined" onClick={onPlan}>Add to plan</Button>}
+        {onNearby && <Button size="small" variant="outlined" onClick={onNearby}>What's nearby</Button>}
         <Button size="small" href={directionsUrl(title, address)} target="_blank" rel="noopener noreferrer">
           Directions
         </Button>

@@ -85,6 +85,7 @@ export interface Business {
   state?: string | null;
   zipCode?: string | null;
   placeId?: string | null; // Google Places ID; set when created from an opportunity
+  placeMismatch?: boolean; // linked place is far from the typed address; the map pin uses the address
   isCorporateAccount?: boolean;
   taxExemptNumber?: string | null;
   cardOnFileLast4?: string | null;

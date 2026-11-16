@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { displayAddress } from '../utils/displayAddress';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
 import { Store } from '../types';
@@ -200,9 +201,10 @@ export function PlaceMatchPicker({
                       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                         {place.name}
                       </Typography>
-                      {place.address && (
+                      {displayAddress(place) && (
                         <Typography variant="body2" color="text.secondary">
-                          {place.address}
+                          {/* Town and ZIP too, so branches of a chain can be told apart. */}
+                          {displayAddress(place)}
                         </Typography>
                       )}
                     </Box>

@@ -3,25 +3,13 @@ import axios from 'axios';
 import { getAuthUid } from './lib/auth.js';
 import { prisma } from './lib/db.js';
 import { canViewStore } from './lib/store-access.js';
+import { placeAddressFields } from './lib/place-address.js';
 
 const MAX_RESULTS = 10;
 // Prefer places this close to the marketer (or the store). It is a
 // preference, not a cutoff, so a typed address farther away still works.
 const PHONE_BIAS_RADIUS_M = 15_000;
 const STORE_BIAS_RADIUS_M = 30_000;
-
-function parseAddressComponents(components: Array<{ longText?: string; shortText?: string; types?: string[] }> | undefined): { city?: string; state?: string; zipCode?: string } {
-  const out: { city?: string; state?: string; zipCode?: string } = {};
-  if (!Array.isArray(components)) return out;
-  for (const c of components) {
-    const types = c.types || [];
-    const name = (c.longText ?? c.shortText ?? '') || '';
-    if (types.includes('locality')) out.city = name;
-    else if (types.includes('administrative_area_level_1')) out.state = name;
-    else if (types.includes('postal_code')) out.zipCode = name;
-  }
-  return out;
-}
 
 function placeIdFromName(name: string | undefined): string | null {
   if (!name || typeof name !== 'string') return null;
@@ -87,9 +75,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const out = places.map((p: any) => {
       const placeId = placeIdFromName(p.name) || placeIdFromName(p.id) || (p.id && typeof p.id === 'string' ? p.id.replace(/^places\//, '') : null);
       const displayName = p.displayName?.text || p.displayName || 'Unknown';
-      const formattedAddress = p.formattedAddress || undefined;
-      const { city, state, zipCode } = parseAddressComponents(p.addressComponents);
-      return { placeId, name: displayName, address: formattedAddress, city, state, zipCode };
+      // Street on its own; city, state, and ZIP in their own fields.
+      return { placeId, name: displayName, ...placeAddressFields(p.addressComponents, p.formattedAddress) };
     }).filter((p: any) => p.placeId);
 
     return res.status(200).json({ places: out });

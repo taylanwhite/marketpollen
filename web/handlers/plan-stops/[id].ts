@@ -2,7 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { rejectIfStoreLocked } from '../lib/store-access.js';
-import { MAX_STOPS_PER_DAY, canSeeTeamPlans, findOverlaps, parseDateKey, planStopJson, userNames } from '../lib/plan-stops.js';
+import { MAX_STOPS_PER_DAY, canSeeTeamPlans, findOverlaps, parseDateKey, placeNewStop, planStopJson, userNames } from '../lib/plan-stops.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uid = await getAuthUid(req);
@@ -25,7 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'PATCH') {
     const body = (req.body || {}) as { status?: string; date?: string };
-    const data: { status?: string; plan_date?: Date; position?: number } = {};
+    const data: { status?: string; plan_date?: Date; position?: number; manual_order?: boolean } = {};
     if (body.status !== undefined) {
       if (!['planned', 'done', 'skipped'].includes(body.status)) {
         return res.status(400).json({ error: 'status must be planned, done, or skipped' });
@@ -53,9 +53,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         data.plan_date = date;
         data.position = there.reduce((max, other) => Math.max(max, other.position + 1), 0);
         data.status = data.status ?? 'planned';
+        // The new day's own order decides; this stop is fitted into its route.
+        data.manual_order = false;
       }
     }
-    const row = await prisma.planStop.update({ where: { id }, data });
+    let row = await prisma.planStop.update({ where: { id }, data });
+    if (data.plan_date) {
+      await placeNewStop(row.store_id, owner, data.plan_date, row.id);
+      row = (await prisma.planStop.findUnique({ where: { id } })) ?? row;
+    }
     const overlaps = await findOverlaps(row.store_id, owner, [row]);
     const names = await userNames([row.assigned_by]);
     return res.status(200).json(planStopJson(row, overlaps.get(row.id) || [], (row.assigned_by && names.get(row.assigned_by)) || null));

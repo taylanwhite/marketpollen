@@ -3,7 +3,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { readableStoreScope, storeIdWhere } from './lib/store-access.js';
 import { personName } from './lib/contact-json.js';
-import { geocodeKey, locationKey, metersBetween, runLimited, type Coords } from './lib/map-geocode.js';
+import { addressPart, businessLocationKey, geocodeKey, locationKey, metersBetween, runLimited, streetNamesTown, type Coords } from './lib/map-geocode.js';
 
 /** Visit types in the order the map's `visits` tuples refer to them. */
 const VISIT_TYPES = ['meeting', 'call', 'email', 'text', 'other'] as const;
@@ -36,6 +36,16 @@ function needsLookup(row: GeoRow, key: string | null): key is string {
 
 function placed(row: GeoRow, key: string | null): boolean {
   return key != null && row.geocoded_address === key && row.lat != null && row.lng != null;
+}
+
+/**
+ * Whether to draw a pin: it has coordinates and something to look up. A pin
+ * still waiting to be checked again (its address or link changed, or the
+ * lookup format did) keeps its old spot until the check runs, so pins never
+ * vanish while the map catches up; a wrong one then moves to the right spot.
+ */
+function drawable(row: GeoRow, key: string | null): boolean {
+  return key != null && row.lat != null && row.lng != null;
 }
 
 function notPlaceable(row: GeoRow, key: string | null): boolean {
@@ -73,7 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       where,
       select: {
         id: true, store_id: true, name: true, address: true, city: true, state: true, zip_code: true, place_id: true,
-        lat: true, lng: true, geocoded_address: true,
+        lat: true, lng: true, geocoded_address: true, place_mismatch: true,
         _count: { select: { contacts: true } },
       },
     }),
@@ -122,8 +132,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Look up coordinates that are missing or out of date. Stores first, then
   // businesses that have been visited, then the rest, then opportunities.
   const storeKeys = new Map(stores.map((s) => [s.id, locationKey(s)]));
-  // A Google place ID points at the exact place, so it wins over a typed address.
-  const businessKeys = new Map(businesses.map((b) => [b.id, locationKey(b, true)]));
+  // A business with both a place link and a typed address is checked against
+  // the address (the link can be the wrong branch). Opportunities come from
+  // Google with Google's own address, so the place ID alone is right.
+  const businessKeys = new Map(businesses.map((b) => [b.id, businessLocationKey(b)]));
   const opportunityKeys = new Map(opportunities.map((o) => [o.id, locationKey(o, true)]));
 
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
@@ -146,7 +158,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const data = { lat: coords?.lat ?? null, lng: coords?.lng ?? null, geocoded_address: key };
       try {
         if (table === 'store') await prisma.store.update({ where: { id: row.id }, data });
-        else if (table === 'business') await prisma.business.update({ where: { id: row.id }, data });
+        else if (table === 'business') {
+          const businessData = { ...data, place_mismatch: !!coords?.placeMismatch };
+          await prisma.business.update({ where: { id: row.id }, data: businessData });
+          Object.assign(row, businessData);
+          return;
+        }
         else await prisma.opportunity.update({ where: { id: row.id }, data });
         Object.assign(row, data);
       } catch (err) {
@@ -183,9 +200,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!needsLookup(row, key) && !(placed(row, key) && farFromStore(row))) return [];
     const near = storeSpot(row.store_id);
     const store = storeById.get(row.store_id);
-    // An address with no city or ZIP is looked up in the store's town.
-    const query = !key.startsWith('place:') && !row.city && !row.zip_code && store?.city
-      ? [key, store.city, store.state].filter(Boolean).join(', ')
+    // A street with no city or ZIP is looked up in the store's town, unless
+    // the street line already names a town ("…Ave Moore OK").
+    const street = addressPart(key);
+    const query = street && !row.city && !row.zip_code && store?.city && !streetNamesTown(street)
+      ? [street, store.city, store.state].filter(Boolean).join(', ')
       : undefined;
     return [{ table, row, key, query, near }];
   };
@@ -199,8 +218,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ...opportunities.flatMap((o) => lookupFor('opportunity', o, opportunityKeys.get(o.id) ?? null)),
   ]);
 
-  const placedBusinesses = businesses.filter((b) => placed(b, businessKeys.get(b.id) ?? null) && !farFromStore(b));
-  const placedOpportunities = opportunities.filter((o) => placed(o, opportunityKeys.get(o.id) ?? null) && !farFromStore(o));
+  const placedBusinesses = businesses.filter((b) => drawable(b, businessKeys.get(b.id) ?? null) && !farFromStore(b));
+  const placedOpportunities = opportunities.filter((o) => drawable(o, opportunityKeys.get(o.id) ?? null) && !farFromStore(o));
 
   const address = (row: { address: string | null; city: string | null; state: string | null; zip_code: string | null }) =>
     [row.address, row.city, row.state, row.zip_code].filter(Boolean).join(', ') || undefined;

@@ -9,6 +9,7 @@ import {
   findOverlaps,
   loadPlan,
   optimizePlan,
+  placeNewStop,
   parseDateKey,
   planOwnerFor,
   planPeople,
@@ -142,15 +143,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         assigned_by: owner === uid ? null : uid,
       },
     });
-    const overlaps = await findOverlaps(storeId, owner, [row]);
-    const names = await userNames([row.assigned_by]);
-    return res.status(201).json(planStopJson(row, overlaps.get(row.id) || [], (row.assigned_by && names.get(row.assigned_by)) || null));
+    await placeNewStop(storeId, owner, date, row.id);
+    const placedRow = (await prisma.planStop.findUnique({ where: { id: row.id } })) ?? row;
+    const overlaps = await findOverlaps(storeId, owner, [placedRow]);
+    const names = await userNames([placedRow.assigned_by]);
+    return res.status(201).json(planStopJson(placedRow, overlaps.get(placedRow.id) || [], (placedRow.assigned_by && names.get(placedRow.assigned_by)) || null));
   }
 
   if (req.method === 'PUT') {
     if (body.optimize) {
       const done = await optimizePlan(storeId, owner, date);
-      if (!done) return res.status(400).json({ error: 'Add the store address to sort stops by distance' });
+      if (!done) return res.status(400).json({ error: 'Add the store address to optimize the route' });
     } else if (Array.isArray(body.orderedIds)) {
       const mine = await prisma.planStop.findMany({
         where: { store_id: storeId, user_id: owner, plan_date: date },
@@ -159,7 +162,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const mineIds = new Set(mine.map((stop) => stop.id));
       const ordered = body.orderedIds.filter((id) => mineIds.has(id));
       await prisma.$transaction(ordered.map((id, index) =>
-        prisma.planStop.update({ where: { id }, data: { position: index } }),
+        // Rearranged by hand: new stops now go at the end instead of being fitted in.
+        prisma.planStop.update({ where: { id }, data: { position: index, manual_order: true } }),
       ));
     }
     return res.status(200).json({ stops: await loadPlan(storeId, owner, date) });

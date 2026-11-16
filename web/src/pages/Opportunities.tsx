@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
+import { displayAddress } from '../utils/displayAddress';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { usePermissions } from '../contexts/PermissionContext';
@@ -1370,7 +1371,7 @@ export function Opportunities() {
                                     lineHeight: 1.4,
                                   }}
                                 >
-                                  {place.address || [place.city, place.state, place.zipCode].filter(Boolean).join(', ')}
+                                  {displayAddress(place)}
                                 </Typography>
                               </Box>
                               <IconButton
@@ -1510,7 +1511,7 @@ function OpportunityRow({
   onDismiss: () => void;
 }) {
   const subtitle =
-    opp.address || [opp.city, opp.state, opp.zipCode].filter(Boolean).join(', ');
+    displayAddress(opp);
   return (
     <ListItem
       sx={{
@@ -1598,7 +1599,7 @@ function HeldOpportunityRow({
   onRelease: () => void;
 }) {
   const subtitle =
-    opp.address || [opp.city, opp.state, opp.zipCode].filter(Boolean).join(', ');
+    displayAddress(opp);
   return (
     <ListItem
       sx={{
@@ -1652,7 +1653,7 @@ function DismissedOpportunityRow({
   onRestore: () => void;
 }) {
   const subtitle =
-    opp.address || [opp.city, opp.state, opp.zipCode].filter(Boolean).join(', ');
+    displayAddress(opp);
   return (
     <ListItem
       sx={{
