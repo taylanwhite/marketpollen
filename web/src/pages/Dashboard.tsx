@@ -7,6 +7,8 @@ import { useDonation } from '../contexts/DonationContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { ContactForm } from '../components/ContactForm';
 import { ImportCustomersDialog } from '../components/ImportCustomersDialog';
+import { MoveToStoreDialog, type MovableBusiness } from '../components/MoveToStoreDialog';
+import { useMoveTargets } from '../hooks/useMoveTargets';
 import { connectionValue, lastVisit, visitorNames } from '../utils/connectionLabel';
 import { PhoneLink } from '../components/PhoneLink';
 import { knownOrganizationTypes, corporateAccountFromBusiness, corporateAccountPayload, type CorporateAccountFields } from '../utils/organizationTypes';
@@ -29,6 +31,7 @@ const GenerateEmailDialog = lazy(() =>
 );
 import { PullToRefreshIndicator } from '../components/PullToRefreshIndicator';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
+import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
 import { ContactsListSkeleton } from '../components/ContactsListSkeleton';
 import { haptics } from '../utils/haptics';
 import { useTheme } from '@mui/material/styles';
@@ -97,6 +100,7 @@ import {
   Check as CheckIcon,
   MoreVert as MoreVertIcon,
   CallMerge as MergeIcon,
+  Storefront as StoreMoveIcon,
   SwapVert as SwapIcon,
   Edit as EditIcon,
   Delete as DeleteIcon,
@@ -108,6 +112,8 @@ function contactBusinessIds(contact: Contact): string[] {
 }
 
 const NEW_CONTACT_MS = 2 * 24 * 60 * 60 * 1000;
+/** Cards drawn per page in the Contacts and Businesses lists; more load as you scroll. */
+const LIST_PAGE_SIZE = 50;
 
 function contactStatusLabel(contact: Contact): string | null {
   const status = contact.status || 'new';
@@ -155,6 +161,9 @@ export function Dashboard() {
   const [foldBusiness, setFoldBusiness] = useState<Business | null>(null);
   const [mergeBusy, setMergeBusy] = useState(false);
   const [mergeError, setMergeError] = useState('');
+  // Business ticked when "Move to another store" opens (null = closed).
+  const [moveStart, setMoveStart] = useState<string | null>(null);
+  const moveTargets = useMoveTargets(permissions.currentStoreId);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [followUpSuggestions, setFollowUpSuggestions] = useState<FollowUpSuggestion[]>([]);
   const [followUpDialogOpen, setFollowUpDialogOpen] = useState(false);
@@ -444,14 +453,39 @@ export function Dashboard() {
     }
   };
 
+  // Each business's contacts, built once per load instead of scanning every
+  // contact for every business (slow on big accounts).
+  const contactsByBusiness = useMemo(() => {
+    const byBusiness = new Map<string, Contact[]>();
+    for (const contact of contacts) {
+      for (const id of contactBusinessIds(contact)) {
+        const list = byBusiness.get(id);
+        if (list) list.push(contact);
+        else byBusiness.set(id, [contact]);
+      }
+    }
+    return byBusiness;
+  }, [contacts]);
+
+  // Businesses that can be moved to another store, with the contacts that go
+  // with each (the ones whose main business it is).
+  const movableBusinesses = useMemo<MovableBusiness[]>(() => {
+    if (moveStart === null) return [];
+    const mainCount = new Map<string, number>();
+    for (const contact of contacts) mainCount.set(contact.businessId, (mainCount.get(contact.businessId) ?? 0) + 1);
+    return businessRecords
+      .filter((b) => b.storeId === permissions.currentStoreId)
+      .map((b) => ({ id: b.id, name: b.name, contactCount: mainCount.get(b.id) ?? 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [moveStart, contacts, businessRecords, permissions.currentStoreId]);
+
   const filteredBusinesses = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return businessRecords
       .filter((business) => {
         if (corporateOnly && !business.isCorporateAccount) return false;
         if (!term) return true;
-        const people = contacts
-          .filter((contact) => contactBusinessIds(contact).includes(business.id))
+        const people = (contactsByBusiness.get(business.id) ?? [])
           .flatMap((contact) => [contact.firstName, contact.lastName, contact.email, contact.phone]);
         const haystack = [business.name, business.address, business.city, business.state, business.zipCode, ...people]
           .filter(Boolean)
@@ -466,12 +500,38 @@ export function Dashboard() {
           return bTime - aTime;
         }
         if (businessSort === 'contacts') {
-          const count = (business: Business) => contacts.filter((contact) => contactBusinessIds(contact).includes(business.id)).length;
+          const count = (business: Business) => contactsByBusiness.get(business.id)?.length ?? 0;
           return count(b) - count(a);
         }
         return a.name.localeCompare(b.name);
       });
-  }, [businessRecords, contacts, searchTerm, businessSort, corporateOnly]);
+  }, [businessRecords, contactsByBusiness, searchTerm, businessSort, corporateOnly]);
+
+  // Big accounts have hundreds of cards; drawing them all at once is what
+  // makes the tab slow on phones. Show a page at a time and add the next
+  // page when the bottom of the list scrolls into view.
+  const [contactLimit, setContactLimit] = useState(LIST_PAGE_SIZE);
+  const [businessLimit, setBusinessLimit] = useState(LIST_PAGE_SIZE);
+  // A new search, filter, sort, store, or tab starts back at the first page.
+  // (A contact being edited does not, so the list doesn't jump.)
+  useEffect(() => {
+    setContactLimit(LIST_PAGE_SIZE);
+  }, [businessFilter, searchTerm, showNoDonationsOnly, marketerFilter, contactSort, statusFilter, followUpFilter, infoFilter, cityFilter, visitFilter, orgTypeFilter, modifiedFrom, modifiedTo, pageTab, permissions.currentStoreId]);
+  useEffect(() => {
+    setBusinessLimit(LIST_PAGE_SIZE);
+  }, [searchTerm, businessSort, corporateOnly, pageTab, permissions.currentStoreId]);
+  const visibleContacts = useMemo(() => filteredContacts.slice(0, contactLimit), [filteredContacts, contactLimit]);
+  const visibleBusinesses = useMemo(() => filteredBusinesses.slice(0, businessLimit), [filteredBusinesses, businessLimit]);
+  const { sentinelRef: contactSentinelRef } = useInfiniteScroll({
+    onLoadMore: () => setContactLimit((limit) => limit + LIST_PAGE_SIZE),
+    hasMore: pageTab === 'contacts' && contactLimit < filteredContacts.length,
+    rootMargin: '600px',
+  });
+  const { sentinelRef: businessSentinelRef } = useInfiniteScroll({
+    onLoadMore: () => setBusinessLimit((limit) => limit + LIST_PAGE_SIZE),
+    hasMore: pageTab === 'businesses' && businessLimit < filteredBusinesses.length,
+    rootMargin: '600px',
+  });
 
   const marketers = useMemo(() => {
     const names = new Set<string>();
@@ -1557,8 +1617,8 @@ export function Dashboard() {
               </Paper>
             ) : (
               <Grid container spacing={2}>
-                {filteredBusinesses.map((business) => {
-                  const people = contacts.filter((contact) => contactBusinessIds(contact).includes(business.id));
+                {visibleBusinesses.map((business) => {
+                  const people = contactsByBusiness.get(business.id) ?? [];
                   const place = [business.address, business.city, business.state, business.zipCode].filter(Boolean).join(', ');
                   return (
                     <Grid size={{ xs: 12, sm: 6, xl: 4 }} key={business.id}>
@@ -1619,7 +1679,7 @@ export function Dashboard() {
             </Paper>
           ) : (
             <Grid container spacing={2}>
-              {filteredContacts.map((contact) => (
+              {visibleContacts.map((contact) => (
                 <Grid size={{ xs: 12, sm: 6, xl: 4 }} key={contact.id}>
                   <Card 
                     sx={{ 
@@ -1739,6 +1799,12 @@ export function Dashboard() {
                 </Grid>
               ))}
             </Grid>
+          )}
+          {pageTab === 'contacts' && filteredContacts.length > 0 && (
+            <ListFooter shown={visibleContacts.length} total={filteredContacts.length} noun="contacts" sentinelRef={contactSentinelRef} />
+          )}
+          {pageTab === 'businesses' && filteredBusinesses.length > 0 && (
+            <ListFooter shown={visibleBusinesses.length} total={filteredBusinesses.length} noun="businesses" sentinelRef={businessSentinelRef} />
           )}
         </Grid>
 
@@ -2175,6 +2241,19 @@ export function Dashboard() {
             <ListItemIcon><MergeIcon fontSize="small" /></ListItemIcon>
             Merge a duplicate into this
           </MenuItem>
+          {moveTargets.length > 0 && (
+            <MenuItem
+              sx={{ minHeight: 48 }}
+              onClick={() => {
+                const business = businessMenu?.business;
+                setBusinessMenu(null);
+                if (business) setMoveStart(business.id);
+              }}
+            >
+              <ListItemIcon><StoreMoveIcon fontSize="small" /></ListItemIcon>
+              Move to another store
+            </MenuItem>
+          )}
           <MenuItem
             sx={{ minHeight: 48, color: 'error.main' }}
             onClick={() => {
@@ -2199,6 +2278,22 @@ export function Dashboard() {
             loadData();
           }}
         />
+        {permissions.currentStoreId && (
+          <MoveToStoreDialog
+            open={moveStart !== null}
+            onClose={() => setMoveStart(null)}
+            sourceStoreId={permissions.currentStoreId}
+            businesses={movableBusinesses}
+            initialSelected={moveStart ? [moveStart] : []}
+            onMoved={(summary, movedIds) => {
+              setImportNotice(summary);
+              if (businessFilter && movedIds.includes(businessFilter)) navigate('/dashboard?tab=businesses');
+              triggerRefresh();
+              bumpDataVersion();
+              loadData();
+            }}
+          />
+        )}
         <Snackbar
           open={!!importNotice}
           autoHideDuration={4000}
@@ -2216,6 +2311,29 @@ export function Dashboard() {
           anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
         />
       </Grid>
+    </Box>
+  );
+}
+
+/**
+ * Bottom of a long list: an invisible marker that loads the next page when
+ * it scrolls into view, and a quiet "Showing 50 of 812" so people know more
+ * is coming.
+ */
+function ListFooter({ shown, total, noun, sentinelRef }: {
+  shown: number;
+  total: number;
+  noun: string;
+  sentinelRef: (node: HTMLDivElement | null) => void;
+}) {
+  // A short list that fits on one page needs no footer.
+  if (shown >= total && total <= LIST_PAGE_SIZE) return null;
+  return (
+    <Box sx={{ py: 2, textAlign: 'center' }}>
+      {shown < total && <div ref={sentinelRef} style={{ height: 1 }} aria-hidden />}
+      <Typography variant="caption" color="text.secondary">
+        {shown < total ? `Showing ${shown} of ${total} ${noun}` : `All ${total} ${noun}`}
+      </Typography>
     </Box>
   );
 }

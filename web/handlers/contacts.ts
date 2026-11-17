@@ -4,7 +4,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canAccessStore, readableStoreScope, rejectIfStoreLocked, storeIdWhere } from './lib/store-access.js';
 import { contactInclude, contactToJson } from './lib/contact-json.js';
-import { syncContactBusinesses } from './lib/contact-businesses.js';
+import { anyBusinessInStore, syncContactBusinesses } from './lib/contact-businesses.js';
 import { contactProfileData } from './lib/contact-profile.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -71,6 +71,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         return res.status(200).json(contactToJson(existing));
       }
+    }
+
+    if (!(await anyBusinessInStore([body.businessId], storeId))) {
+      return res.status(400).json({ error: 'That business is not in this store' });
     }
 
     const contactIdApp = body.contactId || `contact-${Date.now()}`;

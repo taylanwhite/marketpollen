@@ -128,7 +128,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         if (openStores.length === 1) {
           currentStoreId = openStores[0].id;
           localStorage.setItem('selectedStoreId', currentStoreId);
-        } else if (openStores.length > 1 && (isGlobalAdmin || orgAdmin)) {
+        } else if (openStores.length > 1) {
+          // More than one store: they choose on the store picker. Picking the
+          // first one quietly filed people's visits under the wrong store.
           currentStoreId = null;
         } else if (storePerms.length > 0) {
           const openPerm = storePerms.find((perm) => openStores.some((store) => store.id === perm.storeId));

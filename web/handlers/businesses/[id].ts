@@ -3,6 +3,10 @@ import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
 import { businessCorporateData } from '../lib/contact-profile.js';
+import { canEditStore, moveBusinessToStore } from '../lib/move-business.js';
+import { isPlatformAdmin } from '../lib/king-admin.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function toBusinessJson(r: {
   id: string;
@@ -132,6 +136,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     return res.status(200).json({ keptId: intoId, keptName: keeper.name, contacts: moved });
+  }
+
+  if (req.method === 'POST' && (req.body as { action?: string })?.action === 'move') {
+    const storeId = String((req.body as { storeId?: string })?.storeId || '').trim();
+    if (!storeId || storeId === business.store_id) return res.status(400).json({ error: 'Choose a different store' });
+    if (!UUID.test(storeId)) return res.status(404).json({ error: 'Store not found' });
+    const [from, to] = await Promise.all([
+      prisma.store.findUnique({ where: { id: business.store_id }, select: { organization_id: true } }),
+      prisma.store.findUnique({ where: { id: storeId }, select: { organization_id: true } }),
+    ]);
+    if (!to) return res.status(404).json({ error: 'Store not found' });
+    const sameOrg = !!from?.organization_id && from.organization_id === to.organization_id;
+    if (!sameOrg && !(await isPlatformAdmin(uid))) {
+      return res.status(400).json({ error: 'Businesses can only move between stores in the same organization' });
+    }
+    if (!(await canEditStore(uid, business.store_id)) || !(await canEditStore(uid, storeId))) {
+      return res.status(403).json({ error: 'You need edit access to both stores to move a business' });
+    }
+    if (await rejectIfStoreLocked(res, storeId, uid)) return;
+    const result = await moveBusinessToStore(id, storeId);
+    return res.status(200).json(result);
   }
 
   if (req.method === 'DELETE') {

@@ -58,6 +58,7 @@ import {
   AutoAwesome as AIIcon,
   AttachFile as AttachFileIcon,
   OpenInNew as OpenInNewIcon,
+  Storefront as StoreIcon,
 } from '@mui/icons-material';
 const GenerateEmailDialog = lazy(() =>
   import('./GenerateEmailDialog').then((m) => ({ default: m.GenerateEmailDialog }))
@@ -70,6 +71,8 @@ import { contactProfilePayload, type ContactProfileExtras } from '../utils/organ
 import { FollowUpCadencesFields } from './FollowUpCadencesFields';
 import { toDrafts, toPayload, type FollowUpCadenceDraft } from '../utils/followUpCadence';
 import { useStorePeople } from '../hooks/useStorePeople';
+import { MoveToStoreDialog } from './MoveToStoreDialog';
+import { useMoveTargets } from '../hooks/useMoveTargets';
 
 interface EditContactModalProps {
   contact: Contact;
@@ -134,6 +137,12 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
   );
   const [deleting, setDeleting] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [moveStoreOpen, setMoveStoreOpen] = useState(false);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const moveTargets = useMoveTargets(contact.storeId);
+  const storeName = permissions.accessibleStores.find((store) => store.id === contact.storeId)?.name
+    || currentOrg?.stores.find((store) => store.id === contact.storeId)?.name
+    || '';
   const [showNewBusiness, setShowNewBusiness] = useState(false);
   const [newBusinessName, setNewBusinessName] = useState('');
   const [newBusinessAddress, setNewBusinessAddress] = useState<AddressData>({
@@ -535,7 +544,7 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
         </Box>
       </Box>
 
-      <DialogContent sx={{ minHeight: 400 }}>
+      <DialogContent ref={contentRef} sx={{ minHeight: 400 }}>
         {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
         {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
 
@@ -1127,6 +1136,35 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
               </CardContent>
             </Card>
 
+            {/* Store */}
+            {(moveTargets.length > 0 || permissions.accessibleStores.length > 1) && (
+              <Card variant="outlined">
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                    <StoreIcon color="primary" />
+                    <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                      Store
+                    </Typography>
+                  </Box>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: moveTargets.length > 0 ? 2 : 0 }}>
+                    {storeName ? <>This contact is in <strong>{storeName}</strong>.</> : 'This contact belongs to one store.'}
+                    {moveTargets.length > 0 && ' Saved under the wrong store? Moving it moves its whole business, with everyone at that business.'}
+                  </Typography>
+                  {moveTargets.length > 0 && (
+                    <Button
+                      variant="outlined"
+                      startIcon={<StoreIcon />}
+                      onClick={() => setMoveStoreOpen(true)}
+                      disabled={deleting || loading}
+                      sx={{ minHeight: 44 }}
+                    >
+                      Move to another store
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             {/* Delete Contact */}
             <Card variant="outlined" sx={{ borderColor: 'error.main' }}>
               <CardContent>
@@ -1169,6 +1207,26 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
       <DialogActions sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
+
+      <MoveToStoreDialog
+        open={moveStoreOpen}
+        onClose={() => setMoveStoreOpen(false)}
+        sourceStoreId={contact.storeId}
+        businesses={[{ id: contact.businessId, name: businesses.get(contact.businessId) || 'This contact\'s business' }]}
+        initialSelected={[contact.businessId]}
+        fixedSelection
+        onMoved={(summary) => {
+          triggerRefresh();
+          bumpDataVersion();
+          setSuccess(summary);
+          // The message is at the top; the Store section is near the bottom.
+          contentRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+          setTimeout(() => {
+            onSuccess();
+            onClose();
+          }, 1500);
+        }}
+      />
 
       <PlaceMatchPicker
         open={showPlacePicker}

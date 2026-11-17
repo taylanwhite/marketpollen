@@ -61,6 +61,7 @@ import {
   Business as BusinessIcon,
   Person as PersonIcon,
   Badge as BusinessCardIcon,
+  Storefront as StorefrontIcon,
 } from '@mui/icons-material';
 
 type ReachoutType = 'meeting' | 'call' | 'email' | 'text' | 'other';
@@ -153,6 +154,9 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
   const { userId } = useAuth();
   const { products } = useCampaign();
   const { permissions } = usePermissions();
+  const savingToStore = permissions.accessibleStores.length > 1
+    ? permissions.accessibleStores.find((store) => store.id === permissions.currentStoreId)?.name || null
+    : null;
   const { triggerRefresh, setLastDonationMouths, bumpDataVersion } = useDonation();
   const { isOnline } = useOffline();
   const { transcript, interimTranscript, isListening, startListening, stopListening, clearTranscript, error: voiceError } = useVoiceInput();
@@ -916,6 +920,14 @@ export function ContactForm({ onSuccess, defaultBusinessId }: ContactFormProps) 
         feature="AI fields & dictation"
         message="No service — AI fields and dictation are paused. Type your visit below and tap Save; it'll sync when you're back."
       />
+
+      {/* With more than one store, say which one this visit is saved to. */}
+      {savingToStore && (
+        <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: -1 }}>
+          <StorefrontIcon sx={{ fontSize: 18 }} />
+          <span>Saving to <strong>{savingToStore}</strong></span>
+        </Typography>
+      )}
 
       {/* Nearby business suggestions (geolocation-based, opt-in via browser prompt) */}
       <NearbyPlacesChips

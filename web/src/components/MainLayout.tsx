@@ -26,6 +26,8 @@ import {
   Divider,
   Alert,
   Button,
+  ButtonBase,
+  Typography,
 } from '@mui/material';
 import {
   Assignment as PlanIcon,
@@ -33,6 +35,8 @@ import {
   Cake as CakeIcon,
   Explore as DiscoverIcon,
   Insights as ReportsIcon,
+  Storefront as StoreIcon,
+  ArrowDropDown as ArrowDropDownIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 220;
@@ -84,6 +88,12 @@ export function MainLayout({ children }: MainLayoutProps) {
   };
 
   const isStorePicker = location.pathname === '/select-store';
+  // People with one store don't need reminding which store they're in.
+  const showStoreName = hasMultipleStores && !!currentStore;
+  const changeStore = () => {
+    if (currentOrg) localStorage.setItem('selectedOrgId', currentOrg.id);
+    navigate('/select-store');
+  };
   const accessMode = currentOrg?.access?.mode;
   const isDemoStore = !!currentStore?.isDemo;
   const orgLocked = !isAdmin()
@@ -178,20 +188,50 @@ export function MainLayout({ children }: MainLayoutProps) {
             gap: { xs: 1, sm: 2 },
           }}
         >
-          {/* Mobile: logo on the left */}
-          <Box
-            component="img"
-            src="/assets/nav-title-220x40.png"
-            srcSet="/assets/nav-title-440x80@2x.png 2x"
-            alt="Market Pollen"
+          {/* Logo on the left. With more than one store, the store everything
+              is saved to sits under it, and tapping it changes store. */}
+          <ButtonBase
+            disabled={!showStoreName}
+            onClick={changeStore}
+            aria-label={showStoreName ? `Store: ${currentStore?.name}. Change store` : undefined}
             sx={{
-              height: { xs: 22, sm: 36 },
-              width: 'auto',
-              maxWidth: { xs: 108, sm: 200 },
-              objectFit: 'contain',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
+              justifyContent: 'center',
               flexShrink: 0,
+              minHeight: 44,
+              maxWidth: { xs: 120, sm: 220 },
+              borderRadius: 1,
+              textAlign: 'left',
             }}
-          />
+          >
+            <Box
+              component="img"
+              src="/assets/nav-title-220x40.png"
+              srcSet="/assets/nav-title-440x80@2x.png 2x"
+              alt="Market Pollen"
+              sx={{
+                height: { xs: 22, sm: 36 },
+                width: 'auto',
+                maxWidth: { xs: 108, sm: 200 },
+                objectFit: 'contain',
+              }}
+            />
+            {showStoreName && (
+              <Box sx={{ display: 'flex', alignItems: 'center', maxWidth: '100%', mt: { xs: 0.25, sm: 0 } }}>
+                <StoreIcon sx={{ fontSize: 13, color: '#8a6d00', mr: 0.4, flexShrink: 0 }} />
+                <Typography
+                  component="span"
+                  noWrap
+                  sx={{ fontSize: 12, fontWeight: 700, color: '#8a6d00', lineHeight: 1.3, minWidth: 0 }}
+                >
+                  {currentStore?.name}
+                </Typography>
+                <ArrowDropDownIcon sx={{ fontSize: 16, color: '#8a6d00', flexShrink: 0 }} />
+              </Box>
+            )}
+          </ButtonBase>
 
           {/* Mobile-only inline goal tracker for at-a-glance progress */}
           <Box sx={{ flex: 1, display: { xs: 'flex', sm: 'none' }, minWidth: 0, alignItems: 'center' }}>

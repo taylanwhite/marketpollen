@@ -3,7 +3,7 @@ import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
 import { contactInclude, contactToJson } from '../lib/contact-json.js';
-import { syncContactBusinesses } from '../lib/contact-businesses.js';
+import { anyBusinessInStore, syncContactBusinesses } from '../lib/contact-businesses.js';
 import { contactProfileData } from '../lib/contact-profile.js';
 import {
   MAX_CADENCES_PER_CONTACT,
@@ -71,12 +71,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.personalDetails !== undefined) updateData.personal_details = body.personalDetails;
     if (body.status !== undefined) updateData.status = body.status;
     Object.assign(updateData, contactProfileData(body, true));
-    if (body.businessId !== undefined) updateData.business_id = body.businessId;
-    const linkedBusinesses = Array.isArray(body.businessIds)
+    // The main business is set by syncContactBusinesses below, which only
+    // keeps businesses in this contact's store.
+    const linkedBusinesses = Array.isArray(body.businessIds) && body.businessIds.length > 0
       ? body.businessIds
       : body.businessId
         ? [body.businessId]
         : null;
+    if (linkedBusinesses && !(await anyBusinessInStore(linkedBusinesses, contact.store_id))) {
+      return res.status(400).json({ error: 'That business is not in this store' });
+    }
     if (body.suggestedFollowUpDate !== undefined) updateData.suggested_follow_up_date = body.suggestedFollowUpDate == null ? null : (body.suggestedFollowUpDate instanceof Date ? body.suggestedFollowUpDate : new Date(body.suggestedFollowUpDate));
     if (body.suggestedFollowUpMethod !== undefined) updateData.suggested_follow_up_method = body.suggestedFollowUpMethod;
     if (body.suggestedFollowUpNote !== undefined) updateData.suggested_follow_up_note = body.suggestedFollowUpNote;

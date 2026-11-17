@@ -16,3 +16,14 @@ export async function syncContactBusinesses(contactId: string, storeId: string, 
     data: allowed.map((businessId) => ({ contact_id: contactId, business_id: businessId })),
   });
 }
+
+/** Whether at least one of these businesses is in the store (a contact's main business must be). */
+export async function anyBusinessInStore(businessIds: string[], storeId: string): Promise<boolean> {
+  const ids = [...new Set(businessIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (ids.length === 0) return false;
+  try {
+    return (await prisma.business.count({ where: { id: { in: ids }, store_id: storeId } })) > 0;
+  } catch {
+    return false; // a malformed id
+  }
+}

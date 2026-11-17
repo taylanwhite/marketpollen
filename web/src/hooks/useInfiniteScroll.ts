@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface UseInfiniteScrollOptions {
   /**
@@ -43,7 +43,10 @@ export function useInfiniteScroll({
   loading = false,
   rootMargin = '200px',
 }: UseInfiniteScrollOptions) {
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // The sentinel node in state (not a ref) so the observer re-attaches when
+  // the list remounts, e.g. switching tabs or a filter emptying and refilling
+  // the list. A plain ref would keep watching a node that's gone.
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
   // Hold the latest callback in a ref so the observer doesn't have to
   // tear down + re-create whenever the parent re-renders with a fresh
   // closure (which would happen on every state change).
@@ -52,13 +55,8 @@ export function useInfiniteScroll({
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
 
-  const setSentinel = useCallback((node: HTMLDivElement | null) => {
-    sentinelRef.current = node;
-  }, []);
-
   useEffect(() => {
     if (!hasMore) return;
-    const node = sentinelRef.current;
     if (!node) return;
     if (typeof IntersectionObserver === 'undefined') return;
 
@@ -79,7 +77,7 @@ export function useInfiniteScroll({
     return () => observer.disconnect();
     // We intentionally re-observe whenever hasMore flips so the observer
     // gets cleaned up cleanly when the list is exhausted.
-  }, [hasMore, rootMargin]);
+  }, [hasMore, rootMargin, node]);
 
-  return { sentinelRef: setSentinel };
+  return { sentinelRef: setNode };
 }
