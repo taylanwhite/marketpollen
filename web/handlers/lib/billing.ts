@@ -4,6 +4,7 @@ import { appUrl } from './app-url.js';
 import { getStripe, integrationIdentifier, storePriceId, stripeConfigured } from './stripe.js';
 import { billingAccess, isTrialActive } from './org-billing-access.js';
 import { clearPaymentFailure, recordPaymentFailure } from './payment-grace.js';
+import { SUPPORTED_PAYMENT_METHOD_TYPES, summarizePaymentMethod, type PaymentMethodSummary } from './payment-method.js';
 import {
   STORE_UNIT_CENTS,
   addStoreMessage,
@@ -40,7 +41,7 @@ export type BillingQuote = {
   unitCents?: number;
   feeCents?: number;
   orgName?: string;
-  card?: { brand: string; last4: string; expMonth: number; expYear: number } | null;
+  card?: PaymentMethodSummary | null;
 };
 
 type OrgRecord = NonNullable<Awaited<ReturnType<typeof loadOrg>>>;
@@ -452,41 +453,59 @@ function checkoutQuote(storeName: string, unitCents: number): BillingQuote {
   };
 }
 
-async function cardFromPaymentMethod(paymentMethod: Stripe.PaymentMethod | string | null | undefined): Promise<{ id: string; brand: string; last4: string; expMonth: number; expYear: number } | null> {
+async function summaryOf(paymentMethod: Stripe.PaymentMethod | string | null | undefined): Promise<(PaymentMethodSummary & { id: string }) | null> {
   if (!paymentMethod) return null;
-  const stripe = getStripe();
-  const method = typeof paymentMethod === 'string' ? await stripe.paymentMethods.retrieve(paymentMethod) : paymentMethod;
-  if (!method.card?.last4) return null;
-  return {
-    id: method.id,
-    brand: method.card.brand || 'card',
-    last4: method.card.last4,
-    expMonth: method.card.exp_month,
-    expYear: method.card.exp_year,
-  };
+  const method = typeof paymentMethod === 'string' ? await getStripe().paymentMethods.retrieve(paymentMethod) : paymentMethod;
+  return summarizePaymentMethod(method);
 }
 
-async function defaultCard(customerId: string | null): Promise<{ id: string; brand: string; last4: string; expMonth: number; expYear: number } | null> {
+/**
+ * The payment method the subscription is charged to. Checkout saves it on
+ * the subscription (not the customer), so that's checked first; then the
+ * customer's default; then any saved card or Link.
+ */
+export async function defaultPaymentMethod(
+  customerId: string | null,
+  subscriptionId?: string | null,
+): Promise<(PaymentMethodSummary & { id: string }) | null> {
   if (!customerId || !process.env.STRIPE_SECRET_KEY) return null;
   const stripe = getStripe();
+  if (subscriptionId) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['default_payment_method'] });
+      const fromSub = await summaryOf(sub.default_payment_method);
+      if (fromSub) return fromSub;
+    } catch (err) {
+      console.error('Could not read the subscription payment method', err);
+    }
+  }
   const customer = await stripe.customers.retrieve(customerId, {
     expand: ['invoice_settings.default_payment_method'],
   });
   if (customer.deleted) return null;
-  const selected = await cardFromPaymentMethod(customer.invoice_settings?.default_payment_method);
+  const selected = await summaryOf(customer.invoice_settings?.default_payment_method);
   if (selected) return selected;
-  const cards = await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 });
-  return cardFromPaymentMethod(cards.data[0]);
+  for (const type of SUPPORTED_PAYMENT_METHOD_TYPES) {
+    const saved = await stripe.paymentMethods.list({ customer: customerId, type, limit: 1 });
+    const found = summarizePaymentMethod(saved.data[0]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function withoutId(method: (PaymentMethodSummary & { id: string }) | null): PaymentMethodSummary | null {
+  if (!method) return null;
+  return { kind: method.kind, brand: method.brand, last4: method.last4, expMonth: method.expMonth, expYear: method.expYear, email: method.email };
 }
 
 async function withInvoice(org: OrgRecord, quote: BillingQuote, storeName: string): Promise<BillingQuote> {
-  const card = await defaultCard(org.stripe_customer_id);
+  const method = await defaultPaymentMethod(org.stripe_customer_id, org.stripe_subscription_id);
   return {
     ...quote,
     storeName,
     unitCents: unitOf(org),
     orgName: org.name,
-    card: card ? { brand: card.brand, last4: card.last4, expMonth: card.expMonth, expYear: card.expYear } : null,
+    card: withoutId(method),
   };
 }
 
@@ -494,7 +513,7 @@ async function startSubscription(org: OrgRecord, quantity: number, idempotencyKe
   if (!org.stripe_customer_id) {
     throw new BillingHttpError(402, 'Add a card before starting the subscription.');
   }
-  const card = await defaultCard(org.stripe_customer_id);
+  const card = await defaultPaymentMethod(org.stripe_customer_id, org.stripe_subscription_id);
   if (!card) throw new BillingHttpError(402, 'Add a card before starting the subscription.');
   const stripe = getStripe();
   const subscription = await stripe.subscriptions.create(
@@ -541,7 +560,7 @@ export async function quoteAddStore(orgId: string, storeName: string): Promise<B
   if (org.subscription_status !== 'active') {
     const unit = unitOf(org);
     const quantity = Math.max(1, seatCounts(org.stores).seatsInUse + 1);
-    const card = await defaultCard(org.stripe_customer_id);
+    const card = await defaultPaymentMethod(org.stripe_customer_id, org.stripe_subscription_id);
     const subtotal = unit * quantity;
     const fee = processingFeeCents(unit) * quantity;
     if (card) {
@@ -1015,11 +1034,11 @@ export async function billingProfile(orgId: string) {
     state: '',
     postalCode: '',
     country: 'US',
-    card: null as null | { brand: string; last4: string; expMonth: number; expYear: number },
+    card: null as null | PaymentMethodSummary,
   };
   const org = await prisma.organization.findUnique({
     where: { id: orgId },
-    select: { name: true, stripe_customer_id: true },
+    select: { name: true, stripe_customer_id: true, stripe_subscription_id: true },
   });
   if (!org) return empty;
   empty.name = org.name;
@@ -1029,8 +1048,7 @@ export async function billingProfile(orgId: string) {
       expand: ['invoice_settings.default_payment_method'],
     });
     if (customer.deleted) return empty;
-    const paymentMethod = customer.invoice_settings?.default_payment_method;
-    const card = paymentMethod && typeof paymentMethod !== 'string' ? paymentMethod.card : null;
+    const card = withoutId(await defaultPaymentMethod(org.stripe_customer_id, org.stripe_subscription_id));
     return {
       name: customer.name || org.name,
       email: customer.email || '',
@@ -1041,12 +1059,7 @@ export async function billingProfile(orgId: string) {
       state: customer.address?.state || '',
       postalCode: customer.address?.postal_code || '',
       country: customer.address?.country || 'US',
-      card: card?.last4 ? {
-        brand: card.brand || 'card',
-        last4: card.last4,
-        expMonth: card.exp_month,
-        expYear: card.exp_year,
-      } : null,
+      card,
     };
   } catch (err) {
     console.error('Could not load billing contact', err);

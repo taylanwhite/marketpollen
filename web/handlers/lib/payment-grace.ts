@@ -4,6 +4,7 @@ import { appUrl } from './app-url.js';
 import { brandEmail, brandShell } from './brand-email.js';
 import { GRACE_MS } from './org-billing-access.js';
 import { getStripe } from './stripe.js';
+import { paymentMethodLabel, type PaymentMethodSummary } from './payment-method.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -92,16 +93,6 @@ function money(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-function brandName(brand: string): string {
-  const names: Record<string, string> = {
-    visa: 'Visa',
-    mastercard: 'Mastercard',
-    amex: 'American Express',
-    discover: 'Discover',
-  };
-  return names[brand] || brand.replace(/^\w/, (letter) => letter.toUpperCase());
-}
-
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -118,7 +109,7 @@ export async function sendStoreInvoiceEmail(orgId: string, quote: {
   currentMonthlyCents: number;
   newMonthlyCents: number;
   periodEnd: string | null;
-  card?: { brand: string; last4: string; expMonth: number; expYear: number } | null;
+  card?: PaymentMethodSummary | null;
 }): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
@@ -139,9 +130,7 @@ export async function sendStoreInvoiceEmail(orgId: string, quote: {
   const due = money(quote.dueTodayCents);
   const issued = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   const subscriptionChanged = (quote.currentMonthlyCents ?? 0) > 0 && quote.newMonthlyCents !== quote.currentMonthlyCents;
-  const cardLine = quote.card
-    ? `${brandName(quote.card.brand)} ending in ${quote.card.last4}, expires ${quote.card.expMonth}/${quote.card.expYear}`
-    : 'No card on file';
+  const cardLine = paymentMethodLabel(quote.card);
   const row = (label: string, value: string, strong = false) => `
     <tr>
       <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">${label}</td>

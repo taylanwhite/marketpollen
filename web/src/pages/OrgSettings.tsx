@@ -13,6 +13,7 @@ import {
   Settings as SettingsIcon, Add as AddIcon, Edit as EditIcon,
   Delete as DeleteIcon, Save as SaveIcon,
 } from '@mui/icons-material';
+import { paymentMethodDetail, paymentMethodTitle, type PaymentMethodSummary } from '../utils/paymentMethod';
 
 interface BillingInvoice {
   id: string;
@@ -50,7 +51,7 @@ interface BillingInfo {
     state: string;
     postalCode: string;
     country: string;
-    card: { brand: string; last4: string; expMonth: number; expYear: number } | null;
+    card: PaymentMethodSummary | null;
   };
 }
 
@@ -443,7 +444,7 @@ export function OrgSettings() {
             <Typography variant="h6" sx={{ fontWeight: 600, mb: 1 }}>Card</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               {orgData.billing?.profile.card
-                ? `${orgData.billing.profile.card.brand.toUpperCase()} ending in ${orgData.billing.profile.card.last4}, expires ${orgData.billing.profile.card.expMonth}/${orgData.billing.profile.card.expYear}`
+                ? [paymentMethodTitle(orgData.billing.profile.card), paymentMethodDetail(orgData.billing.profile.card)].filter(Boolean).join(', ')
                 : 'No card on file.'}
             </Typography>
             <Button

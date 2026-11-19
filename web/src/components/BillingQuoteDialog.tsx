@@ -8,6 +8,7 @@ import {
   Divider,
   Typography,
 } from '@mui/material';
+import { paymentMethodDetail, paymentMethodTitle, type PaymentMethodSummary } from '../utils/paymentMethod';
 
 export interface BillingQuote {
   intent: 'add_store' | 'resume_store' | 'pause_store' | 'keep_open' | 'delete_store' | 'archive_store';
@@ -22,7 +23,7 @@ export interface BillingQuote {
   unitCents?: number;
   feeCents?: number;
   orgName?: string;
-  card?: { brand: string; last4: string; expMonth: number; expYear: number } | null;
+  card?: PaymentMethodSummary | null;
 }
 
 const TITLES: Record<BillingQuote['intent'], string> = {
@@ -36,19 +37,6 @@ const TITLES: Record<BillingQuote['intent'], string> = {
 
 function money(cents: number): string {
   return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
-}
-
-function brandName(brand: string): string {
-  const names: Record<string, string> = {
-    visa: 'Visa',
-    mastercard: 'Mastercard',
-    amex: 'American Express',
-    discover: 'Discover',
-    diners: 'Diners Club',
-    jcb: 'JCB',
-    unionpay: 'UnionPay',
-  };
-  return names[brand] || brand.replace(/^\w/, (letter) => letter.toUpperCase());
 }
 
 function formatDate(value?: string | null): string | null {
@@ -177,11 +165,13 @@ function AddStoreInvoice({ quote }: { quote: BillingQuote }) {
           Charged to
         </Typography>
         {quote.card ? (
-          <Typography sx={{ mt: 0.5, fontWeight: 600 }}>
-            {brandName(quote.card.brand)} ending in {quote.card.last4}
-            <Typography component="span" variant="body2" color="text.secondary">
-              {` · expires ${quote.card.expMonth}/${quote.card.expYear}`}
-            </Typography>
+          <Typography sx={{ mt: 0.5, fontWeight: 600, overflowWrap: 'anywhere' }}>
+            {paymentMethodTitle(quote.card)}
+            {paymentMethodDetail(quote.card) && (
+              <Typography component="span" variant="body2" color="text.secondary">
+                {` · ${paymentMethodDetail(quote.card)}`}
+              </Typography>
+            )}
           </Typography>
         ) : (
           <Typography sx={{ mt: 0.5 }} color="text.secondary">
