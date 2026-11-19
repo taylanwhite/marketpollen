@@ -12,6 +12,8 @@ export interface User {
 export interface StorePermission {
   storeId: string;
   canEdit: boolean; // false = view only, true = full access (view + edit)
+  /** Store manager: edits, and plans and assigns stops for everyone in the store. */
+  managesPlans?: boolean;
 }
 
 export interface UserInvite {

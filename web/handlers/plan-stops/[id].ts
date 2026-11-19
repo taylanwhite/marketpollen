@@ -11,7 +11,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const id = (req.query?.id as string)?.trim();
   if (!id) return res.status(400).json({ error: 'Stop id required' });
 
-  // The person whose plan it is can change it, and so can organization admins.
+  // The person whose plan it is can change it, and so can organization admins and store managers.
   const stop = await prisma.planStop.findUnique({ where: { id } });
   if (!stop) return res.status(404).json({ error: 'Stop not found' });
   if (stop.user_id !== uid && !(await canSeeTeamPlans(uid, stop.store_id))) return res.status(404).json({ error: 'Stop not found' });

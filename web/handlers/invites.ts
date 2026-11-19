@@ -5,12 +5,13 @@ import { rejectIfStoreLocked } from './lib/store-access.js';
 import { adminOrgIds } from './lib/org-access.js';
 import { isKingAdminEmail } from './lib/king-admin-email.js';
 
-function toInviteJson(r: { id: string; email: string; store_id: string; can_edit: boolean; invited_by: string; invited_at: Date; status: string; is_global_admin: boolean }) {
+function toInviteJson(r: { id: string; email: string; store_id: string; can_edit: boolean; can_manage_plans: boolean; invited_by: string; invited_at: Date; status: string; is_global_admin: boolean }) {
   return {
     id: r.id,
     email: r.email,
     storeId: r.store_id,
     canEdit: r.can_edit,
+    managesPlans: r.can_edit && r.can_manage_plans,
     invitedBy: r.invited_by,
     invitedAt: r.invited_at,
     status: r.status,
@@ -51,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'POST') {
-    const body = req.body as { email: string; storeId: string; canEdit?: boolean };
+    const body = req.body as { email: string; storeId: string; canEdit?: boolean; managesPlans?: boolean };
     if (!body?.email || !body?.storeId) return res.status(400).json({ error: 'email and storeId required' });
     if (managedStoreIds && !managedStoreIds.includes(body.storeId)) {
       return res.status(404).json({ error: 'Store not found' });
@@ -59,6 +60,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (await rejectIfStoreLocked(res, body.storeId, uid)) return;
 
     const email = body.email.trim().toLowerCase();
+    const canEdit = body.canEdit === true;
+    // A store manager also edits; managing plans without edit isn't a level.
+    const managesPlans = canEdit && body.managesPlans === true;
     const existingUser = await prisma.user.findFirst({
       where: { email: { equals: email, mode: 'insensitive' } },
       select: { id: true },
@@ -66,15 +70,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (existingUser) {
       await prisma.storePermission.upsert({
         where: { user_id_store_id: { user_id: existingUser.id, store_id: body.storeId } },
-        create: { user_id: existingUser.id, store_id: body.storeId, can_edit: body.canEdit === true },
-        update: { can_edit: body.canEdit === true },
+        create: { user_id: existingUser.id, store_id: body.storeId, can_edit: canEdit, can_manage_plans: managesPlans },
+        update: { can_edit: canEdit, can_manage_plans: managesPlans },
       });
     }
     const row = await prisma.invite.create({
       data: {
         email,
         store_id: body.storeId,
-        can_edit: body.canEdit === true,
+        can_edit: canEdit,
+        can_manage_plans: managesPlans,
         invited_by: uid,
         status: existingUser ? 'accepted' : 'pending',
         is_global_admin: false,

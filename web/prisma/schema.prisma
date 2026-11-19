@@ -167,6 +167,9 @@ model StorePermission {
   user_id   String
   store_id  String   @db.Uuid
   can_edit  Boolean  @default(false)
+  /// Store manager: can see, add to and assign everyone's plans in this
+  /// store without being an organization admin. Only set with can_edit.
+  can_manage_plans Boolean @default(false)
 
   user  User  @relation(fields: [user_id], references: [id], onDelete: Cascade)
   store Store @relation(fields: [store_id], references: [id], onDelete: Cascade)
@@ -401,6 +404,7 @@ model Invite {
   email           String
   store_id        String   @db.Uuid
   can_edit        Boolean  @default(false)
+  can_manage_plans Boolean @default(false)
   invited_by      String
   invited_at      DateTime @default(now())
   status          String   @default("pending")

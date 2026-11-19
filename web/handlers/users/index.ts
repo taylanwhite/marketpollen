@@ -14,7 +14,7 @@ function toUserJson(
     is_global_admin: boolean;
     terms_accepted_version: string | null;
     terms_accepted_at: Date | null;
-    store_permissions: Array<{ store_id: string; can_edit: boolean }>;
+    store_permissions: Array<{ store_id: string; can_edit: boolean; can_manage_plans: boolean }>;
     organization_memberships: Array<{ org_id: string; is_admin: boolean; org: { name: string } }>;
   },
   scope: { storeIds: Set<string> | null; orgIds: Set<string> | null },
@@ -22,7 +22,11 @@ function toUserJson(
 ) {
   const storePermissions = user.store_permissions
     .filter((permission) => !scope.storeIds || scope.storeIds.has(permission.store_id))
-    .map((permission) => ({ storeId: permission.store_id, canEdit: permission.can_edit }));
+    .map((permission) => ({
+      storeId: permission.store_id,
+      canEdit: permission.can_edit,
+      managesPlans: permission.can_edit && permission.can_manage_plans,
+    }));
   const orgMemberships = user.organization_memberships
     .filter((membership) => !scope.orgIds || scope.orgIds.has(membership.org_id))
     .map((membership) => ({
@@ -72,7 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
       orderBy: { email: 'asc' },
       include: {
-        store_permissions: { select: { store_id: true, can_edit: true } },
+        store_permissions: { select: { store_id: true, can_edit: true, can_manage_plans: true } },
         organization_memberships: {
           select: { org_id: true, is_admin: true, org: { select: { name: true } } },
         },

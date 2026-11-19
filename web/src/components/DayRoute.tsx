@@ -49,8 +49,8 @@ interface PlanResponse {
 /**
  * One person's saved stops for one day. The owner can add stops from the
  * opportunity list or businesses, reorder them, mark them done, move them to
- * another day, or sort them by distance. Organization admins can open a
- * teammate's plan and assign or rearrange stops on it.
+ * another day, or sort them by distance. Organization admins and store
+ * managers can open a teammate's plan and assign or rearrange stops on it.
  */
 export function DayRoute({
   storeId,
@@ -378,7 +378,7 @@ function AddStopsDialog({
   storeId: string;
   date: string;
   planned: PlanStop[];
-  /** A teammate's plan, when an admin is assigning stops. */
+  /** A teammate's plan, when an admin or manager is assigning stops. */
   userId?: string;
   onClose: () => void;
   onAdded: (stop: PlanStop) => void;

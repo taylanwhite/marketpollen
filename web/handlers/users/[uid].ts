@@ -30,7 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       isGlobalAdmin?: boolean;
       orgId?: string;
       scopedStoreIds?: string[];
-      storePermissions?: { storeId: string; canEdit: boolean }[];
+      storePermissions?: { storeId: string; canEdit: boolean; managesPlans?: boolean }[];
     };
     if (orgIds !== 'all') {
       if (!body.orgId || !orgIds.includes(body.orgId)) {
@@ -90,10 +90,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       for (const p of body.storePermissions) {
         if (!p.storeId) continue;
+        const canEdit = p.canEdit === true;
+        const managesPlans = canEdit && p.managesPlans === true;
         await prisma.storePermission.upsert({
           where: { user_id_store_id: { user_id: targetUid, store_id: p.storeId } },
-          create: { user_id: targetUid, store_id: p.storeId, can_edit: p.canEdit === true },
-          update: { can_edit: p.canEdit === true },
+          create: { user_id: targetUid, store_id: p.storeId, can_edit: canEdit, can_manage_plans: managesPlans },
+          update: { can_edit: canEdit, can_manage_plans: managesPlans },
         });
       }
     }
@@ -104,7 +106,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!user) return res.status(404).json({ error: 'User not found' });
     const perms = await prisma.storePermission.findMany({
       where: { user_id: targetUid },
-      select: { store_id: true, can_edit: true },
+      select: { store_id: true, can_edit: true, can_manage_plans: true },
     });
     return res.status(200).json({
       uid: user.id,
@@ -112,7 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       displayName: user.display_name ?? undefined,
       createdAt: user.created_at,
       isGlobalAdmin: user.is_global_admin || isKingAdminEmail(user.email),
-      storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit })),
+      storePermissions: perms.map((p) => ({ storeId: p.store_id, canEdit: p.can_edit, managesPlans: p.can_edit && p.can_manage_plans })),
     });
   }
 

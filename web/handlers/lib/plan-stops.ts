@@ -132,8 +132,17 @@ export async function userNames(ids: Array<string | null | undefined>): Promise<
   return new Map(users.map((user) => [user.id, user.display_name || user.email]));
 }
 
-/** Organization admins supervise everyone's plans in their stores. Everyone else sees only their own. */
+/**
+ * Organization admins supervise everyone's plans in their stores, and a
+ * store's managers (edit access plus "Manager") do the same for that store.
+ * Everyone else sees only their own.
+ */
 export async function canSeeTeamPlans(uid: string, storeId: string): Promise<boolean> {
+  const manager = await prisma.storePermission.findUnique({
+    where: { user_id_store_id: { user_id: uid, store_id: storeId } },
+    select: { can_edit: true, can_manage_plans: true },
+  });
+  if (manager?.can_edit && manager.can_manage_plans) return true;
   const store = await prisma.store.findUnique({ where: { id: storeId }, select: { organization_id: true } });
   return !!store?.organization_id && await isOrgAdmin(uid, store.organization_id);
 }
@@ -150,8 +159,8 @@ export async function planPeople(storeId: string): Promise<Array<{ id: string; n
 }
 
 /**
- * Whose plan a change goes to. Your own by default. An organization admin may
- * name a teammate who has access to the store. Returns null when not allowed.
+ * Whose plan a change goes to. Your own by default. An organization admin or
+ * store manager may name a teammate who has access to the store. Returns null when not allowed.
  */
 export async function planOwnerFor(uid: string, storeId: string, requestedUserId?: string | null): Promise<string | null> {
   const target = (requestedUserId || '').trim();

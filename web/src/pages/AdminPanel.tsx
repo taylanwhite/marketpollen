@@ -41,10 +41,49 @@ import {
   EditNote as EditNoteIcon,
   Cancel as CancelIcon,
   Email as EmailIcon,
+  SupervisorAccount as ManagerIcon,
 } from '@mui/icons-material';
 
-// Simplified permission type for UI state
-type AccessLevel = 'none' | 'view' | 'full';
+// Simplified permission type for UI state. 'manager' is edit plus planning
+// and assigning stops for everyone in the store.
+type AccessLevel = 'none' | 'view' | 'full' | 'manager';
+
+function permissionFor(storeId: string, level: AccessLevel): StorePermission {
+  return { storeId, canEdit: level === 'full' || level === 'manager', managesPlans: level === 'manager' };
+}
+
+const ACCESS_OPTIONS: Array<{ value: AccessLevel; label: string; Icon: typeof ViewIcon }> = [
+  { value: 'none', label: 'None', Icon: BlockIcon },
+  { value: 'view', label: 'View', Icon: ViewIcon },
+  { value: 'full', label: 'Edit', Icon: EditNoteIcon },
+  { value: 'manager', label: 'Manager', Icon: ManagerIcon },
+];
+
+const MANAGER_HELP = 'Manager: can edit, and can plan and assign stops for everyone in that store. They can\'t change billing, settings or who has access.';
+
+/** None / View / Edit / Manager for one store. Icons hide on phones so the four fit. */
+function AccessToggle({ value, onChange }: { value: AccessLevel; onChange: (level: AccessLevel) => void }) {
+  return (
+    <ToggleButtonGroup
+      value={value}
+      exclusive
+      onChange={(_, next: AccessLevel | null) => { if (next !== null) onChange(next); }}
+      size="small"
+      fullWidth
+    >
+      {ACCESS_OPTIONS.map(({ value: option, label, Icon }) => (
+        <ToggleButton
+          key={option}
+          value={option}
+          sx={{ flex: 1, minHeight: 40, px: { xs: 0.5, sm: 1 }, fontSize: { xs: '0.75rem', sm: '0.8125rem' }, textTransform: 'none' }}
+        >
+          <Icon sx={{ display: { xs: 'none', sm: 'inline-block' }, mr: 0.5, fontSize: 18 }} />
+          {label}
+        </ToggleButton>
+      ))}
+    </ToggleButtonGroup>
+  );
+}
 
 interface UserWithPermissions extends User {
   email: string;
@@ -198,7 +237,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   };
 
   const loadPendingInvites = async () => {
-    const rows = await api.get<Array<{ id: string; email: string; storeId: string; canEdit: boolean; invitedBy: string; invitedAt: string | Date; status: string; isGlobalAdmin: boolean }>>('/invites');
+    const rows = await api.get<Array<{ id: string; email: string; storeId: string; canEdit: boolean; managesPlans?: boolean; invitedBy: string; invitedAt: string | Date; status: string; isGlobalAdmin: boolean }>>('/invites');
     const pending = rows.filter((r) => r.status === 'pending');
     const byEmail = new Map<string, { inviteIds: string[]; email: string; isGlobalAdmin: boolean; storePermissions: StorePermission[]; invitedBy: string; invitedAt: Date }>();
     for (const r of pending) {
@@ -209,13 +248,13 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
           inviteIds: [r.id],
           email: r.email,
           isGlobalAdmin: r.isGlobalAdmin,
-          storePermissions: [{ storeId: r.storeId, canEdit: r.canEdit }],
+          storePermissions: [{ storeId: r.storeId, canEdit: r.canEdit, managesPlans: r.managesPlans }],
           invitedBy: r.invitedBy,
           invitedAt,
         });
       } else {
         existing.inviteIds.push(r.id);
-        existing.storePermissions.push({ storeId: r.storeId, canEdit: r.canEdit });
+        existing.storePermissions.push({ storeId: r.storeId, canEdit: r.canEdit, managesPlans: r.managesPlans });
       }
     }
     const inviteList: PendingInvite[] = Array.from(byEmail.entries()).map(([email, data]) => ({
@@ -279,7 +318,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
       const permissions: StorePermission[] = [];
       orgStores.forEach((store) => {
         const level = inviteAccessLevels.get(store.id) || 'none';
-        if (level !== 'none') permissions.push({ storeId: store.id, canEdit: level === 'full' });
+        if (level !== 'none') permissions.push(permissionFor(store.id, level));
       });
 
       if (!inviteOrgId) {
@@ -298,6 +337,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
           email,
           storeId: p.storeId,
           canEdit: p.canEdit,
+          managesPlans: p.managesPlans === true,
         });
       }
       const invitingAdmin = inviteAsOrgAdmin && canGrantOrgAdmin(inviteOrgId);
@@ -382,6 +422,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
 
   const getAccessLevel = (perm: StorePermission | undefined): AccessLevel => {
     if (!perm) return 'none';
+    if (perm.canEdit && perm.managesPlans) return 'manager';
     return perm.canEdit ? 'full' : 'view';
   };
 
@@ -451,10 +492,7 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
       const scopedIds = new Set(storesForEditOrg().map((store) => store.id));
       editAccessLevels.forEach((level, storeId) => {
         if (level !== 'none' && scopedIds.has(storeId)) {
-          permissions.push({
-            storeId,
-            canEdit: level === 'full'
-          });
+          permissions.push(permissionFor(storeId, level));
         }
       });
 
@@ -511,28 +549,42 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
     } else {
       storeSummary = `${accessCount} store${accessCount === 1 ? '' : 's'} (${editCount} edit)`;
     }
-    return orgLabel ? `${orgLabel}. ${storeSummary}` : storeSummary;
+    const managerLabel = managerSummary(user.storePermissions);
+    return [orgLabel, storeSummary, managerLabel].filter(Boolean).join('. ');
+  };
+
+  /** "Manager of Clinton, Ames" for the stores where they plan for the team. */
+  const managerSummary = (perms: StorePermission[]): string => {
+    const names = stores
+      .filter((store) => perms.some((perm) => perm.storeId === store.id && perm.canEdit && perm.managesPlans))
+      .map((store) => store.name);
+    return names.length ? `Manager of ${names.join(', ')}` : '';
   };
 
 
-  const getInviteAccessSummary = (invite: PendingInvite): string => {
-    if (invite.isGlobalAdmin) return 'Global Admin (Pending)';
+  const inviteStoreSummary = (invite: PendingInvite): string => {
+    if (invite.isGlobalAdmin) return 'Global Admin';
     
     const accessCount = invite.storePermissions.length;
     const fullAccessCount = invite.storePermissions.filter(p => p.canEdit).length;
     
-    if (accessCount === 0) return 'No access (Pending)';
+    if (accessCount === 0) return 'No access';
     if (accessCount === stores.length && fullAccessCount === stores.length) {
-      return 'All stores - full access (Pending)';
+      return 'All stores - full access';
     }
     if (accessCount === stores.length && fullAccessCount === 0) {
-      return 'All stores - view only (Pending)';
+      return 'All stores - view only';
     }
     if (accessCount === stores.length) {
-      return `All stores (${fullAccessCount} with edit) (Pending)`;
+      return `All stores (${fullAccessCount} with edit)`;
     }
     
-    return `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} with edit) (Pending)`;
+    return `${accessCount} store${accessCount !== 1 ? 's' : ''} (${fullAccessCount} with edit)`;
+  };
+
+  const getInviteAccessSummary = (invite: PendingInvite): string => {
+    const managerLabel = invite.isGlobalAdmin ? '' : managerSummary(invite.storePermissions);
+    return `${[inviteStoreSummary(invite), managerLabel].filter(Boolean).join('. ')} (Pending)`;
   };
 
 
@@ -612,6 +664,10 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                         )}
                         {!user.isGlobalAdmin && user.orgMemberships?.some((item) => item.isAdmin) && (
                           <Chip label="Org admin" size="small" variant="outlined" />
+                        )}
+                        {!user.isGlobalAdmin && !user.orgMemberships?.some((item) => item.isAdmin)
+                          && user.storePermissions.some((perm) => perm.canEdit && perm.managesPlans) && (
+                          <Chip label="Manager" size="small" variant="outlined" icon={<ManagerIcon />} />
                         )}
                       </Box>
                     }
@@ -773,6 +829,12 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
               )}
             </Box>
 
+            {storesInOrg(inviteOrgId).length > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+                {MANAGER_HELP}
+              </Typography>
+            )}
+
             {storesInOrg(inviteOrgId).length === 0 ? (
               <Typography variant="body2" color="text.secondary">
                 No stores yet. An organization admin can create the first one.
@@ -784,31 +846,16 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                   <Typography variant="body2" sx={{ fontWeight: 500, mb: 0.5 }}>
                     {store.name}
                   </Typography>
-                  <ToggleButtonGroup
+                  <AccessToggle
                     value={level}
-                    exclusive
-                    onChange={(_, v) => {
-                      if (v !== null) {
-                        setInviteAccessLevels(prev => {
-                          const next = new Map(prev);
-                          next.set(store.id, v);
-                          return next;
-                        });
-                      }
+                    onChange={(v) => {
+                      setInviteAccessLevels(prev => {
+                        const next = new Map(prev);
+                        next.set(store.id, v);
+                        return next;
+                      });
                     }}
-                    size="small"
-                    fullWidth
-                  >
-                    <ToggleButton value="none" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
-                      <BlockIcon sx={{ fontSize: 14, mr: 0.5 }} /> None
-                    </ToggleButton>
-                    <ToggleButton value="view" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
-                      <ViewIcon sx={{ fontSize: 14, mr: 0.5 }} /> View
-                    </ToggleButton>
-                    <ToggleButton value="full" sx={{ flex: 1, py: 0.5, fontSize: '0.75rem' }}>
-                      <EditNoteIcon sx={{ fontSize: 14, mr: 0.5 }} /> Edit
-                    </ToggleButton>
-                  </ToggleButtonGroup>
+                  />
                 </Box>
               );
             })}
@@ -917,8 +964,11 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                     </Button>
                   </Box>
 
-                  <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+                  <Typography variant="subtitle2" sx={{ mb: 0.5, fontWeight: 600 }}>
                     Store access{orgChoices.find((org) => org.id === editOrgId) ? ` in ${orgChoices.find((org) => org.id === editOrgId)?.name}` : ''}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+                    {MANAGER_HELP}
                   </Typography>
 
                   <List sx={{ bgcolor: 'grey.50', borderRadius: 1 }}>
@@ -931,30 +981,10 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
                             <Typography variant="body1" sx={{ fontWeight: 500, mb: 1 }}>
                               {store.name}
                             </Typography>
-                            <ToggleButtonGroup
+                            <AccessToggle
                               value={level}
-                              exclusive
-                              onChange={(_, newLevel) => {
-                                if (newLevel !== null) {
-                                  handleAccessLevelChange(store.id, newLevel);
-                                }
-                              }}
-                              size="small"
-                              fullWidth
-                            >
-                              <ToggleButton value="none" sx={{ flex: 1 }}>
-                                <BlockIcon sx={{ mr: 0.5, fontSize: 18 }} />
-                                None
-                              </ToggleButton>
-                              <ToggleButton value="view" sx={{ flex: 1 }}>
-                                <ViewIcon sx={{ mr: 0.5, fontSize: 18 }} />
-                                View
-                              </ToggleButton>
-                              <ToggleButton value="full" sx={{ flex: 1 }}>
-                                <EditNoteIcon sx={{ mr: 0.5, fontSize: 18 }} />
-                                Edit
-                              </ToggleButton>
-                            </ToggleButtonGroup>
+                              onChange={(newLevel) => handleAccessLevelChange(store.id, newLevel)}
+                            />
                           </ListItem>
                         </React.Fragment>
                       );

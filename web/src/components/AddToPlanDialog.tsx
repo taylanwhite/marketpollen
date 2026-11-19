@@ -18,7 +18,7 @@ type Person = { id: string; name: string };
 
 /**
  * Pick a day and put one opportunity or business on a plan for it. Organization
- * admins can also pick whose plan, to assign the visit to a marketer.
+ * admins and store managers can also pick whose plan, to assign the visit to a marketer.
  */
 export function AddToPlanDialog({
   open,
@@ -47,7 +47,7 @@ export function AddToPlanDialog({
     setAdded(null);
   }, [open]);
 
-  // Only admins get a list back; everyone else plans for themselves.
+  // Only admins and managers get a list back; everyone else plans for themselves.
   useEffect(() => {
     if (!open || !storeId) return;
     let cancelled = false;

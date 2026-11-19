@@ -969,7 +969,7 @@ export function Calendar() {
               date={planDate}
               storeName={dayPlan.storeName}
               storeAddress={dayPlan.storeAddress}
-              // Org admins can assign stops to teammates; the server decides what they may change.
+              // Org admins and store managers can assign stops to teammates; the server decides what they may change.
               canEdit={canEdit() || isOrgAdminFn()}
               refreshKey={routeRefresh}
               onCountChange={setRouteCount}

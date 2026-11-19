@@ -19,7 +19,7 @@ export interface PlanStop {
   zipCode: string | null;
   status: 'planned' | 'done' | 'skipped';
   overlaps: PlanOverlap[];
-  /** Set when an admin put this stop on someone else's plan. */
+  /** Set when an admin or manager put this stop on someone else's plan. */
   assignedBy?: string | null;
   assignedByName?: string | null;
 }

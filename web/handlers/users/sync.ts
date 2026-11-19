@@ -65,14 +65,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Brand new user — check for pending invites
   const invites = await prisma.invite.findMany({
     where: { email: email.toLowerCase(), status: 'pending' },
-    select: { id: true, store_id: true, can_edit: true, is_global_admin: true },
+    select: { id: true, store_id: true, can_edit: true, can_manage_plans: true, is_global_admin: true },
   });
 
   let isGlobalAdmin = false;
-  const permissions: { storeId: string; canEdit: boolean }[] = [];
+  const permissions: { storeId: string; canEdit: boolean; managesPlans: boolean }[] = [];
   for (const inv of invites) {
     if (inv.is_global_admin) isGlobalAdmin = true;
-    else permissions.push({ storeId: inv.store_id, canEdit: inv.can_edit });
+    else permissions.push({ storeId: inv.store_id, canEdit: inv.can_edit, managesPlans: inv.can_edit && inv.can_manage_plans });
   }
 
   await prisma.user.create({
@@ -87,8 +87,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   for (const p of permissions) {
     await prisma.storePermission.upsert({
       where: { user_id_store_id: { user_id: uid, store_id: p.storeId } },
-      create: { user_id: uid, store_id: p.storeId, can_edit: p.canEdit },
-      update: { can_edit: p.canEdit },
+      create: { user_id: uid, store_id: p.storeId, can_edit: p.canEdit, can_manage_plans: p.managesPlans },
+      update: { can_edit: p.canEdit, can_manage_plans: p.managesPlans },
     });
   }
 
@@ -111,8 +111,8 @@ async function acceptStoreInvites(userId: string, email: string) {
   for (const invite of invites) {
     await prisma.storePermission.upsert({
       where: { user_id_store_id: { user_id: userId, store_id: invite.store_id } },
-      create: { user_id: userId, store_id: invite.store_id, can_edit: invite.can_edit },
-      update: { can_edit: invite.can_edit },
+      create: { user_id: userId, store_id: invite.store_id, can_edit: invite.can_edit, can_manage_plans: invite.can_edit && invite.can_manage_plans },
+      update: { can_edit: invite.can_edit, can_manage_plans: invite.can_edit && invite.can_manage_plans },
     });
     await prisma.invite.update({
       where: { id: invite.id },

@@ -28,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     businessId?: string;
     orderedIds?: string[];
     optimize?: boolean;
-    /** Whose plan to change. Organization admins can name a teammate. */
+    /** Whose plan to change. Organization admins and store managers can name a teammate. */
     userId?: string;
   };
   const storeId = ((req.query?.storeId as string) || body.storeId || '').trim();
@@ -64,14 +64,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const stops = await loadPlan(storeId, viewingUserId, date);
 
     const people = teamView ? await planPeople(storeId) : [];
-    // Admins can change a teammate's plan, so they can assign and rearrange stops.
+    // Admins and managers can change a teammate's plan, so they can assign and rearrange stops.
     const editable = viewingUserId === uid ? await canAccessStore(uid, storeId) : teamView;
     return res.status(200).json({ stops, viewingUserId, editable, people });
   }
 
-  // Changes go to your own plan, or a teammate's when an admin assigns work.
+  // Changes go to your own plan, or a teammate's when an admin or manager assigns work.
   const owner = await planOwnerFor(uid, storeId, body.userId);
-  if (!owner) return res.status(403).json({ error: 'Only organization admins can plan stops for someone else' });
+  if (!owner) return res.status(403).json({ error: 'Only store managers and organization admins can plan stops for someone else' });
   if (owner === uid && !(await canAccessStore(uid, storeId))) return res.status(404).json({ error: 'Store not found' });
   if (await rejectIfStoreLocked(res, storeId, uid)) return;
   const date = parseDateKey(body.date);
