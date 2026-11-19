@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from '../lib/db.js';
 import { getAuthUid } from '../lib/auth.js';
 import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-access.js';
+import { FOLLOW_UP_EVENT_TYPES, markLatestVisitFollowedUp } from '../lib/follow-up-sync.js';
 
 function toEventJson(r: { id: string; store_id: string; title: string; description: string | null; date: Date; start_time: string | null; end_time: string | null; type: string; contact_id: string | null; business_id: string | null; priority: string | null; status: string | null; created_by: string; created_at: Date; completed_at: Date | null }) {
   return {
@@ -74,6 +75,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...(completedAt !== undefined && { completed_at: completedAt }),
       },
     });
+    // Completing a follow-up marks the contact's latest visit with bites as
+    // followed up, so the Bites tab stops saying "Needs follow-up".
+    if (body.status === 'completed' && event.status !== 'completed' && updated.contact_id && FOLLOW_UP_EVENT_TYPES.includes(updated.type)) {
+      await markLatestVisitFollowedUp(updated.contact_id);
+    }
     return res.status(200).json(toEventJson(updated));
   }
 

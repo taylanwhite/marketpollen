@@ -693,8 +693,10 @@ export function Calendar() {
           completedAt: new Date(),
         }, { label: `Complete follow-up · ${task.contactName}` });
       }
-      // Clear the contact's suggested follow-up
+      // Clear the contact's suggested follow-up; followUpDone also marks the
+      // latest visit as followed up so the Bites tab agrees.
       await api.queuePatch(`/contacts/${task.contactId}`, {
+        followUpDone: true,
         suggestedFollowUpDate: null,
         suggestedFollowUpMethod: null,
         suggestedFollowUpNote: null,

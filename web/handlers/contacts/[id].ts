@@ -5,6 +5,7 @@ import { canAccessStore, canViewStore, rejectIfStoreLocked } from '../lib/store-
 import { contactInclude, contactToJson } from '../lib/contact-json.js';
 import { anyBusinessInStore, syncContactBusinesses } from '../lib/contact-businesses.js';
 import { contactProfileData } from '../lib/contact-profile.js';
+import { completeOpenFollowUps, latestVisitWithBites, markLatestVisitFollowedUp } from '../lib/follow-up-sync.js';
 import {
   MAX_CADENCES_PER_CONTACT,
   MAX_CADENCE_NOTE,
@@ -59,6 +60,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       followUpAssignee?: string | null;
       businessId?: string;
       businessIds?: string[];
+      /** A follow-up with this contact was completed on the Plan tab. */
+      followUpDone?: boolean;
       reachouts?: Array<{ date: string | Date; note: string; rawNotes?: string | null; createdBy?: string; type?: string; donation?: { freeBundletCard?: number; dozenBundtinis?: number; cake8inch?: number; cake10inch?: number; sampleTray?: number; bundtletTower?: number; customItems?: Record<string, number>; cakesDonatedNotes?: string; orderedFromUs?: boolean; followedUp?: boolean; noFollowUp?: boolean } }>;
     };
 
@@ -147,12 +150,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await syncContactBusinesses(id, contact.store_id, linkedBusinesses);
     }
 
+    if (body.followUpDone === true) {
+      // Keeps the Bites tab in step: its "Needs follow-up" is a flag on the latest visit.
+      await markLatestVisitFollowedUp(id);
+    }
+
     if (Array.isArray(body.reachouts)) {
-      const existing = await prisma.reachout.findMany({
-        where: { contact_id: id },
-        select: { no_follow_up: true },
-      });
+      const existing = await prisma.reachout.findMany({ where: { contact_id: id } });
       const previousNoFollowUp = existing.filter((r) => r.no_follow_up).length;
+      const wasFollowedUp = latestVisitWithBites(existing)?.followed_up === true;
       const isNewReachout = body.reachouts.length > existing.length;
 
       await prisma.reachout.deleteMany({ where: { contact_id: id } });
@@ -182,6 +188,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           },
         });
       }
+
+      // "Followed up" ticked on the latest visit with bites: the Plan tab's
+      // open follow-up with this contact is done too.
+      const nowFollowedUp = latestVisitWithBites(await prisma.reachout.findMany({ where: { contact_id: id } }))?.followed_up === true;
+      if (nowFollowedUp && !wasFollowedUp) await completeOpenFollowUps(id);
 
       const nextNoFollowUp = body.reachouts.filter((r) => r.donation?.noFollowUp === true).length;
       if (nextNoFollowUp > previousNoFollowUp) {
