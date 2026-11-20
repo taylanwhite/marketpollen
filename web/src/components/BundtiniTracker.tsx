@@ -5,11 +5,12 @@ import { useDonation } from '../contexts/DonationContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { useCampaign } from '../contexts/CampaignContext';
 import { useAnimatedCount } from '../hooks/useAnimatedCount';
-import { Contact } from '../types';
+import { Contact, Reachout } from '../types';
 import {
   getQuarterProgress,
   getProgressColor,
   getCurrentQuarterLabel,
+  getQuarterDateRange,
 } from '../utils/donationCalculations';
 import {
   Box,
@@ -70,20 +71,23 @@ export function BundtiniTracker({ compact = false }: { compact?: boolean }) {
 
     (async () => {
       try {
-        const contactsList = await api.get<Contact[]>(`/contacts?storeId=${permissions.currentStoreId}`);
+        // Just this quarter's visits with bites, not every contact: the
+        // full contact list is large and this runs on every page. The
+        // quarter dates are this browser's, as before, and the total is
+        // added up with the same math as the Reports page.
+        const now = new Date();
+        const { start, end } = getQuarterDateRange(now);
+        const { reachouts } = await api.get<{ reachouts: Array<Pick<Reachout, 'id' | 'donation'> & { date: string }> }>(
+          `/store-progress?storeId=${permissions.currentStoreId}&from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(end.toISOString())}`,
+        );
         if (cancelled) return;
-        const contacts = contactsList.map((c) => ({
-          ...c,
-          reachouts: (c.reachouts || []).map((r: any) => ({
-            ...r,
-            date: r.date instanceof Date ? r.date : new Date(r.date),
-          })),
-          createdAt: c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt),
-        }));
+        const quarterContact = {
+          reachouts: reachouts.map((r) => ({ ...r, date: new Date(r.date) })),
+        } as unknown as Contact;
 
         const progressData = getQuarterProgress(
-          contacts,
-          new Date(),
+          [quarterContact],
+          now,
           products,
           storeGoal
         );

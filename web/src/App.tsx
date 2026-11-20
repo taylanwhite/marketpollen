@@ -1,4 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
 import { ClerkProvider, Show } from '@clerk/react';
 import { AuthProvider } from './contexts/AuthContext';
 import { PermissionProvider } from './contexts/PermissionContext';
@@ -9,24 +10,30 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { Login } from './pages/Login';
 import { Signup } from './pages/Signup';
 import { Dashboard } from './pages/Dashboard';
-import { Businesses } from './pages/Businesses';
-import { Opportunities } from './pages/Opportunities';
-import { Donations } from './pages/Donations';
-import { Calendar } from './pages/Calendar';
-import { Stores } from './pages/Stores';
-import { AdminPanel } from './pages/AdminPanel';
-import { OrgSettings } from './pages/OrgSettings';
-import { Platform } from './pages/Platform';
 import { StorePicker } from './pages/StorePicker';
+import {
+  Businesses,
+  Opportunities,
+  Donations,
+  Calendar,
+  Stores,
+  AdminPanel,
+  OrgSettings,
+  Platform,
+  Reports,
+  LegalPage,
+  prefetchPages,
+} from './pages/lazyPages';
+import { PageLoader } from './components/PageLoader';
 import { NoAccess } from './pages/NoAccess';
-import { Reports } from './pages/Reports';
-import { LegalPage } from './pages/Legal';
 import { TermsGate } from './components/legal/TermsGate';
 import './App.css';
 
 const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
 function AppRoutes() {
+  useEffect(() => { prefetchPages(); }, []);
+
   return (
     <AuthProvider>
       <PermissionProvider>
@@ -35,8 +42,8 @@ function AppRoutes() {
         <DonationProvider>
           <TermsGate>
           <Routes>
-            <Route path="/terms" element={<LegalPage doc="terms" />} />
-            <Route path="/privacy" element={<LegalPage doc="privacy" />} />
+            <Route path="/terms" element={<PageLoader><LegalPage doc="terms" /></PageLoader>} />
+            <Route path="/privacy" element={<PageLoader><LegalPage doc="privacy" /></PageLoader>} />
             <Route path="/login/*" element={<Login />} />
             <Route path="/signup/*" element={<Signup />} />
             <Route path="/no-access" element={

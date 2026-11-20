@@ -3,6 +3,7 @@ import { useAuth as useClerkAuth } from '@clerk/react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionContext';
 import { MainLayout } from './MainLayout';
+import { PageLoader } from './PageLoader';
 import { Box, keyframes } from '@mui/material';
 
 const pulse = keyframes`
@@ -92,5 +93,6 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     return <Navigate to="/select-store" replace />;
   }
 
-  return <MainLayout>{children}</MainLayout>;
+  // PageLoader sits inside the layout so the header and tabs stay put while a page's code loads.
+  return <MainLayout><PageLoader>{children}</PageLoader></MainLayout>;
 }

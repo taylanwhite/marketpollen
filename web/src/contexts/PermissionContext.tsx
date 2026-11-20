@@ -40,7 +40,7 @@ interface PermissionProviderProps {
 }
 
 export function PermissionProvider({ children }: PermissionProviderProps) {
-  const { isSignedIn, userId, userData, loading: authLoading } = useAuth();
+  const { isSignedIn, userId, userData, loading: authLoading, meResponse } = useAuth();
   const savedStoreId = typeof window !== 'undefined' ? localStorage.getItem('selectedStoreId') : null;
 
   const [permissions, setPermissions] = useState<UserPermissions>({
@@ -86,12 +86,14 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     const previousStoreId = permissions.currentStoreId || localStorage.getItem('selectedStoreId');
 
     try {
-      const me = await api.get<{
+      type Me = {
         user: { uid: string; isGlobalAdmin: boolean } | null;
         storePermissions: { storeId: string; canEdit: boolean }[];
         stores: { id: string; name: string }[];
         organizations?: Organization[];
-      }>('/me');
+      };
+      // Sign-in just loaded /me (this runs when its userData changes); reuse it.
+      const me = (meResponse as Me | null) ?? await api.get<Me>('/me');
 
       const storePerms: StorePermission[] = (me.storePermissions || []).map(p => ({
         storeId: p.storeId,

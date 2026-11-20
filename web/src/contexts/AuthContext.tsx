@@ -21,6 +21,11 @@ interface AuthContextType {
   /** True once the user has accepted the current Terms of Service and Privacy Policy. */
   termsAccepted: boolean;
   acceptTerms: () => Promise<void>;
+  /**
+   * The /me response this sign-in loaded, so permissions can use it instead of
+   * asking for it again (that second request held up every page by a round trip).
+   */
+  meResponse: unknown;
 }
 
 type MeResponse = {
@@ -53,6 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { isSignedIn, userId, getToken } = useClerkAuth();
   const { user } = useUser();
   const [userData, setUserData] = useState<UserData | null>(null);
+  const [meResponse, setMeResponse] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [termsVersion, setTermsVersion] = useState<string | null>(null);
@@ -69,11 +75,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!isSignedIn || !userId) {
       setUserData(null);
+      setMeResponse(null);
       setLoading(false);
       return;
     }
 
     setLoading(true);
+    setMeResponse(null);
     loadUserData();
   }, [isSignedIn, userId]);
 
@@ -98,6 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const me = await api.get<MeResponse>('/me');
       applyTerms(me);
+      setMeResponse(me);
 
       if (me.user) {
         setUserData({
@@ -115,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         const me2 = await api.get<MeResponse>('/me');
         applyTerms(me2);
+        setMeResponse(me2);
         if (me2.user) {
           setUserData({
             uid: me2.user.uid,
@@ -131,6 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Error loading user from API:', err);
       setUserData(null);
+      setMeResponse(null);
     } finally {
       setLoading(false);
     }
@@ -144,6 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isSignedIn: !!isSignedIn,
     termsAccepted,
     acceptTerms,
+    meResponse,
   };
 
   return (

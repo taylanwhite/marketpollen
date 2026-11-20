@@ -1,8 +1,56 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
-import { getAccessibleStores } from './lib/store-access.js';
+import { getAccessibleStores, readableStoreScope } from './lib/store-access.js';
 import { getQuarterDateRange } from './lib/fiscal-quarter.js';
+import { reachoutToJson } from './lib/contact-json.js';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A fiscal quarter is 91 days; allow a little slack for time zones.
+const MAX_RANGE_MS = 95 * 24 * 60 * 60 * 1000;
+
+/**
+ * GET ?storeId=&from=&to= : one store's visits with bites in that range, as
+ * just their date and bites. The header tracker adds these up itself with the
+ * same math it always used, so its number doesn't change, without downloading
+ * every contact. from/to are the browser's own quarter dates, so quarter
+ * edges follow the person's time zone as before.
+ */
+async function storeBites(req: VercelRequest, res: VercelResponse, uid: string) {
+  const storeId = String(req.query.storeId || '').trim();
+  if (!UUID_RE.test(storeId)) return res.status(400).json({ error: 'Invalid store id' });
+  const from = new Date(String(req.query.from || ''));
+  const to = new Date(String(req.query.to || ''));
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to < from || to.getTime() - from.getTime() > MAX_RANGE_MS) {
+    return res.status(400).json({ error: 'from and to must be dates within one quarter' });
+  }
+  const scope = await readableStoreScope(uid, { storeId });
+  if (!scope) return res.status(404).json({ error: 'Store not found' });
+
+  const rows = await prisma.reachout.findMany({
+    where: { contact: { store_id: storeId }, date: { gte: from, lte: to } },
+    select: {
+      id: true,
+      date: true,
+      free_bundlet_card: true,
+      dozen_bundtinis: true,
+      cake_8inch: true,
+      cake_10inch: true,
+      sample_tray: true,
+      bundtlet_tower: true,
+      custom_donations: true,
+      cakes_donated_notes: true,
+      ordered_from_us: true,
+      followed_up: true,
+      no_follow_up: true,
+    },
+  });
+  const reachouts = rows
+    .map((row) => reachoutToJson(row))
+    .filter((r) => r.donation)
+    .map((r) => ({ id: r.id, date: r.date, donation: r.donation }));
+  return res.status(200).json({ reachouts });
+}
 
 interface ProductConfig {
   id: string;
@@ -43,6 +91,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const uid = await getAuthUid(req);
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
+
+  if (req.query?.storeId) return storeBites(req, res, uid);
 
   try {
     const access = await getAccessibleStores(uid);
