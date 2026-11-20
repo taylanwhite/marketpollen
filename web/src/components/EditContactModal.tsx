@@ -1012,17 +1012,25 @@ export function EditContactModal({ contact, onClose, onSuccess }: EditContactMod
                             {file.mimeType} · {formatFileSize(file.size)} · {new Date(file.uploadedAt).toLocaleDateString()}
                           </Typography>
                         </Box>
-                        <Button
-                          size="small"
-                          component="a"
-                          href={file.downloadUrl}
-                          download={file.name}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          startIcon={<OpenInNewIcon />}
-                        >
-                          Open
-                        </Button>
+                        {file.downloadUrl ? (
+                          <Button
+                            size="small"
+                            component="a"
+                            href={file.downloadUrl}
+                            download={file.name}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            startIcon={<OpenInNewIcon />}
+                            sx={{ minHeight: 44 }}
+                          >
+                            Open
+                          </Button>
+                        ) : (
+                          // Contact lists leave the file out; it arrives with this tab's own load.
+                          <Button size="small" disabled startIcon={<CircularProgress size={14} />} sx={{ minHeight: 44 }}>
+                            Open
+                          </Button>
+                        )}
                       </Box>
                     </CardContent>
                   </Card>

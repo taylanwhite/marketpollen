@@ -172,7 +172,8 @@ export interface ContactFile {
   contactId: string;
   name: string;
   storagePath: string;
-  downloadUrl: string;
+  /** The file itself. Left out of contact lists; the files endpoint sends it. */
+  downloadUrl?: string;
   size: number;
   mimeType: string;
   uploadedAt: Date;

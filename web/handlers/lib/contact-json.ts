@@ -12,7 +12,23 @@ export const contactInclude = {
     orderBy: { date: 'desc' as const },
     include: { creator: { select: { display_name: true, email: true } } },
   },
-  contact_files: { orderBy: { uploaded_at: 'desc' as const } },
+  // Name, size and type only. The file itself (download_url, a data URL that
+  // can be hundreds of KB) is left out: a store's contact list carried every
+  // business card photo and ran to tens of MB. The Files tab loads the files
+  // from /contacts/:id/files when it opens.
+  contact_files: {
+    orderBy: { uploaded_at: 'desc' as const },
+    select: {
+      id: true,
+      contact_id: true,
+      name: true,
+      storage_path: true,
+      size: true,
+      mime_type: true,
+      uploaded_at: true,
+      uploaded_by: true,
+    },
+  },
   follow_up_cadences: { orderBy: { created_at: 'asc' as const } },
 };
 
@@ -51,7 +67,8 @@ export function fileToJson(f: any) {
     contactId: f.contact_id,
     name: f.name,
     storagePath: f.storage_path,
-    downloadUrl: f.download_url,
+    // Absent in contact lists; only the files endpoint sends it.
+    ...(f.download_url !== undefined ? { downloadUrl: f.download_url } : {}),
     size: Number(f.size),
     mimeType: f.mime_type,
     uploadedAt: f.uploaded_at,
