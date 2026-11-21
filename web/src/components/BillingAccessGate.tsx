@@ -47,18 +47,20 @@ export function BillingAccessGate({
   // The trial-ended popup can be put away; the org stays locked on the server, so a banner stays.
   const [dismissedOrgId, setDismissedOrgId] = useState<string | null>(null);
   const [unitCents, setUnitCents] = useState<number | null>(null);
+  // Super users get the banner; this opens the popup customers see.
+  const [previewOpen, setPreviewOpen] = useState(false);
   const trialEnded = access?.mode === 'trial_ended';
 
   // Admins see what it will cost before they go to Stripe.
   useEffect(() => {
     setUnitCents(null);
-    if (!trialEnded || !canPay || isGlobalAdmin || !orgId) return;
+    if (!trialEnded || !canPay || !orgId) return;
     let cancelled = false;
     api.get<{ unitCents?: number }>(`/organizations/${orgId}/billing`)
       .then((billing) => { if (!cancelled && typeof billing.unitCents === 'number') setUnitCents(billing.unitCents); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [trialEnded, canPay, isGlobalAdmin, orgId]);
+  }, [trialEnded, canPay, orgId]);
 
   if (!access || access.mode === 'open') return null;
 
@@ -131,12 +133,19 @@ export function BillingAccessGate({
       </Button>
     );
 
-    if (isGlobalAdmin || variant === 'banner' || dismissedOrgId === (orgId ?? '')) {
+    const closePopup = () => (isGlobalAdmin ? setPreviewOpen(false) : setDismissedOrgId(orgId ?? ''));
+    const showPopup = isGlobalAdmin ? previewOpen : variant !== 'banner' && dismissedOrgId !== (orgId ?? '');
+
+    if (!showPopup) {
       return (
         <Alert
           severity="info"
           sx={{ mb: 2, alignItems: 'center', '& .MuiAlert-action': { pt: 0 } }}
-          action={canPay && !isGlobalAdmin ? (
+          action={isGlobalAdmin ? (
+            <Button color="inherit" size="small" onClick={() => setPreviewOpen(true)} sx={{ whiteSpace: 'nowrap' }}>
+              See popup
+            </Button>
+          ) : canPay ? (
             <Button color="inherit" size="small" onClick={pay} disabled={busy} sx={{ whiteSpace: 'nowrap' }}>
               {busy ? <CircularProgress size={16} color="inherit" /> : 'Add a card'}
             </Button>
@@ -149,7 +158,7 @@ export function BillingAccessGate({
     }
 
     return (
-      <Dialog open onClose={() => setDismissedOrgId(orgId ?? '')} maxWidth="xs" fullWidth>
+      <Dialog open onClose={closePopup} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ pb: 1 }}>Your free trial has ended</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 1.5 }}>
@@ -170,7 +179,7 @@ export function BillingAccessGate({
           {canSwitch && (
             <Button onClick={() => navigate('/select-store')}>Switch organization</Button>
           )}
-          <Button color="inherit" onClick={() => setDismissedOrgId(orgId ?? '')}>
+          <Button color="inherit" onClick={closePopup}>
             {canPay ? 'Not now' : 'OK'}
           </Button>
         </DialogActions>
