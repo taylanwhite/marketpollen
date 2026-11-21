@@ -5,6 +5,7 @@ import { prisma } from './lib/db.js';
 import { getAuthUid } from './lib/auth.js';
 import { canViewStore } from './lib/store-access.js';
 import { isOrgAdmin } from './lib/org-access.js';
+import { isKingAdminEmail } from './lib/king-admin-email.js';
 import { aiErrorMessage, extractJson, getOpenAI } from './lib/ai.js';
 import { brandShell } from './lib/brand-email.js';
 
@@ -324,30 +325,36 @@ async function canActFor(uid: string, marketerId: string, storeId: string): Prom
   return !!store?.organization_id && isOrgAdmin(uid, store.organization_id);
 }
 
-/** Org admins and store editors, minus the marketer: the people who usually get this email. */
-async function suggestedRecipients(storeId: string, marketerId: string) {
+/**
+ * People the email can go to: everyone in the store's organization or with
+ * access to the store. Leaves out the marketer and the sender (they get a copy)
+ * and platform staff (the owner and super users), who are never shown to customers.
+ * Nobody is picked by default; the marketer chooses.
+ */
+async function recipientOptions(storeId: string, marketerId: string, senderId: string) {
   const store = await prisma.store.findUnique({ where: { id: storeId }, select: { organization_id: true } });
-  const [admins, editors] = await Promise.all([
+  const userSelect = { select: { id: true, email: true, display_name: true, is_global_admin: true } };
+  const [members, storeUsers] = await Promise.all([
     store?.organization_id
-      ? prisma.organizationMember.findMany({
-        where: { org_id: store.organization_id, is_admin: true },
-        select: { user: { select: { id: true, email: true, display_name: true } } },
-      })
+      ? prisma.organizationMember.findMany({ where: { org_id: store.organization_id }, select: { is_admin: true, user: userSelect } })
       : [],
-    prisma.storePermission.findMany({
-      where: { store_id: storeId, can_edit: true },
-      select: { user: { select: { id: true, email: true, display_name: true } } },
-    }),
+    prisma.storePermission.findMany({ where: { store_id: storeId }, select: { user: userSelect } }),
   ]);
   const byEmail = new Map<string, { email: string; name: string; admin: boolean }>();
-  for (const { user } of admins) {
-    if (user.id !== marketerId) byEmail.set(user.email.toLowerCase(), { email: user.email, name: user.display_name || user.email, admin: true });
-  }
-  for (const { user } of editors) {
+  const add = (user: { id: string; email: string; display_name: string | null; is_global_admin: boolean }, admin: boolean) => {
+    if (user.id === marketerId || user.id === senderId) return;
+    if (user.is_global_admin || isKingAdminEmail(user.email)) return;
     const key = user.email.toLowerCase();
-    if (user.id !== marketerId && !byEmail.has(key)) byEmail.set(key, { email: user.email, name: user.display_name || user.email, admin: false });
-  }
-  return [...byEmail.values()];
+    const existing = byEmail.get(key);
+    if (existing) {
+      existing.admin ||= admin;
+      return;
+    }
+    byEmail.set(key, { email: user.email, name: user.display_name || user.email, admin });
+  };
+  for (const member of members) add(member.user, member.is_admin);
+  for (const { user } of storeUsers) add(user, false);
+  return [...byEmail.values()].sort((a, b) => Number(b.admin) - Number(a.admin) || a.name.localeCompare(b.name));
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -390,7 +397,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const week = await loadWeek(storeId, marketerId, from, end);
-    const recipients = await suggestedRecipients(storeId, marketerId);
+    const recipients = await recipientOptions(storeId, marketerId, uid);
     const subject = `Weekly Highlights ${week.weekLabel}`;
     if (week.visits.length === 0 && week.events.length === 0 && !extra) {
       return res.status(200).json({

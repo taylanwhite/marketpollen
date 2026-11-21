@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Checkbox, Chip, CircularProgress, Dialog, DialogActions, DialogContent,
+  Alert, Autocomplete, Box, Button, Checkbox, Chip, CircularProgress, Dialog, DialogActions, DialogContent,
   DialogTitle, FormControlLabel, IconButton, InputAdornment, TextField, Tooltip, Typography, useMediaQuery,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
@@ -69,7 +69,7 @@ export function WeeklyHighlightsDialog({ open, onClose, storeId, marketerId, mar
   const [body, setBody] = useState('');
   const [includeStats, setIncludeStats] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
-  const [extraEmail, setExtraEmail] = useState('');
+  const [recipientError, setRecipientError] = useState('');
   const [sending, setSending] = useState(false);
   const [sentTo, setSentTo] = useState<string[] | null>(null);
   const [copied, setCopied] = useState(false);
@@ -110,7 +110,8 @@ export function WeeklyHighlightsDialog({ open, onClose, storeId, marketerId, mar
     setDraft(null);
     setError('');
     setSentTo(null);
-    setExtraEmail('');
+    setSelected([]);
+    setRecipientError('');
     setExtra('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, marketerId, storeId]);
@@ -134,8 +135,6 @@ export function WeeklyHighlightsDialog({ open, onClose, storeId, marketerId, mar
       setBody(result.empty ? '' : toBody(result.intro, result.bullets));
       // The details are in the email now; clear them so "Add to email" only adds new ones.
       if (!result.empty) setExtra('');
-      // Keep anyone already picked; otherwise start with the admins (the owners).
-      setSelected((prev) => (prev.length ? prev : result.recipients.filter((r) => r.admin).map((r) => r.email)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not write the highlights');
     } finally {
@@ -166,19 +165,12 @@ export function WeeklyHighlightsDialog({ open, onClose, storeId, marketerId, mar
     [body, includeStats, draft],
   );
 
-  const toggle = (email: string) =>
-    setSelected((prev) => (prev.includes(email) ? prev.filter((e) => e !== email) : [...prev, email]));
-
-  const addExtra = () => {
-    const emails = extraEmail.split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
-    const bad = emails.find((e) => !EMAIL_RE.test(e));
-    if (bad) {
-      setError(`"${bad}" is not an email address`);
-      return;
-    }
-    setError('');
-    setSelected((prev) => [...new Set([...prev, ...emails])]);
-    setExtraEmail('');
+  /** Picks from the list stay; typed addresses are kept only if they look like emails. */
+  const changeRecipients = (values: string[]) => {
+    const cleaned = [...new Set(values.flatMap((v) => v.split(/[,;\s]+/)).map((v) => v.trim()).filter(Boolean))];
+    const bad = cleaned.find((e) => !EMAIL_RE.test(e));
+    setRecipientError(bad ? `"${bad}" is not an email address` : '');
+    setSelected(cleaned.filter((e) => EMAIL_RE.test(e)));
   };
 
   const copy = async () => {
@@ -188,8 +180,7 @@ export function WeeklyHighlightsDialog({ open, onClose, storeId, marketerId, mar
   };
 
   const send = async (toSelf = false) => {
-    const pending = extraEmail.trim();
-    const to = pending && EMAIL_RE.test(pending) ? [...new Set([...selected, pending])] : selected;
+    const to = selected;
     if (!toSelf && to.length === 0) {
       setError('Pick at least one person to send it to, or send it to yourself');
       return;
@@ -203,7 +194,6 @@ export function WeeklyHighlightsDialog({ open, onClose, storeId, marketerId, mar
       });
       setSentTo(result.to);
       setSentToSelf(toSelf);
-      if (!toSelf) setExtraEmail('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The email did not send');
     } finally {
@@ -211,10 +201,8 @@ export function WeeklyHighlightsDialog({ open, onClose, storeId, marketerId, mar
     }
   };
 
-  const recipientChips = [
-    ...(draft?.recipients || []),
-    ...selected.filter((e) => !draft?.recipients.some((r) => r.email === e)).map((email) => ({ email, name: email, admin: false })),
-  ];
+  const people = new Map((draft?.recipients || []).map((r) => [r.email, r]));
+  const personLabel = (email: string) => people.get(email)?.name || email;
   const forSomeoneElse = !!marketerId && !!marketerName;
 
   return (
@@ -334,30 +322,54 @@ export function WeeklyHighlightsDialog({ open, onClose, storeId, marketerId, mar
 
             <Box>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>Send to</Typography>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
-                {recipientChips.map((r) => (
-                  <Chip
-                    key={r.email}
-                    label={r.name === r.email ? r.email : `${r.name}`}
-                    title={r.email}
-                    color={selected.includes(r.email) ? 'primary' : 'default'}
-                    variant={selected.includes(r.email) ? 'filled' : 'outlined'}
-                    onClick={() => toggle(r.email)}
-                    icon={selected.includes(r.email) ? <CheckIcon /> : undefined}
+              <Autocomplete
+                multiple
+                freeSolo
+                filterSelectedOptions
+                autoSelect
+                options={(draft.recipients || []).map((r) => r.email)}
+                value={selected}
+                onChange={(_e, values) => changeRecipients(values as string[])}
+                getOptionLabel={personLabel}
+                filterOptions={(options, { inputValue }) => {
+                  const q = inputValue.trim().toLowerCase();
+                  const list = q
+                    ? options.filter((email) => email.toLowerCase().includes(q) || personLabel(email).toLowerCase().includes(q))
+                    : options;
+                  return list.slice(0, 50);
+                }}
+                renderOption={(props, email) => {
+                  const { key, ...rest } = props as typeof props & { key: string };
+                  const person = people.get(email);
+                  return (
+                    <li key={key} {...rest}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" noWrap>
+                          {person?.name || email}
+                          {person?.admin && <Typography component="span" variant="caption" color="text.secondary"> · Admin</Typography>}
+                        </Typography>
+                        {person && person.name !== email && (
+                          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>{email}</Typography>
+                        )}
+                      </Box>
+                    </li>
+                  );
+                }}
+                renderTags={(values, getTagProps) => values.map((email, index) => {
+                  const { key, ...tagProps } = getTagProps({ index });
+                  return <Chip key={key} size="small" label={personLabel(email)} title={email} {...tagProps} />;
+                })}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    size="small"
+                    placeholder={selected.length ? '' : 'Search people or type an email'}
+                    error={!!recipientError}
+                    helperText={recipientError || undefined}
                   />
-                ))}
-              </Box>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                <TextField
-                  size="small"
-                  placeholder="Add an email"
-                  value={extraEmail}
-                  onChange={(e) => setExtraEmail(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addExtra(); } }}
-                  fullWidth
-                />
-                <Button onClick={addExtra} disabled={!extraEmail.trim()}>Add</Button>
-              </Box>
+                )}
+                noOptionsText="No one matches. Type a full email to add it."
+              />
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                 You get a copy, and replies go straight to you.
               </Typography>
