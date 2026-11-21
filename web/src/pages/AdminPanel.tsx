@@ -59,6 +59,8 @@ const ACCESS_OPTIONS: Array<{ value: AccessLevel; label: string; Icon: typeof Vi
   { value: 'manager', label: 'Manager', Icon: ManagerIcon },
 ];
 
+const NO_ORG = '__none__';
+
 const MANAGER_HELP = 'Manager: can edit, and can plan and assign stops for everyone in that store. They can\'t change billing, settings or who has access.';
 
 /** None / View / Edit / Manager for one store. Icons hide on phones so the four fit. */
@@ -132,6 +134,8 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [userSearchTerm, setUserSearchTerm] = useState('');
+  // '' = every organization, NO_ORG = people in none, otherwise an org id.
+  const [orgFilter, setOrgFilter] = useState('');
   
   // Edit user modal
   const [editingUser, setEditingUser] = useState<UserWithPermissions | null>(null);
@@ -175,7 +179,9 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   };
 
   const openInviteDialog = () => {
-    const orgId = orgChoices.some((org) => org.id === currentOrg?.id)
+    const orgId = orgChoices.some((org) => org.id === orgFilter)
+      ? orgFilter
+      : orgChoices.some((org) => org.id === currentOrg?.id)
       ? currentOrg?.id || ''
       : orgChoices[0]?.id || '';
     setNewUserEmail('');
@@ -195,18 +201,24 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
 
   useEffect(() => {
     const term = userSearchTerm.toLowerCase().trim();
-    if (term) {
-      setFilteredUsers(
-        users.filter(user => user.email.toLowerCase().includes(term))
-      );
-      setFilteredInvites(
-        pendingInvites.filter(invite => invite.email.toLowerCase().includes(term))
-      );
-    } else {
-      setFilteredUsers(users);
-      setFilteredInvites(pendingInvites);
-    }
-  }, [userSearchTerm, users, pendingInvites]);
+    const storeOrg = new Map(stores.map((store) => [store.id, store.organizationId || '']));
+    const orgsOfPerms = (perms: StorePermission[]) =>
+      perms.map((perm) => storeOrg.get(perm.storeId) || '').filter(Boolean);
+    const matchesOrg = (orgIds: string[]) => {
+      if (!orgFilter) return true;
+      if (orgFilter === NO_ORG) return orgIds.length === 0;
+      return orgIds.includes(orgFilter);
+    };
+    setFilteredUsers(users.filter((user) =>
+      (!term || user.email.toLowerCase().includes(term))
+      && matchesOrg([
+        ...(user.orgMemberships || []).map((item) => item.orgId),
+        ...orgsOfPerms(user.storePermissions),
+      ])));
+    setFilteredInvites(pendingInvites.filter((invite) =>
+      (!term || invite.email.toLowerCase().includes(term))
+      && matchesOrg(orgsOfPerms(invite.storePermissions))));
+  }, [userSearchTerm, orgFilter, users, pendingInvites, stores]);
 
   const loadData = async () => {
     try {
@@ -441,7 +453,9 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
   const openEditModal = (user: UserWithPermissions) => {
     setEditingUser(user);
     setEditIsGlobalAdmin(user.isGlobalAdmin);
-    const fallbackOrgId = currentOrg?.id || orgChoices[0]?.id || '';
+    const fallbackOrgId = orgChoices.some((org) => org.id === orgFilter)
+      ? orgFilter
+      : currentOrg?.id || orgChoices[0]?.id || '';
     applyOrgEditor(user, fallbackOrgId);
   };
 
@@ -623,27 +637,47 @@ export function AdminPanel({ embedded = false }: { embedded?: boolean }) {
           gap: { xs: 2, sm: 0 }
         }}>
           <Typography variant="h6" sx={{ fontWeight: 600, fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
-            Manage Users ({users.length} active, {pendingInvites.length} pending)
+            Manage Users ({orgFilter ? filteredUsers.length : users.length} active, {orgFilter ? filteredInvites.length : pendingInvites.length} pending)
           </Typography>
-          <TextField
-            placeholder="Search users..."
-            value={userSearchTerm}
-            onChange={(e) => setUserSearchTerm(e.target.value)}
-            size="small"
-            sx={{ width: { xs: '100%', sm: 300 } }}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon color="action" />
-                </InputAdornment>
-              ),
-            }}
-          />
+          <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: { xs: 1.5, sm: 1 }, width: { xs: '100%', sm: 'auto' } }}>
+            {orgChoices.length > 1 && (
+              <TextField
+                select
+                label="Organization"
+                value={orgFilter}
+                onChange={(e) => setOrgFilter(e.target.value)}
+                SelectProps={{ displayEmpty: true }}
+                InputLabelProps={{ shrink: true }}
+                size="small"
+                sx={{ width: { xs: '100%', sm: 220 } }}
+              >
+                <MenuItem value="">All organizations</MenuItem>
+                {[...orgChoices].sort((a, b) => a.name.localeCompare(b.name)).map((org) => (
+                  <MenuItem key={org.id} value={org.id}>{org.name}</MenuItem>
+                ))}
+                <MenuItem value={NO_ORG}>No organization</MenuItem>
+              </TextField>
+            )}
+            <TextField
+              placeholder="Search users..."
+              value={userSearchTerm}
+              onChange={(e) => setUserSearchTerm(e.target.value)}
+              size="small"
+              sx={{ width: { xs: '100%', sm: 300 } }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon color="action" />
+                  </InputAdornment>
+                ),
+              }}
+            />
+          </Box>
         </Box>
 
         {(filteredUsers.length === 0 && filteredInvites.length === 0) ? (
           <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-            {userSearchTerm ? 'No users or invites match your search' : 'No users yet'}
+            {userSearchTerm || orgFilter ? 'No users or invites match your filters' : 'No users yet'}
           </Typography>
         ) : (
           <List>
