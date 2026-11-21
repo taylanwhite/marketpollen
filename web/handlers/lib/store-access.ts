@@ -18,6 +18,7 @@ export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, ui
       is_demo: true,
       pause_on: true,
       archived_at: true,
+      organization_id: true,
       organization: {
         select: {
           billing_enabled: true,
@@ -34,11 +35,14 @@ export async function rejectIfStoreLocked(res: JsonResponse, storeId: string, ui
     const access = billingAccess(store.organization);
     if (access.mode === 'trial_ended' || access.mode === 'payment_locked') {
       if (!(uid && await isPlatformAdmin(uid))) {
-        res.status(403).json({
-          error: access.mode === 'trial_ended'
-            ? 'Trial is done, please pay.'
-            : 'Insufficient payment. Update the card to continue.',
-        });
+        let error = 'Insufficient payment. Update the card to continue.';
+        if (access.mode === 'trial_ended') {
+          const admin = !!uid && !!store.organization_id && await isOrgAdmin(uid, store.organization_id);
+          error = admin
+            ? 'Your free trial has ended. Add a card to keep saving.'
+            : 'Your free trial has ended. Saving is paused until an admin adds a card.';
+        }
+        res.status(403).json({ error });
         return true;
       }
     }

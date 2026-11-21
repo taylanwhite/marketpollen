@@ -109,7 +109,9 @@ export function StorePicker() {
     : stores;
   // An organization with only demo stores is a demo organization: no trial or payment lock.
   const demoOrg = visibleStores.length > 0 && visibleStores.every((store) => store.isDemo);
-  const orgLocked = !isAdmin() && !demoOrg && (activeOrg?.access?.mode === 'trial_ended' || activeOrg?.access?.mode === 'payment_locked');
+  // A failed card locks the stores. An ended trial leaves them open to look at (read-only).
+  const orgLocked = !isAdmin() && !demoOrg && activeOrg?.access?.mode === 'payment_locked';
+  const trialEnded = !isAdmin() && !demoOrg && activeOrg?.access?.mode === 'trial_ended';
 
   const chooseOrg = (orgId: string) => {
     setSelectedOrgId(orgId);
@@ -136,7 +138,7 @@ export function StorePicker() {
   };
 
   const showAllStores = visibleStores.length > 1 && (isAdmin() || isOrgAdminFn());
-  const canCreate = Boolean(activeOrgId) && (isAdmin() || !!activeOrg?.isAdmin) && !orgLocked;
+  const canCreate = Boolean(activeOrgId) && (isAdmin() || !!activeOrg?.isAdmin) && !orgLocked && !trialEnded;
 
   const openCreate = () => {
     setCreateError('');

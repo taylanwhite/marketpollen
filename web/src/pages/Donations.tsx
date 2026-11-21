@@ -132,7 +132,11 @@ function historyPreset(rangeAll: boolean, from: string | null, to: string | null
 }
 
 export function Donations() {
-  const { permissions, currentOrg, isOrgAdminFn } = usePermissions();
+  const { permissions, currentOrg, isOrgAdminFn, isAdmin } = usePermissions();
+  // Exports come with a paid plan.
+  const onTrial = currentOrg?.access?.mode === 'trial' || currentOrg?.access?.mode === 'trial_ended';
+  const currentStoreIsDemo = !!currentOrg?.stores.find((store) => store.id === permissions.currentStoreId)?.isDemo;
+  const canExport = !onTrial || isAdmin() || currentStoreIsDemo;
   const { triggerRefresh, setLastDonationMouths, dataVersion, bumpDataVersion } = useDonation();
   const { syncedCount } = useOffline();
   const { products } = useCampaign();
@@ -358,6 +362,7 @@ export function Donations() {
     currentOrg?.stores.find((store) => store.id === permissions.currentStoreId)?.name || 'store';
 
   const handleExportToExcel = async () => {
+    if (!canExport) return;
     // Lazy-load xlsx (~400KB) only when the user actually clicks Export
     const XLSX = await import('xlsx');
     const quarterLabel = getCurrentQuarterLabel();
@@ -394,6 +399,7 @@ export function Donations() {
   const [orgExporting, setOrgExporting] = useState(false);
 
   const handleOrgExportToExcel = async () => {
+    if (!canExport) return;
     if (!currentOrg) return;
     setOrgExporting(true);
 
@@ -560,7 +566,7 @@ export function Donations() {
         <CakeIcon /> Bites
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: (dateFilterLabel || productFilterLabel || businessFilterLabel || storesFilterLabel) ? 1.5 : 2 }}>
-        Each row is one drop. Export history downloads bites, place, person, and notes for the range you picked.
+        Each row is one drop.{canExport && ' Export history downloads bites, place, person, and notes for the range you picked.'}
       </Typography>
       {(dateFilterLabel || productFilterLabel || businessFilterLabel || storesFilterLabel) && (
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
@@ -666,18 +672,20 @@ export function Donations() {
               variant="outlined"
             />
 
-            <Button
-              variant="outlined"
-              color="primary"
-              size="small"
-              startIcon={<FileDownloadIcon />}
-              onClick={handleExportToExcel}
-              disabled={filteredDonations.length === 0}
-            >
-              Export history
-            </Button>
+            {canExport && (
+              <Button
+                variant="outlined"
+                color="primary"
+                size="small"
+                startIcon={<FileDownloadIcon />}
+                onClick={handleExportToExcel}
+                disabled={filteredDonations.length === 0}
+              >
+                Export history
+              </Button>
+            )}
 
-            {currentOrg && currentOrg.stores.length > 1 && isOrgAdminFn() && (
+            {canExport && currentOrg && currentOrg.stores.length > 1 && isOrgAdminFn() && (
               <Button
                 variant="outlined"
                 color="primary"

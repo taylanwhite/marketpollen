@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { OrgAccessMode } from '../types';
+import { money, processingFeeCents } from '../../handlers/lib/billing-copy';
 import {
   Alert,
+  Box,
   Button,
   CircularProgress,
   Dialog,
@@ -42,6 +44,22 @@ export function BillingAccessGate({
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // The trial-ended popup can be put away; the org stays locked on the server, so a banner stays.
+  const [dismissedOrgId, setDismissedOrgId] = useState<string | null>(null);
+  const [unitCents, setUnitCents] = useState<number | null>(null);
+  const trialEnded = access?.mode === 'trial_ended';
+
+  // Admins see what it will cost before they go to Stripe.
+  useEffect(() => {
+    setUnitCents(null);
+    if (!trialEnded || !canPay || isGlobalAdmin || !orgId) return;
+    let cancelled = false;
+    api.get<{ unitCents?: number }>(`/organizations/${orgId}/billing`)
+      .then((billing) => { if (!cancelled && typeof billing.unitCents === 'number') setUnitCents(billing.unitCents); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [trialEnded, canPay, isGlobalAdmin, orgId]);
+
   if (!access || access.mode === 'open') return null;
 
   const name = orgName || 'this organization';
@@ -93,10 +111,75 @@ export function BillingAccessGate({
     );
   }
 
-  const title = access.mode === 'trial_ended' ? 'Trial is done, please pay' : 'Insufficient payment';
-  const body = access.mode === 'trial_ended'
-    ? `The free month for ${name} is over.`
-    : `The card for ${name} didn’t go through, and the 7 days to fix it have passed.`;
+  if (access.mode === 'trial_ended') {
+    const stores = Math.max(storeCount, 1);
+    // Same total as checkout (price per store plus the processing fee per store), shown as one price.
+    const priceLine = unitCents === null
+      ? null
+      : `${money((unitCents + processingFeeCents(unitCents)) * stores)} a month for ${stores} ${stores === 1 ? 'store' : 'stores'}.`;
+    const bannerText = isGlobalAdmin
+      ? `Free trial ended for ${name}.`
+      : 'Your free trial has ended.';
+    const addCardButton = (
+      <Button
+        variant="contained"
+        onClick={pay}
+        disabled={busy}
+        sx={{ bgcolor: '#f5c842', color: '#2d2d2d', fontWeight: 700, minHeight: 44, '&:hover': { bgcolor: '#e8b923' } }}
+      >
+        {busy ? <CircularProgress size={18} color="inherit" /> : 'Add a card'}
+      </Button>
+    );
+
+    if (isGlobalAdmin || variant === 'banner' || dismissedOrgId === (orgId ?? '')) {
+      return (
+        <Alert
+          severity="info"
+          sx={{ mb: 2, alignItems: 'center', '& .MuiAlert-action': { pt: 0 } }}
+          action={canPay && !isGlobalAdmin ? (
+            <Button color="inherit" size="small" onClick={pay} disabled={busy} sx={{ whiteSpace: 'nowrap' }}>
+              {busy ? <CircularProgress size={16} color="inherit" /> : 'Add a card'}
+            </Button>
+          ) : undefined}
+        >
+          {bannerText}
+          {error && <Box component="span" sx={{ display: 'block', color: 'error.main', mt: 0.5 }}>{error}</Box>}
+        </Alert>
+      );
+    }
+
+    return (
+      <Dialog open onClose={() => setDismissedOrgId(orgId ?? '')} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ pb: 1 }}>Your free trial has ended</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1.5 }}>
+            Thanks for trying MarketPollen with {name}. Everything you added is saved: contacts, visits, bites and plans.
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {canPay
+              ? 'Add a card to keep saving and pick up right where you left off.'
+              : `Saving is paused until an admin of ${name} adds a card.`}
+          </Typography>
+          {canPay && priceLine && (
+            <Typography variant="body2" sx={{ mt: 1.5, fontWeight: 600 }}>{priceLine}</Typography>
+          )}
+          {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2, flexDirection: 'column', alignItems: 'stretch', gap: 1, '& > :not(style) ~ :not(style)': { ml: 0 } }}>
+          {canPay && addCardButton}
+          {canSwitch && (
+            <Button onClick={() => navigate('/select-store')}>Switch organization</Button>
+          )}
+          <Button color="inherit" onClick={() => setDismissedOrgId(orgId ?? '')}>
+            {canPay ? 'Not now' : 'OK'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  }
+
+  const title = 'Insufficient payment';
+  const body = `The card for ${name} didn’t go through, and the 7 days to fix it have passed.`;
 
   if (isGlobalAdmin || variant === 'banner') {
     return (
@@ -135,3 +218,4 @@ export function BillingAccessGate({
     </Dialog>
   );
 }
+

@@ -96,10 +96,12 @@ export function MainLayout({ children }: MainLayoutProps) {
   };
   const accessMode = currentOrg?.access?.mode;
   const isDemoStore = !!currentStore?.isDemo;
+  // After a failed card's grace period the pages are hidden. After the free
+  // trial they stay visible and read-only: the server turns away saves.
   const orgLocked = !isAdmin()
     && !isStorePicker
     && !isDemoStore
-    && (accessMode === 'trial_ended' || accessMode === 'payment_locked');
+    && accessMode === 'payment_locked';
   const isActive = (path: string) => location.pathname === path;
 
   const navItems = [
