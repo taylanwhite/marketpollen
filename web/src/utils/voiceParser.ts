@@ -112,3 +112,28 @@ export function fixBakeryTerms(text: string): string {
     return word[0] === word[0].toUpperCase() ? fixed[0].toUpperCase() + fixed.slice(1) : fixed;
   });
 }
+
+const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/**
+ * Joins the finished phrases from one dictation session. Android Chrome in
+ * continuous mode often sends each phrase again with the next words added
+ * ("hello", "hello world", "hello world how are you"), so a phrase that
+ * repeats or extends the one before it replaces it instead of adding to it.
+ */
+export function joinFinalPhrases(phrases: string[]): string {
+  const kept: string[] = [];
+  for (const raw of phrases) {
+    const phrase = raw.trim();
+    if (!phrase) continue;
+    const last = kept[kept.length - 1];
+    if (last !== undefined) {
+      const a = normalize(last);
+      const b = normalize(phrase);
+      if (b === a || a.startsWith(`${b} `)) continue; // same or shorter repeat
+      if (b.startsWith(`${a} `)) { kept[kept.length - 1] = phrase; continue; } // grew
+    }
+    kept.push(phrase);
+  }
+  return kept.join(' ');
+}
